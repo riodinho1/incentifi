@@ -1,6 +1,5 @@
 import { defineConfig } from "vite";
-VITE_SUPABASE_URL=https://fsnlxxuhwckjhfjguzft.supabase.co
-VITE_SUPABASE_ANON_KEY=sb_publishable_0r4iSe2VuUCW50MhiORYAA_yL33o3z4
+
 
 import react from "@vitejs/plugin-react-swc";
 import { resolve } from "node:path";
