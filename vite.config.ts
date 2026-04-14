@@ -42,10 +42,10 @@ export default defineConfig({
       buffer: true,
     }),
   ],
-  base: "/",                    // ← This fixes the blank page
+  base: "/",           // ← This is the key fix for the MIME error
   build: {
     sourcemap: true,
-    outDir: "out",
+    outDir: "dist",
   },
   resolve: {
     alias: {
