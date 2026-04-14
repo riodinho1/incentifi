@@ -63,13 +63,13 @@ export default defineConfig({
           "react-i18next": ["useTranslation", "Trans"],
         },
       ],
-      base: "/",
+    base,
     }),
     nodePolyfills({ // ← This fixes Buffer and other Node globals for Solana
       buffer: true,
     }),
   ],
-  base,
+  base: "/",
   build: {
     sourcemap: true,
     outDir: "dist",
