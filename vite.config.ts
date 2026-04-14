@@ -16,36 +16,18 @@ export default defineConfig({
     react(),
     AutoImport({
       imports: [
-        {
-          react: [
-            "React", "useState", "useEffect", "useContext", "useReducer",
-            "useCallback", "useMemo", "useRef", "useImperativeHandle",
-            "useLayoutEffect", "useDebugValue", "useDeferredValue", "useId",
-            "useInsertionEffect", "useSyncExternalStore", "useTransition",
-            "startTransition", "lazy", "memo", "forwardRef", "createContext",
-            "createElement", "cloneElement", "isValidElement",
-          ],
-        },
-        {
-          "react-router-dom": [
-            "useNavigate", "useLocation", "useParams", "useSearchParams",
-            "Link", "NavLink", "Navigate", "Outlet",
-          ],
-        },
-        {
-          "react-i18next": ["useTranslation", "Trans"],
-        },
+        { react: ["React", "useState", "useEffect", "useContext", "useReducer", "useCallback", "useMemo", "useRef", "useImperativeHandle", "useLayoutEffect", "useDebugValue", "useDeferredValue", "useId", "useInsertionEffect", "useSyncExternalStore", "useTransition", "startTransition", "lazy", "memo", "forwardRef", "createContext", "createElement", "cloneElement", "isValidElement"] },
+        { "react-router-dom": ["useNavigate", "useLocation", "useParams", "useSearchParams", "Link", "NavLink", "Navigate", "Outlet"] },
+        { "react-i18next": ["useTranslation", "Trans"] },
       ],
       dts: true,
     }),
-    nodePolyfills({
-      buffer: true,
-    }),
+    nodePolyfills({ buffer: true }),
   ],
-  base: "/",           // ← This is the key fix for the MIME error
+  base: "/", 
   build: {
     sourcemap: true,
-    outDir: "dist",
+    outDir: "dist",        // ← make sure it's "dist"
   },
   resolve: {
     alias: {
