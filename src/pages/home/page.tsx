@@ -138,37 +138,37 @@ const HomePage = () => {
   return (
     <div className="min-h-screen overflow-x-hidden bg-[#071012] text-[#E8EEF9]">
       <header className="fixed left-0 right-0 top-0 z-50 border-b border-[#183033] bg-[#071012]/95 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:h-[4.5rem] sm:px-6">
+        <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-3 px-4 sm:h-16 sm:px-6">
           <Link to="/" className="flex min-w-0 items-center gap-3">
-            <img src={LOGO_URL} alt="incentifi" className="h-10 w-10 rounded-xl" />
+            <img src={LOGO_URL} alt="incentifi" className="h-8 w-8 rounded-lg sm:h-9 sm:w-9" />
             <div className="min-w-0">
-              <div className="truncate text-base font-semibold sm:text-lg">incentifi</div>
-              <div className="hidden text-xs text-[#769196] sm:block">Solana Mainnet</div>
+              <div className="truncate text-sm font-semibold sm:text-base">incentifi</div>
+              <div className="hidden text-[11px] text-[#769196] sm:block">Solana Mainnet</div>
             </div>
           </Link>
 
-          <nav className="hidden items-center gap-3 lg:flex">
+          <nav className="hidden items-center gap-2 lg:flex">
             <button
               type="button"
               onClick={() => setHowModalOpen(true)}
-              className="inline-flex items-center gap-2 rounded-2xl border border-[#1D3539] bg-[#0B171A] px-4 py-2.5 text-sm font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white"
+              className="inline-flex items-center gap-2 rounded-xl border border-[#1D3539] bg-[#0B171A] px-3 py-2 text-xs font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white"
             >
               <CircleHelp className="h-4 w-4 text-[#14B8A6]" />
               How
             </button>
-            <a href="#market" className="inline-flex items-center gap-2 rounded-2xl border border-[#1D3539] bg-[#0B171A] px-4 py-2.5 text-sm font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
+            <a href="#market" className="inline-flex items-center gap-2 rounded-xl border border-[#1D3539] bg-[#0B171A] px-3 py-2 text-xs font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
               <Coins className="h-4 w-4 text-[#14B8A6]" />
               INCENTIFI
             </a>
-            <a href="#profile" className="inline-flex items-center gap-2 rounded-2xl border border-[#1D3539] bg-[#0B171A] px-4 py-2.5 text-sm font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
+            <a href="#profile" className="inline-flex items-center gap-2 rounded-xl border border-[#1D3539] bg-[#0B171A] px-3 py-2 text-xs font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
               <Trophy className="h-4 w-4 text-[#14B8A6]" />
               Profile
             </a>
-            <Link to="/docs" className="inline-flex items-center gap-2 rounded-2xl border border-[#1D3539] bg-[#0B171A] px-4 py-2.5 text-sm font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
+            <Link to="/docs" className="inline-flex items-center gap-2 rounded-xl border border-[#1D3539] bg-[#0B171A] px-3 py-2 text-xs font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
               <BookOpen className="h-4 w-4 text-[#14B8A6]" />
               Docs
             </Link>
-            <Link to="/launch" className="inline-flex items-center gap-2 rounded-2xl bg-[#14B8A6] px-5 py-2.5 text-sm font-semibold text-[#031011] transition hover:bg-[#4FE0D2]">
+            <Link to="/launch" className="inline-flex items-center gap-2 rounded-xl bg-[#14B8A6] px-4 py-2 text-xs font-semibold text-[#031011] transition hover:bg-[#4FE0D2]">
               <Rocket className="h-4 w-4" />
               Create Coin
             </Link>
@@ -232,31 +232,31 @@ const HomePage = () => {
         )}
       </header>
 
-      <main className="pt-16 sm:pt-[4.5rem]">
+      <main className="pt-14 sm:pt-16">
         <section className="border-b border-[#10282B] bg-[#091719]">
-          <div className="mx-auto grid w-full min-w-0 max-w-7xl gap-8 px-4 py-9 sm:px-6 sm:py-12 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] lg:items-center">
+          <div className="mx-auto grid w-full min-w-0 max-w-7xl gap-7 px-4 py-8 sm:px-6 sm:py-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.95fr)] lg:items-center">
             <div className="min-w-0">
-              <div className="mb-5 inline-flex max-w-[22rem] items-center gap-2 rounded-full border border-[#14B8A6]/25 bg-[#14B8A6]/10 px-4 py-2 text-sm font-semibold text-[#72E0D5] sm:max-w-full">
-                <TrendingUp className="h-4 w-4 shrink-0" />
+              <div className="mb-4 inline-flex max-w-[21rem] items-center gap-2 rounded-full border border-[#14B8A6]/25 bg-[#14B8A6]/10 px-3 py-1.5 text-xs font-semibold text-[#72E0D5] sm:max-w-full">
+                <TrendingUp className="h-3.5 w-3.5 shrink-0" />
                 <span className="min-w-0 truncate">Launch on incentifi. Hold with purpose.</span>
               </div>
-              <h1 className="max-w-[22rem] text-4xl font-bold leading-[1.06] tracking-normal text-white sm:max-w-3xl sm:text-5xl lg:text-[4rem]">
+              <h1 className="max-w-[22rem] text-3xl font-bold leading-[1.08] tracking-normal text-white sm:max-w-2xl sm:text-4xl lg:text-5xl">
                 Launch coins that reward holders.
               </h1>
-              <p className="mt-5 max-w-[22rem] break-words text-base leading-7 text-[#8EA2A7] [overflow-wrap:anywhere] sm:max-w-2xl sm:text-[1.05rem]">
+              <p className="mt-4 max-w-[22rem] break-words text-sm leading-6 text-[#8EA2A7] [overflow-wrap:anywhere] sm:max-w-xl sm:text-base">
                 incentifi gives every creator a launch page, coin discovery, wallet flow, and an incentive-routing mechanic that can direct below-entry exits back into the project treasury.
               </p>
-              <div className="mt-7 flex min-w-0 flex-col gap-3 sm:flex-row">
+              <div className="mt-6 flex min-w-0 flex-col gap-3 sm:flex-row">
                 <Link
                   to="/launch"
-                  className="inline-flex min-w-0 items-center justify-center gap-2 rounded-2xl bg-[#14B8A6] px-5 py-3.5 font-semibold text-[#031011] transition hover:bg-[#4FE0D2]"
+                  className="inline-flex min-w-0 items-center justify-center gap-2 rounded-xl bg-[#14B8A6] px-4 py-3 text-sm font-semibold text-[#031011] transition hover:bg-[#4FE0D2]"
                 >
                   <Rocket className="h-5 w-5 shrink-0" />
                   <span className="truncate">Create Coin</span>
                 </Link>
                 <Link
                   to="/docs"
-                  className="inline-flex min-w-0 items-center justify-center gap-2 rounded-2xl border border-[#183033] px-5 py-3.5 font-semibold text-[#B8C9CE] transition hover:border-[#14B8A6]/50 hover:text-white"
+                  className="inline-flex min-w-0 items-center justify-center gap-2 rounded-xl border border-[#183033] px-4 py-3 text-sm font-semibold text-[#B8C9CE] transition hover:border-[#14B8A6]/50 hover:text-white"
                 >
                   <BookOpen className="h-5 w-5 shrink-0" />
                   <span className="truncate">Read Docs</span>
