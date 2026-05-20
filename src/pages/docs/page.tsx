@@ -1,6 +1,8 @@
 import { Link } from 'react-router-dom';
+import { useState } from 'react';
 import {
   BookOpen,
+  ChevronDown,
   ChevronUp,
   Cpu,
   FileText,
@@ -537,6 +539,8 @@ const sections = [
 ];
 
 const DocsPage = () => {
+  const [contentsOpen, setContentsOpen] = useState(false);
+
   return (
     <div className="min-h-screen overflow-x-hidden bg-[#071012] text-[#E8EEF9]">
       <header className="fixed left-0 right-0 top-0 z-50 border-b border-[#183033] bg-[#071012]/95 backdrop-blur">
@@ -544,11 +548,11 @@ const DocsPage = () => {
           <Link to="/" className="flex min-w-0 items-center gap-3">
             <img src={LOGO_URL} alt="incentifi" className="h-10 w-10 rounded-xl" />
             <div className="min-w-0">
-              <div className="truncate text-base font-bold sm:text-lg">Documentation</div>
+              <div className="truncate text-base font-semibold sm:text-lg">Documentation</div>
               <div className="hidden text-xs text-[#769196] sm:block">incentifi v1.0</div>
             </div>
           </Link>
-          <Link to="/" className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-[#183033] px-3 py-2 text-sm font-bold text-[#8EA2A7] hover:text-white sm:px-4">
+          <Link to="/" className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-[#183033] px-3 py-2 text-sm font-semibold text-[#8EA2A7] hover:text-white sm:px-4">
             <Home className="h-4 w-4 shrink-0" />
             <span className="hidden sm:inline">Home</span>
           </Link>
@@ -558,18 +562,24 @@ const DocsPage = () => {
       <div className="mx-auto grid max-w-7xl grid-cols-1 pt-16 sm:pt-20 lg:block">
         <aside className="scrollbar-stealth border-b border-[#183033] bg-[#071012] lg:fixed lg:left-[max(0px,calc((100vw-80rem)/2))] lg:top-20 lg:h-[calc(100vh-5rem)] lg:w-80 lg:overflow-y-auto lg:border-b-0 lg:border-r">
           <div className="p-4 sm:p-6">
-            <div className="mb-4 flex items-center justify-between rounded-2xl border border-[#183033] bg-[#0B171A] px-4 py-3">
-              <span className="inline-flex items-center gap-2 text-sm font-black uppercase text-[#8EA2A7]">
+            <button
+              type="button"
+              onClick={() => setContentsOpen((open) => !open)}
+              className="mb-4 flex w-full items-center justify-between rounded-2xl border border-[#183033] bg-[#0B171A] px-4 py-3 text-left lg:pointer-events-none"
+              aria-expanded={contentsOpen}
+            >
+              <span className="inline-flex items-center gap-2 text-sm font-extrabold uppercase text-[#8EA2A7]">
                 <Menu className="h-4 w-4" />
                 Contents
               </span>
-              <ChevronUp className="h-4 w-4 text-[#587075]" />
-            </div>
+              <ChevronDown className={`h-4 w-4 text-[#587075] transition lg:hidden ${contentsOpen ? 'rotate-180' : ''}`} />
+              <ChevronUp className="hidden h-4 w-4 text-[#587075] lg:block" />
+            </button>
 
-            <nav className="space-y-7">
+            <nav className={`${contentsOpen ? 'block' : 'hidden'} space-y-7 lg:block`}>
               {navGroups.map((group) => (
                 <div key={group.label}>
-                  <div className="mb-3 px-4 text-xs font-black uppercase tracking-widest text-[#587075]">
+                  <div className="mb-3 px-4 text-xs font-extrabold uppercase tracking-widest text-[#587075]">
                     {group.label}
                   </div>
                   <div className="space-y-2">
@@ -577,7 +587,8 @@ const DocsPage = () => {
                       <a
                         key={item.id}
                         href={`#${item.id}`}
-                        className={`flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-bold transition ${
+                        onClick={() => setContentsOpen(false)}
+                        className={`flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition ${
                           item.featured
                             ? 'bg-[#14B8A6] text-[#031011]'
                             : 'text-[#8EA2A7] hover:bg-[#0B171A] hover:text-white'
@@ -596,11 +607,11 @@ const DocsPage = () => {
 
         <main className="min-w-0 px-4 py-10 sm:px-8 sm:py-14 lg:ml-80 lg:px-12">
           <div className="mb-12 border-b border-[#183033] pb-10">
-            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[#14B8A6]/25 bg-[#14B8A6]/10 px-4 py-2 text-sm font-bold text-[#72E0D5]">
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[#14B8A6]/25 bg-[#14B8A6]/10 px-4 py-2 text-sm font-semibold text-[#72E0D5]">
               <FileText className="h-4 w-4" />
               Developer and user guide
             </div>
-            <h1 className="text-4xl font-black text-white sm:text-5xl">incentifi Documentation</h1>
+            <h1 className="text-4xl font-extrabold text-white sm:text-5xl">incentifi Documentation</h1>
             <p className="mt-5 max-w-3xl text-lg leading-8 text-[#8EA2A7]">
               Learn how incentifi launches work, how wallets connect, how the market is organized, and how each interface supports holder-aligned tokens.
             </p>
@@ -609,7 +620,7 @@ const DocsPage = () => {
           <div className="space-y-14">
             {sections.map((section) => (
               <section key={section.id} id={section.id} className="scroll-mt-24">
-                <h2 className="text-2xl font-black text-white sm:text-3xl">{section.title}</h2>
+                <h2 className="text-2xl font-extrabold text-white sm:text-3xl">{section.title}</h2>
                 <div className="mt-5 space-y-4">
                   {section.body.map((paragraph) => (
                     <p key={paragraph} className="max-w-4xl text-base leading-8 text-[#8EA2A7]">
@@ -622,11 +633,11 @@ const DocsPage = () => {
                   <div className="mt-8 space-y-6">
                     {section.steps.map((step, index) => (
                       <div key={step.title} className="grid gap-4 sm:grid-cols-[72px_1fr]">
-                        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#14B8A6] text-xl font-black text-[#031011]">
+                        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#14B8A6] text-xl font-semibold text-[#031011]">
                           {index + 1}
                         </div>
                         <div>
-                          <h3 className="text-xl font-black text-white">{step.title}</h3>
+                          <h3 className="text-xl font-extrabold text-white">{step.title}</h3>
                           <p className="mt-2 max-w-3xl text-base leading-8 text-[#8EA2A7]">{step.body}</p>
                         </div>
                       </div>
