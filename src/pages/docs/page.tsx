@@ -559,13 +559,13 @@ const DocsPage = () => {
         </div>
       </header>
 
-      <div className="mx-auto grid max-w-7xl grid-cols-1 pt-16 sm:pt-20 lg:block">
-        <aside className="scrollbar-stealth border-b border-[#183033] bg-[#071012] lg:fixed lg:left-[max(0px,calc((100vw-80rem)/2))] lg:top-20 lg:h-[calc(100vh-5rem)] lg:w-80 lg:overflow-y-auto lg:border-b-0 lg:border-r">
-          <div className="p-4 sm:p-6">
+      <div className="mx-auto grid max-w-7xl grid-cols-1 pt-[8.75rem] sm:pt-[9.75rem] lg:block lg:pt-20">
+        <aside className="scrollbar-stealth fixed left-0 right-0 top-16 z-40 border-b border-[#183033] bg-[#071012]/98 backdrop-blur sm:top-20 lg:left-[max(0px,calc((100vw-80rem)/2))] lg:right-auto lg:top-20 lg:h-[calc(100vh-5rem)] lg:w-80 lg:overflow-y-auto lg:border-b-0 lg:border-r">
+          <div className="mx-auto max-w-7xl p-4 sm:p-6 lg:mx-0">
             <button
               type="button"
               onClick={() => setContentsOpen((open) => !open)}
-              className="mb-4 flex w-full items-center justify-between rounded-2xl border border-[#183033] bg-[#0B171A] px-4 py-3 text-left lg:pointer-events-none"
+              className="flex w-full items-center justify-between rounded-2xl border border-[#183033] bg-[#0B171A] px-4 py-3 text-left lg:mb-4 lg:pointer-events-none"
               aria-expanded={contentsOpen}
             >
               <span className="inline-flex items-center gap-2 text-sm font-extrabold uppercase text-[#8EA2A7]">
@@ -576,7 +576,7 @@ const DocsPage = () => {
               <ChevronUp className="hidden h-4 w-4 text-[#587075] lg:block" />
             </button>
 
-            <nav className={`${contentsOpen ? 'block' : 'hidden'} space-y-7 lg:block`}>
+            <nav className={`${contentsOpen ? 'block' : 'hidden'} scrollbar-stealth mt-4 max-h-[58vh] space-y-7 overflow-y-auto rounded-2xl border border-[#183033] bg-[#071012] p-3 shadow-2xl shadow-black/50 lg:mt-0 lg:block lg:max-h-none lg:overflow-visible lg:rounded-none lg:border-0 lg:bg-transparent lg:p-0 lg:shadow-none`}>
               {navGroups.map((group) => (
                 <div key={group.label}>
                   <div className="mb-3 px-4 text-xs font-extrabold uppercase tracking-widest text-[#587075]">
