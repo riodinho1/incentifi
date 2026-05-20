@@ -53,13 +53,13 @@ export default function WalletButton() {
 
   if (publicKey) {
     return (
-      <div className="flex items-center gap-2 rounded-xl border border-[#183033] bg-[#0B171A] px-2.5 py-1.5">
+      <div className="flex items-center gap-1.5 rounded-xl border border-[#183033] bg-[#0B171A] px-2 py-1.5">
         <span className="text-xs font-medium text-[#DDE8EA]">
           {shortenAddress(publicKey)}
         </span>
         <button
           onClick={disconnect}
-          className="rounded-lg bg-[#7A2730]/80 px-2.5 py-1 text-[11px] font-medium text-[#FFD7D7] transition hover:bg-[#96323C]"
+          className="rounded-lg bg-[#7A2730]/80 px-2 py-1 text-[11px] font-medium text-[#FFD7D7] transition hover:bg-[#96323C]"
         >
           Disconnect
         </button>
@@ -71,7 +71,7 @@ export default function WalletButton() {
     <button
       onClick={connect}
       disabled={connecting}
-      className="rounded-xl bg-[#E9E1D8] px-4 py-2 text-xs font-semibold text-[#061214] transition hover:bg-white disabled:opacity-70"
+      className="rounded-xl bg-[#E9E1D8] px-3.5 py-1.5 text-xs font-semibold text-[#061214] transition hover:bg-white disabled:opacity-70"
     >
       {connecting ? 'Connecting...' : 'Connect Wallet'}
     </button>

@@ -138,9 +138,9 @@ const HomePage = () => {
   return (
     <div className="min-h-screen overflow-x-hidden bg-[#071012] text-[#E8EEF9]">
       <header className="fixed left-0 right-0 top-0 z-50 border-b border-[#183033] bg-[#071012]/95 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-3 px-4 sm:h-16 sm:px-6">
-          <Link to="/" className="flex min-w-0 items-center gap-3">
-            <img src={LOGO_URL} alt="incentifi" className="h-8 w-8 rounded-lg sm:h-9 sm:w-9" />
+        <div className="mx-auto flex h-12 max-w-7xl items-center justify-between gap-3 px-4 sm:h-14 sm:px-6">
+          <Link to="/" className="flex min-w-0 items-center gap-2.5">
+            <img src={LOGO_URL} alt="incentifi" className="h-7 w-7 rounded-lg sm:h-8 sm:w-8" />
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold sm:text-base">incentifi</div>
               <div className="hidden text-[11px] text-[#769196] sm:block">Solana Mainnet</div>
@@ -151,25 +151,25 @@ const HomePage = () => {
             <button
               type="button"
               onClick={() => setHowModalOpen(true)}
-              className="inline-flex items-center gap-2 rounded-xl border border-[#1D3539] bg-[#0B171A] px-3 py-2 text-xs font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-[#1D3539] bg-[#0B171A] px-2.5 py-1.5 text-xs font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white"
             >
-              <CircleHelp className="h-4 w-4 text-[#14B8A6]" />
+              <CircleHelp className="h-3.5 w-3.5 text-[#14B8A6]" />
               How
             </button>
-            <a href="#market" className="inline-flex items-center gap-2 rounded-xl border border-[#1D3539] bg-[#0B171A] px-3 py-2 text-xs font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
-              <Coins className="h-4 w-4 text-[#14B8A6]" />
+            <a href="#market" className="inline-flex items-center gap-1.5 rounded-xl border border-[#1D3539] bg-[#0B171A] px-2.5 py-1.5 text-xs font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
+              <Coins className="h-3.5 w-3.5 text-[#14B8A6]" />
               INCENTIFI
             </a>
-            <a href="#profile" className="inline-flex items-center gap-2 rounded-xl border border-[#1D3539] bg-[#0B171A] px-3 py-2 text-xs font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
-              <Trophy className="h-4 w-4 text-[#14B8A6]" />
+            <a href="#profile" className="inline-flex items-center gap-1.5 rounded-xl border border-[#1D3539] bg-[#0B171A] px-2.5 py-1.5 text-xs font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
+              <Trophy className="h-3.5 w-3.5 text-[#14B8A6]" />
               Profile
             </a>
-            <Link to="/docs" className="inline-flex items-center gap-2 rounded-xl border border-[#1D3539] bg-[#0B171A] px-3 py-2 text-xs font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
-              <BookOpen className="h-4 w-4 text-[#14B8A6]" />
+            <Link to="/docs" className="inline-flex items-center gap-1.5 rounded-xl border border-[#1D3539] bg-[#0B171A] px-2.5 py-1.5 text-xs font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
+              <BookOpen className="h-3.5 w-3.5 text-[#14B8A6]" />
               Docs
             </Link>
-            <Link to="/launch" className="inline-flex items-center gap-2 rounded-xl bg-[#14B8A6] px-4 py-2 text-xs font-semibold text-[#031011] transition hover:bg-[#4FE0D2]">
-              <Rocket className="h-4 w-4" />
+            <Link to="/launch" className="inline-flex items-center gap-1.5 rounded-xl bg-[#14B8A6] px-3.5 py-1.5 text-xs font-semibold text-[#031011] transition hover:bg-[#4FE0D2]">
+              <Rocket className="h-3.5 w-3.5" />
               Create Coin
             </Link>
             <WalletButton />
@@ -232,45 +232,45 @@ const HomePage = () => {
         )}
       </header>
 
-      <main className="pt-14 sm:pt-16">
+      <main className="pt-12 sm:pt-14">
         <section className="border-b border-[#10282B] bg-[#091719]">
-          <div className="mx-auto grid w-full min-w-0 max-w-7xl gap-7 px-4 py-8 sm:px-6 sm:py-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.95fr)] lg:items-center">
+          <div className="mx-auto grid w-full min-w-0 max-w-7xl gap-6 px-4 py-7 sm:px-6 sm:py-9 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,0.9fr)] lg:items-center">
             <div className="min-w-0">
-              <div className="mb-4 inline-flex max-w-[21rem] items-center gap-2 rounded-full border border-[#14B8A6]/25 bg-[#14B8A6]/10 px-3 py-1.5 text-xs font-semibold text-[#72E0D5] sm:max-w-full">
-                <TrendingUp className="h-3.5 w-3.5 shrink-0" />
+              <div className="mb-4 inline-flex max-w-[20rem] items-center gap-2 rounded-full border border-[#14B8A6]/25 bg-[#14B8A6]/10 px-3 py-1.5 text-[11px] font-semibold text-[#72E0D5] sm:max-w-full">
+                <TrendingUp className="h-3 w-3 shrink-0" />
                 <span className="min-w-0 truncate">Launch on incentifi. Hold with purpose.</span>
               </div>
-              <h1 className="max-w-[22rem] text-3xl font-bold leading-[1.08] tracking-normal text-white sm:max-w-2xl sm:text-4xl lg:text-5xl">
+              <h1 className="max-w-[22rem] text-[2rem] font-bold leading-[1.08] tracking-normal text-white sm:max-w-xl sm:text-[2.45rem] lg:text-[3.1rem]">
                 Launch coins that reward holders.
               </h1>
-              <p className="mt-4 max-w-[22rem] break-words text-sm leading-6 text-[#8EA2A7] [overflow-wrap:anywhere] sm:max-w-xl sm:text-base">
+              <p className="mt-4 max-w-[22rem] break-words text-sm leading-6 text-[#8EA2A7] [overflow-wrap:anywhere] sm:max-w-lg">
                 incentifi gives every creator a launch page, coin discovery, wallet flow, and an incentive-routing mechanic that can direct below-entry exits back into the project treasury.
               </p>
-              <div className="mt-6 flex min-w-0 flex-col gap-3 sm:flex-row">
+              <div className="mt-5 flex min-w-0 flex-col gap-3 sm:flex-row">
                 <Link
                   to="/launch"
-                  className="inline-flex min-w-0 items-center justify-center gap-2 rounded-xl bg-[#14B8A6] px-4 py-3 text-sm font-semibold text-[#031011] transition hover:bg-[#4FE0D2]"
+                  className="inline-flex min-w-0 items-center justify-center gap-2 rounded-xl bg-[#14B8A6] px-4 py-2.5 text-sm font-semibold text-[#031011] transition hover:bg-[#4FE0D2]"
                 >
-                  <Rocket className="h-5 w-5 shrink-0" />
+                  <Rocket className="h-4 w-4 shrink-0" />
                   <span className="truncate">Create Coin</span>
                 </Link>
                 <Link
                   to="/docs"
-                  className="inline-flex min-w-0 items-center justify-center gap-2 rounded-xl border border-[#183033] px-4 py-3 text-sm font-semibold text-[#B8C9CE] transition hover:border-[#14B8A6]/50 hover:text-white"
+                  className="inline-flex min-w-0 items-center justify-center gap-2 rounded-xl border border-[#183033] px-4 py-2.5 text-sm font-semibold text-[#B8C9CE] transition hover:border-[#14B8A6]/50 hover:text-white"
                 >
-                  <BookOpen className="h-5 w-5 shrink-0" />
+                  <BookOpen className="h-4 w-4 shrink-0" />
                   <span className="truncate">Read Docs</span>
                 </Link>
               </div>
             </div>
 
-            <div className="min-w-0 rounded-3xl border border-[#183033] bg-[#0B171A] p-4 shadow-2xl shadow-black/30">
-              <div className="mb-4 flex items-center justify-between">
+            <div className="min-w-0 rounded-2xl border border-[#183033] bg-[#0B171A] p-4 shadow-xl shadow-black/25">
+              <div className="mb-3 flex items-center justify-between">
                 <div>
-                  <div className="text-xs uppercase text-[#587075]">Live platform</div>
-                  <div className="text-xl font-semibold">incentifi market</div>
+                  <div className="text-[11px] uppercase text-[#587075]">Live platform</div>
+                  <div className="text-lg font-semibold">incentifi market</div>
                 </div>
-                <Coins className="h-8 w-8 text-[#14B8A6]" />
+                <Coins className="h-7 w-7 text-[#14B8A6]" />
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 {[
@@ -278,14 +278,14 @@ const HomePage = () => {
                   ['Liquidity', '$0'],
                   ['MCap', `$${totalMarketCap.toLocaleString()}`],
                 ].map(([label, value]) => (
-                  <div key={label} className="rounded-2xl border border-[#183033] bg-[#071012] p-4">
+                  <div key={label} className="rounded-xl border border-[#183033] bg-[#071012] p-3">
                     <div className="text-xs text-[#708990]">{label}</div>
-                    <div className="mt-1 text-lg font-semibold text-white">{value}</div>
+                    <div className="mt-1 text-base font-semibold text-white">{value}</div>
                   </div>
                 ))}
               </div>
-              <div className="mt-4 overflow-hidden rounded-2xl border border-[#183033] bg-[#071012]">
-                <div className="flex animate-[pulse_4s_ease-in-out_infinite] whitespace-nowrap px-4 py-3 text-sm text-[#8EA2A7]">
+              <div className="mt-3 overflow-hidden rounded-xl border border-[#183033] bg-[#071012]">
+                <div className="flex animate-[pulse_4s_ease-in-out_infinite] whitespace-nowrap px-3 py-2.5 text-xs text-[#8EA2A7]">
                   <span className="mr-8 text-[#14B8A6]">$INCENTIFI</span>
                   <span className="mr-8">below-entry contribution: 50%</span>
                   <span className="mr-8">upside exits: 0% extra fee</span>
@@ -296,10 +296,10 @@ const HomePage = () => {
           </div>
         </section>
 
-        <section id="market" className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-14">
+        <section id="market" className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-10">
           <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <h2 className="text-2xl font-bold text-white sm:text-3xl">Launched coins</h2>
+              <h2 className="text-2xl font-bold text-white sm:text-[1.7rem]">Launched coins</h2>
               <p className="mt-2 max-w-xl text-sm leading-6 text-[#769196]">
                 Search, filter, and open any coin to view its trading page, chart area, holder details, and creator links.
               </p>
@@ -315,7 +315,7 @@ const HomePage = () => {
                 key={category}
                 type="button"
                 onClick={() => setSelectedCategory(category)}
-                className={`shrink-0 rounded-full px-4 py-2 text-sm font-semibold transition ${
+                className={`shrink-0 rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
                   selectedCategory === category
                     ? 'bg-white text-[#061012]'
                     : 'border border-[#183033] bg-[#0B171A] text-[#8EA2A7] hover:text-white'
@@ -328,19 +328,19 @@ const HomePage = () => {
 
           <div className="mb-8 grid gap-3 md:grid-cols-[1fr_auto]">
             <label className="relative block">
-              <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[#587075]" />
+              <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#587075]" />
               <input
                 type="text"
                 placeholder="Search name, symbol, or contract"
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
-                className="h-14 w-full rounded-2xl border border-[#183033] bg-[#0B171A] pl-12 pr-4 text-white outline-none transition placeholder:text-[#587075] focus:border-[#14B8A6]"
+                className="h-12 w-full rounded-xl border border-[#183033] bg-[#0B171A] pl-10 pr-4 text-sm text-white outline-none transition placeholder:text-[#587075] focus:border-[#14B8A6]"
               />
             </label>
             <select
               value={sortBy}
               onChange={(event) => setSortBy(event.target.value)}
-              className="h-14 rounded-2xl border border-[#183033] bg-[#0B171A] px-4 text-white outline-none focus:border-[#14B8A6]"
+              className="h-12 rounded-xl border border-[#183033] bg-[#0B171A] px-4 text-sm text-white outline-none focus:border-[#14B8A6]"
             >
               {sortOptions.map((option) => (
                 <option key={option}>{option}</option>
@@ -360,23 +360,23 @@ const HomePage = () => {
               </Link>
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
               {filteredTokens.map((token, index) => (
                 <Link
                   key={token.id}
                   to={`/token-preview/${token.symbol}`}
-                  className="group overflow-hidden rounded-2xl border border-[#183033] bg-[#0B171A] transition hover:-translate-y-1 hover:border-[#14B8A6]/50"
+                  className="group overflow-hidden rounded-xl border border-[#183033] bg-[#0B171A] transition hover:-translate-y-1 hover:border-[#14B8A6]/50"
                 >
-                  <div className="relative aspect-square bg-[#071012] p-3">
+                  <div className="relative aspect-[4/3] bg-[#071012] p-2.5">
                     {token.isNew && (
-                      <div className="absolute left-3 top-3 z-10 rounded-full bg-[#14B8A6] px-3 py-1 text-xs font-semibold text-[#031011]">
+                      <div className="absolute left-3 top-3 z-10 rounded-full bg-[#14B8A6] px-2.5 py-1 text-[11px] font-semibold text-[#031011]">
                         NEW
                       </div>
                     )}
                     {token.image_url ? (
                       <img src={token.image_url} alt={token.name} className="h-full w-full rounded-xl object-cover" />
                     ) : (
-                      <div className="flex h-full w-full items-center justify-center rounded-xl bg-[#14B8A6]/15 text-2xl font-bold text-[#72E0D5]">
+                      <div className="flex h-full w-full items-center justify-center rounded-xl bg-[#14B8A6]/15 text-xl font-bold text-[#72E0D5]">
                         {(token.symbol || '??').slice(0, 2).toUpperCase()}
                       </div>
                     )}
@@ -384,12 +384,12 @@ const HomePage = () => {
                   <div className="p-3">
                     <div className="truncate text-sm font-semibold text-white">{token.name || 'Untitled coin'}</div>
                     <div className="mt-1 flex items-center justify-between gap-2">
-                      <span className="truncate text-lg font-bold text-[#14B8A6]">${token.symbol || '??'}</span>
+                      <span className="truncate text-base font-bold text-[#14B8A6]">${token.symbol || '??'}</span>
                       <span className="shrink-0 text-xs text-[#587075]">{token.timeAgo}</span>
                     </div>
                     <div className="mt-2 truncate text-xs text-[#708990]">{shortenAddress(token.creator_address)}</div>
                     <div className="mt-3 flex items-center justify-between">
-                      <span className="text-xs font-semibold text-white">MC ${fakeMC(index).toLocaleString()}</span>
+                      <span className="text-[11px] font-semibold text-white">MC ${fakeMC(index).toLocaleString()}</span>
                       <span className="rounded-full bg-[#14B8A6]/10 px-2 py-1 text-xs text-[#72E0D5]">Trade</span>
                     </div>
                   </div>
