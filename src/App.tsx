@@ -4,6 +4,7 @@ import LaunchPage from './pages/launch/page';
 import TokenPreviewPage from './pages/token-preview/page';
 import Whitepaper from './pages/whitepaper/page';
 import Audit from './pages/audit/page';
+import DocsPage from './pages/docs/page';
 import NotFound from './pages/NotFound';
 
 function App() {
@@ -14,6 +15,7 @@ function App() {
       <Route path="/token-preview/:symbol" element={<TokenPreviewPage />} />
       <Route path="/whitepaper" element={<Whitepaper />} />
       <Route path="/audit" element={<Audit />} />
+      <Route path="/docs" element={<DocsPage />} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );

@@ -13,10 +13,10 @@ const WhitepaperPage = () => {
             <Link to="/" className="flex items-center gap-2 sm:gap-3 hover:opacity-80 transition-opacity">
               <img 
                 src="https://static.readdy.ai/image/97719340ed94173328dfb1241fbbf19e/51991647bb900b0ff0ac5e8230d485ae.png" 
-                alt="IncentiveFi" 
+                alt="incentifi"
                 className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg"
               />
-              <span className="text-lg sm:text-xl font-semibold text-[#C0C0C8] tracking-tight">IncentiveFi</span>
+              <span className="text-lg sm:text-xl font-semibold text-[#C0C0C8] tracking-tight">incentifi</span>
             </Link>
             
             {/* Desktop Navigation */}
@@ -86,7 +86,7 @@ const WhitepaperPage = () => {
             </Link>
             
             <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold mb-4 sm:mb-6 text-[#E0E0E8]">
-              IncentiveFi Whitepaper
+              incentifi Whitepaper
             </h1>
             <p className="text-base sm:text-lg md:text-xl text-[#707078] leading-relaxed">
               Technical documentation and protocol overview
@@ -103,7 +103,7 @@ const WhitepaperPage = () => {
                 <h2 className="text-2xl sm:text-3xl font-bold text-[#C0C0C8] mb-4 sm:mb-6">Abstract</h2>
                 <div className="bg-[#0F0F15] border border-[#1A1A20] rounded-2xl p-6 sm:p-8">
                   <p className="text-sm sm:text-base text-[#909098] leading-relaxed">
-                    IncentiveFi introduces a revolutionary token launch platform that fundamentally changes how cryptocurrency tokens incentivize holder behavior. By implementing an automated penalty system for loss-making sellers and rewarding long-term holders, IncentiveFi creates sustainable token economies that discourage speculative trading and promote genuine community building.
+                    incentifi introduces a Solana launch platform for tokens with clear holder incentives. By making contribution routing visible from launch and directing below-entry contributions toward project treasury, incentifi gives creators a cleaner way to build markets around transparency, sustainability, and community alignment.
                   </p>
                 </div>
               </div>
@@ -120,19 +120,19 @@ const WhitepaperPage = () => {
                     <ul className="space-y-2 text-sm sm:text-base text-[#909098]">
                       <li className="flex items-start gap-3">
                         <i className="ri-arrow-right-s-line text-[#14B8A6] mt-1 flex-shrink-0"></i>
-                        <span>Pump and dump schemes that harm retail investors</span>
+                        <span>Launches that give users too little context before trading</span>
                       </li>
                       <li className="flex items-start gap-3">
                         <i className="ri-arrow-right-s-line text-[#14B8A6] mt-1 flex-shrink-0"></i>
-                        <span>Lack of incentives for long-term holding</span>
+                        <span>Lack of clear incentives for aligned participation</span>
                       </li>
                       <li className="flex items-start gap-3">
                         <i className="ri-arrow-right-s-line text-[#14B8A6] mt-1 flex-shrink-0"></i>
-                        <span>Paper hands causing price volatility</span>
+                        <span>Below-entry exits creating early treasury and market questions</span>
                       </li>
                       <li className="flex items-start gap-3">
                         <i className="ri-arrow-right-s-line text-[#14B8A6] mt-1 flex-shrink-0"></i>
-                        <span>No mechanism to reward diamond hands</span>
+                        <span>No clear route for supporting project sustainability</span>
                       </li>
                     </ul>
                   </div>
@@ -140,7 +140,7 @@ const WhitepaperPage = () => {
                   <div className="bg-[#0F0F15] border border-[#1A1A20] rounded-2xl p-6 sm:p-8">
                     <h3 className="text-lg sm:text-xl font-semibold text-[#E0E0E8] mb-3 sm:mb-4">1.2 Our Solution</h3>
                     <p className="text-sm sm:text-base text-[#909098] leading-relaxed">
-                      IncentiveFi implements a smart contract-based penalty system that automatically tracks each holder's cost basis and applies a 50% penalty on SOL proceeds when tokens are sold at a loss. This penalty is redirected to the project treasury, creating a sustainable funding mechanism while discouraging panic selling.
+                      incentifi implements a cost-basis-aware routing model that can direct 50% of SOL proceeds to treasury when tokens are sold below average entry. That contribution creates a visible treasury mechanism while keeping the flow clear before users trade.
                     </p>
                   </div>
                 </div>
@@ -170,8 +170,8 @@ const WhitepaperPage = () => {
                           <i className="ri-shield-check-line text-[#14B8A6]"></i>
                         </div>
                         <div>
-                          <p className="text-sm sm:text-base font-semibold text-[#E0E0E8] mb-1">Penalty Calculator</p>
-                          <p className="text-xs sm:text-sm text-[#707078]">Determines if sale is at loss and calculates penalty</p>
+                          <p className="text-sm sm:text-base font-semibold text-[#E0E0E8] mb-1">Route Calculator</p>
+                          <p className="text-xs sm:text-sm text-[#707078]">Determines whether a sale is below entry and calculates the contribution route</p>
                         </div>
                       </div>
                       <div className="flex items-start gap-3">
@@ -180,27 +180,27 @@ const WhitepaperPage = () => {
                         </div>
                         <div>
                           <p className="text-sm sm:text-base font-semibold text-[#E0E0E8] mb-1">Treasury Manager</p>
-                          <p className="text-xs sm:text-sm text-[#707078]">Collects and manages penalty funds</p>
+                          <p className="text-xs sm:text-sm text-[#707078]">Collects and manages routed contribution funds</p>
                         </div>
                       </div>
                     </div>
                   </div>
 
                   <div className="bg-[#0F0F15] border border-[#1A1A20] rounded-2xl p-6 sm:p-8">
-                    <h3 className="text-lg sm:text-xl font-semibold text-[#E0E0E8] mb-3 sm:mb-4">2.2 Penalty Mechanism</h3>
+                    <h3 className="text-lg sm:text-xl font-semibold text-[#E0E0E8] mb-3 sm:mb-4">2.2 Contribution Routing</h3>
                     <div className="bg-[#08080D] border border-[#1A1A20] rounded-xl p-4 sm:p-6 mb-4">
                       <code className="text-xs sm:text-sm text-[#14B8A6] font-mono">
                         if (sellPrice &lt; costBasis) &#123;<br />
-                        &nbsp;&nbsp;penalty = proceeds * 0.5;<br />
-                        &nbsp;&nbsp;toSeller = proceeds - penalty;<br />
-                        &nbsp;&nbsp;toTreasury = penalty;<br />
+                        &nbsp;&nbsp;contribution = proceeds * 0.5;<br />
+                        &nbsp;&nbsp;toSeller = proceeds - contribution;<br />
+                        &nbsp;&nbsp;toTreasury = contribution;<br />
                         &#125; else &#123;<br />
                         &nbsp;&nbsp;toSeller = proceeds;<br />
                         &#125;
                       </code>
                     </div>
                     <p className="text-sm sm:text-base text-[#909098] leading-relaxed">
-                      The penalty only applies when tokens are sold below the holder's average purchase price, ensuring that profitable trades and long-term holders are never penalized.
+                      The contribution route only applies when tokens are sold below the holder's average purchase price, keeping upside trades and long-term holders in the standard flow.
                     </p>
                   </div>
                 </div>
@@ -234,12 +234,12 @@ const WhitepaperPage = () => {
                       <h3 className="text-lg sm:text-xl font-semibold text-[#E0E0E8] mb-4">Fee Structure</h3>
                       <div className="space-y-3">
                         <div className="flex items-center justify-between">
-                          <span className="text-sm sm:text-base text-[#707078]">Profit Sales</span>
+                          <span className="text-sm sm:text-base text-[#707078]">Upside Exits</span>
                           <span className="text-sm sm:text-base font-semibold text-[#14B8A6]">0%</span>
                         </div>
                         <div className="h-px bg-[#1A1A20]"></div>
                         <div className="flex items-center justify-between">
-                          <span className="text-sm sm:text-base text-[#707078]">Loss Sales</span>
+                          <span className="text-sm sm:text-base text-[#707078]">Below-Entry Contributions</span>
                           <span className="text-sm sm:text-base font-semibold text-[#EF4444]">50%</span>
                         </div>
                         <div className="h-px bg-[#1A1A20]"></div>
@@ -266,7 +266,7 @@ const WhitepaperPage = () => {
                     {
                       icon: 'ri-game-line',
                       title: 'Gaming Projects',
-                      description: 'Reward long-term players and discourage flippers'
+                      description: 'Create clearer incentive loops for long-term players'
                     },
                     {
                       icon: 'ri-palette-line',
@@ -329,7 +329,7 @@ const WhitepaperPage = () => {
                 <h2 className="text-2xl sm:text-3xl font-bold text-[#C0C0C8] mb-4 sm:mb-6">6. Conclusion</h2>
                 <div className="bg-gradient-to-r from-[#14B8A6]/10 to-[#0D9488]/10 border border-[#14B8A6]/30 rounded-2xl p-6 sm:p-8">
                   <p className="text-sm sm:text-base text-[#909098] leading-relaxed">
-                    IncentiveFi represents a paradigm shift in token economics by aligning the interests of creators, long-term holders, and the broader community. By penalizing short-term speculation and rewarding conviction, we create sustainable token economies that can thrive in any market condition. Our platform empowers creators to launch tokens with built-in mechanisms that protect their communities and reward loyalty.
+                    incentifi aligns creators, holders, and communities around routes that are visible before launch. By turning below-entry exits into transparent treasury support and keeping upside exits simple, the platform helps creators launch tokens with a stronger incentive story from day one.
                   </p>
                 </div>
               </div>
@@ -351,7 +351,7 @@ const WhitepaperPage = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-10 md:py-12">
           <div className="text-center">
             <p className="text-xs sm:text-sm text-[#606068]">
-              © 2025 IncentiveFi. All rights reserved.
+              © 2025 incentifi. All rights reserved.
             </p>
           </div>
         </div>

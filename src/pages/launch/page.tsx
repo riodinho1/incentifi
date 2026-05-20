@@ -98,10 +98,10 @@ const LaunchPage = () => {
             <Link to="/" className="flex items-center gap-2 sm:gap-3 hover:opacity-80 transition-opacity">
               <img 
                 src="https://static.readdy.ai/image/97719340ed94173328dfb1241fbbf19e/51991647bb900b0ff0ac5e8230d485ae.png" 
-                alt="IncentiveFi" 
+                alt="incentifi"
                 className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg"
               />
-              <span className="text-lg sm:text-xl font-semibold text-[#E9E1D8] tracking-tight">IncentiveFi</span>
+              <span className="text-lg sm:text-xl font-semibold text-[#E9E1D8] tracking-tight">incentifi</span>
             </Link>
             
             <nav className="hidden md:flex items-center gap-8">
@@ -161,7 +161,7 @@ const LaunchPage = () => {
               Launch Your Token
             </h1>
             <p className="text-base sm:text-lg md:text-xl text-[#9FA6A3]">
-              Create your incentivized token in minutes
+              Create an incentifi launch in minutes
             </p>
           </div>
         </section>
@@ -197,7 +197,7 @@ const LaunchPage = () => {
                     name="tokenName"
                     value={formData.tokenName}
                     onChange={handleInputChange}
-                    placeholder="e.g., Diamond Hand Token"
+                    placeholder="e.g., Treasury Club"
                     maxLength={32}
                     className="w-full px-4 sm:px-5 py-3 sm:py-4 rounded-xl bg-[#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border-[#00D9FF] transition-colors text-sm sm:text-base"
                   />
@@ -354,10 +354,10 @@ const LaunchPage = () => {
                     </div>
                     <div>
                       <p className="text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2">
-                        IncentiveFi Mechanism: 50% Penalty
+                        incentifi Mechanism: 50% Treasury Contribution
                       </p>
                       <p className="text-xs text-[#9FA6A3] leading-relaxed">
-                        Anyone who sells this token at a loss will have 50% of their SOL proceeds sent to the treasury. Diamond hands pay nothing. This mechanism incentivizes long-term holding and penalizes paper hands.
+                        When a holder exits below average entry, 50% of the SOL proceeds can be routed to the project treasury. Upside exits keep the standard flow.
                       </p>
                     </div>
                   </div>
@@ -395,13 +395,13 @@ const LaunchPage = () => {
                   },
                   {
                     number: '3',
-                    title: 'Incentive Tax Applied',
-                    description: '50% tax on selling at a loss enforced on all trades automatically'
+                    title: 'Contribution Route Applied',
+                    description: 'Below-entry exits can route 50% of proceeds to treasury through the incentifi flow'
                   },
                   {
                     number: '4',
-                    title: 'Diamond Hand Protection',
-                    description: 'All trading happens with the incentive mechanism enforced. Diamond hands who hold or sell at profit pay no tax'
+                    title: 'Holder-Aligned Trading',
+                    description: 'Trading keeps the incentifi model visible: below-entry exits can support treasury, while upside exits stay simple'
                   }
                 ].map((step, index) => (
                   <div key={index} className="flex items-start gap-3 sm:gap-4">
@@ -425,7 +425,7 @@ const LaunchPage = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-10 md:py-12">
           <div className="flex flex-col md:flex-row items-center justify-between gap-4 sm:gap-6">
             <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-6 text-xs text-[#5F6A6E]">
-              <span className="font-medium text-[#9FA6A3]">IncentiveFi</span>
+              <span className="font-medium text-[#9FA6A3]">incentifi</span>
               <span className="w-px h-3 bg-[#2A3338]"></span>
               <span>Solana Mainnet</span>
               <span className="w-px h-3 bg-[#2A3338]"></span>
@@ -434,7 +434,7 @@ const LaunchPage = () => {
               <a href="#" className="hover:text-[#9FA6A3] transition-colors">GitHub</a>
             </div>
             <p className="text-xs text-[#5F6A6E] text-center">
-              © 2025 IncentiveFi. Not financial advice. DYOR.
+              © 2025 incentifi. Not financial advice. DYOR.
             </p>
           </div>
         </div>

@@ -1,5 +1,26 @@
 import { Link } from 'react-router-dom';
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  BookOpen,
+  ChevronRight,
+  Coins,
+  CircleHelp,
+  Github,
+  LineChart,
+  Menu,
+  Network,
+  Shield,
+  Rocket,
+  Search,
+  ShieldCheck,
+  TrendingUp,
+  Trophy,
+  UserRound,
+  Wallet,
+  X,
+  Zap,
+} from 'lucide-react';
+import WalletButton from '../../components/WalletButton';
 import { supabase } from '../../lib/supabase';
 
 type TokenItem = {
@@ -9,38 +30,44 @@ type TokenItem = {
   symbol?: string;
   image_url?: string;
   creator_address?: string;
+  description?: string;
   timeAgo?: string;
   isNew?: boolean;
   [key: string]: unknown;
 };
 
-const categories = [
-  { name: 'All Coins', emoji: '🪙' },
-  { name: 'Meme', emoji: '😂' },
-  { name: 'DeFi', emoji: '💰' },
-  { name: 'Gaming', emoji: '🎮' },
-  { name: 'AI', emoji: '🤖' },
-  { name: 'NFT', emoji: '🖼️' },
-  { name: 'Social', emoji: '💬' },
-  { name: 'Utility', emoji: '⚙️' },
-  { name: 'Other', emoji: '🔥' },
-];
+const LOGO_URL =
+  'https://static.readdy.ai/image/97719340ed94173328dfb1241fbbf19e/51991647bb900b0ff0ac5e8230d485ae.png';
+
+const categories = ['All Coins', 'Meme', 'DeFi', 'Gaming', 'AI', 'Utility'];
+const sortOptions = ['Newest', 'Trending', 'Top Gainers'];
+
+const formatAge = (value?: string | number | Date) => {
+  const date = new Date(value || new Date());
+  const secondsAgo = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
+  if (secondsAgo < 60) return 'just now';
+  if (secondsAgo < 3600) return `${Math.floor(secondsAgo / 60)}m ago`;
+  if (secondsAgo < 86400) return `${Math.floor(secondsAgo / 3600)}h ago`;
+  return `${Math.floor(secondsAgo / 86400)}d ago`;
+};
+
+const shortenAddress = (addr?: string) => {
+  if (!addr) return 'creator hidden';
+  return `${addr.slice(0, 4)}...${addr.slice(-4)}`;
+};
+
+const fakeMC = (index: number) => {
+  const mcValues = [4200, 6900, 8500, 12300, 5600, 17800, 32000, 7100];
+  return mcValues[index % mcValues.length] || 6900;
+};
 
 const HomePage = () => {
-  const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [tokens, setTokens] = useState<TokenItem[]>([]);
   const [selectedCategory, setSelectedCategory] = useState('All Coins');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('Newest');
-
-  useEffect(() => {
-    const handleScroll = () => {
-      setScrolled(window.scrollY > 50);
-    };
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
+  const [howModalOpen, setHowModalOpen] = useState(false);
 
   useEffect(() => {
     const fetchTokens = async () => {
@@ -52,30 +79,17 @@ const HomePage = () => {
 
         if (error) throw new Error(error.message);
 
-        let tokensList = ((data || []).map((row: Record<string, unknown>) => ({
-          id: String(row.id || ''),
-          ...row,
-        })) as TokenItem[]);
-
-        // Sort newest first
-        tokensList.sort((a, b) => {
-          const dateA = new Date(a.created_at || 0);
-          const dateB = new Date(b.created_at || 0);
-          return dateB.getTime() - dateA.getTime();
-        });
-
-        // Add timeAgo and isNew (within 10 minutes)
-        const now = Date.now();
         const tenMinutes = 10 * 60 * 1000;
-        tokensList = tokensList.map(token => {
-          const date = new Date(token.created_at || new Date());
-          const secondsAgo = Math.floor((now - date.getTime()) / 1000);
-          let timeAgo = 'just now';
-          if (secondsAgo >= 60) timeAgo = `${Math.floor(secondsAgo / 60)}m ago`;
-          if (secondsAgo >= 3600) timeAgo = `${Math.floor(secondsAgo / 3600)}h ago`;
-          if (secondsAgo >= 86400) timeAgo = `${Math.floor(secondsAgo / 86400)}d ago`;
-          const isNew = now - date.getTime() < tenMinutes;
-          return { ...token, timeAgo, isNew };
+        const tokensList = ((data || []).map((row: Record<string, unknown>) => {
+          const createdAt = row.created_at || new Date();
+          return {
+            id: String(row.id || ''),
+            ...row,
+            timeAgo: formatAge(createdAt as string | number | Date),
+            isNew: Date.now() - new Date(createdAt as string | number | Date).getTime() < tenMinutes,
+          };
+        }) as TokenItem[]).sort((a, b) => {
+          return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
         });
 
         setTokens(tokensList);
@@ -85,416 +99,513 @@ const HomePage = () => {
     };
 
     fetchTokens();
-
     const interval = setInterval(fetchTokens, 30000);
     return () => clearInterval(interval);
   }, []);
 
-  const shortenAddress = (addr?: string) => {
-    if (!addr) return '';
-    return `${addr.slice(0, 4)}...${addr.slice(-4)}`;
-  };
+  const filteredTokens = useMemo(() => {
+    let list = selectedCategory === 'All Coins' || selectedCategory === 'Meme' ? tokens : [];
 
-  const fakeMC = (index: number) => {
-    const mcValues = [4200, 6900, 8500, 12300, 5600, 17800, 32000, 7100];
-    return mcValues[index % mcValues.length] || 6900;
-  };
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      list = list.filter((token) => {
+        return (
+          token.name?.toLowerCase().includes(query) ||
+          token.symbol?.toLowerCase().includes(query) ||
+          String(token.mint_address || '').toLowerCase().includes(query)
+        );
+      });
+    }
 
-  // Filter: only All Coins and Meme show tokens
-  let filteredTokens = tokens;
+    if (sortBy === 'Trending') {
+      list = [...list].sort((a, b) => fakeMC(tokens.indexOf(b)) - fakeMC(tokens.indexOf(a)));
+    }
 
-  if (selectedCategory !== 'All Coins' && selectedCategory !== 'Meme') {
-    filteredTokens = [];
-  }
+    if (sortBy === 'Top Gainers') {
+      list = [...list].sort((a, b) => {
+        const aScore = String(a.symbol || '').charCodeAt(0) || 0;
+        const bScore = String(b.symbol || '').charCodeAt(0) || 0;
+        return bScore - aScore;
+      });
+    }
 
-  // Search filter
-  if (searchQuery) {
-    filteredTokens = filteredTokens.filter(token =>
-      token.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      token.symbol?.toLowerCase().includes(searchQuery.toLowerCase())
-    );
-  }
+    return list;
+  }, [searchQuery, selectedCategory, sortBy, tokens]);
 
-  // Sort
-  if (sortBy === 'Trending') {
-    filteredTokens = [...filteredTokens].sort(() => Math.random() - 0.5);
-  } else if (sortBy === 'Top Gainers') {
-    filteredTokens = [...filteredTokens].sort((a, b) => {
-      const mcA = fakeMC(tokens.indexOf(a));
-      const mcB = fakeMC(tokens.indexOf(b));
-      return mcB - mcA;
-    });
-  }
+  const totalMarketCap = tokens.reduce((sum, _token, index) => sum + fakeMC(index), 0);
 
   return (
-    <div className="min-h-screen bg-[#0A0A0F]">
-      {/* Navigation */}
-      <header className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled ? 'bg-[#0A0A0F] border-b border-[#1A1A20]' : 'bg-transparent'}`}>
-        <div className="max-w-7xl mx-auto px-4 sm:px-6">
-          <div className="flex items-center justify-between h-16 sm:h-20">
-            <Link to="/" className="flex items-center gap-2 sm:gap-3 hover:opacity-80 transition-opacity">
-              <img
-                src="https://static.readdy.ai/image/97719340ed94173328dfb1241fbbf19e/51991647bb900b0ff0ac5e8230d485ae.png"
-                alt="IncentiveFi"
-                className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg"
-              />
-              <span className="text-lg sm:text-xl font-semibold text-[#C0C0C8] tracking-tight">IncentiveFi</span>
-            </Link>
-           
-            <nav className="hidden md:flex items-center gap-8">
-              <Link to="/" className="text-[#707078] hover:text-[#14B8A6] transition-colors text-sm font-medium">
-                Home
-              </Link>
-              <Link to="/launch" className="text-[#707078] hover:text-[#14B8A6] transition-colors text-sm font-medium">
-                Launch
-              </Link>
-              <button className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#14B8A6] to-[#0D9488] text-white text-sm font-semibold hover:from-[#0D9488] hover:to-[#0F766E] transition-all whitespace-nowrap cursor-pointer shadow-lg shadow-[#14B8A6]/20">
-                Connect Wallet
-              </button>
-            </nav>
-            <button
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="md:hidden w-10 h-10 flex items-center justify-center text-[#C0C0C8] hover:text-[#14B8A6] transition-colors cursor-pointer"
-            >
-              <i className={`${mobileMenuOpen ? 'ri-close-line' : 'ri-menu-line'} text-2xl`}></i>
-            </button>
-          </div>
-          {mobileMenuOpen && (
-            <div className="md:hidden py-4 border-t border-[#1A1A20]">
-              <nav className="flex flex-col gap-4">
-                <Link to="/" onClick={() => setMobileMenuOpen(false)} className="text-[#707078] hover:text-[#14B8A6] transition-colors text-sm font-medium px-2">
-                  Home
-                </Link>
-                <Link to="/launch" onClick={() => setMobileMenuOpen(false)} className="text-[#707078] hover:text-[#14B8A6] transition-colors text-sm font-medium px-2">
-                  Launch
-                </Link>
-                <button className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#14B8A6] to-[#0D9488] text-white text-sm font-semibold hover:from-[#0D9488] hover:to-[#0F766E] transition-all whitespace-nowrap cursor-pointer shadow-lg shadow-[#14B8A6]/20">
-                  Connect Wallet
-                </button>
-              </nav>
+    <div className="min-h-screen overflow-x-hidden bg-[#071012] text-[#E8EEF9]">
+      <header className="sticky top-0 z-50 border-b border-[#183033] bg-[#071012]/95 backdrop-blur">
+        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4 sm:h-20 sm:px-6">
+          <Link to="/" className="flex min-w-0 items-center gap-3">
+            <img src={LOGO_URL} alt="incentifi" className="h-10 w-10 rounded-xl" />
+            <div className="min-w-0">
+              <div className="truncate text-base font-bold sm:text-lg">incentifi</div>
+              <div className="hidden text-xs text-[#769196] sm:block">Solana Mainnet</div>
             </div>
-          )}
+          </Link>
+
+          <nav className="hidden items-center gap-3 lg:flex">
+            <button
+              type="button"
+              onClick={() => setHowModalOpen(true)}
+              className="inline-flex items-center gap-2 rounded-2xl border border-[#1D3539] bg-[#0B171A] px-4 py-3 text-sm font-bold text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white"
+            >
+              <CircleHelp className="h-4 w-4 text-[#14B8A6]" />
+              How
+            </button>
+            <a href="#market" className="inline-flex items-center gap-2 rounded-2xl border border-[#1D3539] bg-[#0B171A] px-4 py-3 text-sm font-bold text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
+              <Coins className="h-4 w-4 text-[#14B8A6]" />
+              INCENTIFI
+            </a>
+            <a href="#profile" className="inline-flex items-center gap-2 rounded-2xl border border-[#1D3539] bg-[#0B171A] px-4 py-3 text-sm font-bold text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
+              <Trophy className="h-4 w-4 text-[#14B8A6]" />
+              Profile
+            </a>
+            <Link to="/docs" className="inline-flex items-center gap-2 rounded-2xl border border-[#1D3539] bg-[#0B171A] px-4 py-3 text-sm font-bold text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
+              <BookOpen className="h-4 w-4 text-[#14B8A6]" />
+              Docs
+            </Link>
+            <Link to="/launch" className="inline-flex items-center gap-2 rounded-2xl bg-[#14B8A6] px-5 py-3 text-sm font-black text-[#031011] transition hover:bg-[#4FE0D2]">
+              <Rocket className="h-4 w-4" />
+              Create Coin
+            </Link>
+            <WalletButton />
+          </nav>
+
+          <nav className="hidden items-center gap-5 md:flex lg:hidden">
+            <button type="button" onClick={() => setHowModalOpen(true)} className="text-sm font-bold text-[#8EA2A7] transition hover:text-[#14B8A6]">
+              How
+            </button>
+            <Link to="/docs" className="inline-flex items-center gap-2 text-sm text-[#8EA2A7] transition hover:text-[#14B8A6]">
+              <BookOpen className="h-4 w-4" />
+              Docs
+            </Link>
+            <a href="#" className="inline-flex items-center gap-2 text-sm text-[#8EA2A7] transition hover:text-[#14B8A6]">
+              <Github className="h-4 w-4" />
+              GitHub
+            </a>
+            <WalletButton />
+          </nav>
+
+          <button
+            type="button"
+            onClick={() => setMobileMenuOpen((open) => !open)}
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#183033] text-[#8EA2A7] md:hidden"
+            aria-label="Open navigation"
+          >
+            {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </button>
         </div>
+
+        {mobileMenuOpen && (
+          <div className="border-t border-[#183033] px-4 py-4 md:hidden">
+            <nav className="mx-auto flex max-w-7xl flex-col gap-3">
+              <Link to="/docs" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-2 rounded-xl px-2 py-2 text-[#8EA2A7]">
+                <BookOpen className="h-4 w-4" />
+                Docs
+              </Link>
+              <button
+                type="button"
+                onClick={() => {
+                  setHowModalOpen(true);
+                  setMobileMenuOpen(false);
+                }}
+                className="flex items-center gap-2 rounded-xl px-2 py-2 text-left text-[#8EA2A7]"
+              >
+                <CircleHelp className="h-4 w-4" />
+                How it works
+              </button>
+              <Link to="/launch" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-2 rounded-xl px-2 py-2 text-[#8EA2A7]">
+                <Rocket className="h-4 w-4" />
+                Create Coin
+              </Link>
+              <a href="#" className="flex items-center gap-2 rounded-xl px-2 py-2 text-[#8EA2A7]">
+                <Github className="h-4 w-4" />
+                GitHub
+              </a>
+              <WalletButton />
+            </nav>
+          </div>
+        )}
       </header>
 
-      {/* Hero Section */}
-      <section className="relative min-h-screen flex items-center justify-center overflow-hidden px-4">
-        <div className="absolute inset-0 bg-[#0A0A0F]"></div>
-        <div className="absolute inset-0 overflow-hidden">
-          <div className="absolute top-20 left-10 w-48 sm:w-72 h-48 sm:h-72 bg-[#14B8A6]/10 rounded-full blur-3xl"></div>
-          <div className="absolute bottom-20 right-10 w-64 sm:w-96 h-64 sm:h-96 bg-[#14B8A6]/10 rounded-full blur-3xl"></div>
-        </div>
-        <div className="relative z-10 max-w-5xl mx-auto text-center pt-16 sm:pt-0">
-          <h1 className="text-4xl sm:text-5xl md:text-7xl font-bold mb-4 sm:mb-6 text-[#E0E0E8] px-4">
-            IncentiveFi
-          </h1>
-          <p className="text-xl sm:text-2xl md:text-3xl text-[#909098] font-light mb-4 sm:mb-8 leading-relaxed px-4">
-            Rewarding Long-Term Believers, Penalizing Paper Hands
-          </p>
-          <p className="text-base sm:text-lg md:text-xl text-[#707078] max-w-3xl mx-auto mb-8 sm:mb-12 leading-relaxed px-4">
-            IncentiveFi is a revolutionary token launch platform that incentivizes holding and penalizes early sellers. Create tokens with built-in mechanisms that reward diamond hands and discourage paper hands.
-          </p>
-          <Link
-            to="/launch"
-            className="inline-flex items-center gap-2 sm:gap-3 px-6 sm:px-8 py-3 sm:py-4 rounded-full bg-gradient-to-r from-[#14B8A6] to-[#0D9488] text-white text-base sm:text-lg font-semibold hover:from-[#0D9488] hover:to-[#0F766E] transition-all whitespace-nowrap cursor-pointer shadow-xl shadow-[#14B8A6]/30"
-          >
-            Launch Your Token
-            <i className="ri-arrow-right-line text-lg sm:text-xl"></i>
-          </Link>
-        </div>
-      </section>
+      <main>
+        <section className="border-b border-[#10282B] bg-[#091719]">
+          <div className="mx-auto grid w-full min-w-0 max-w-7xl gap-8 px-4 py-10 sm:px-6 sm:py-14 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:items-center">
+            <div className="min-w-0">
+              <div className="mb-5 inline-flex max-w-[22rem] items-center gap-2 rounded-full border border-[#14B8A6]/25 bg-[#14B8A6]/10 px-4 py-2 text-sm font-semibold text-[#72E0D5] sm:max-w-full">
+                <TrendingUp className="h-4 w-4 shrink-0" />
+                <span className="min-w-0 truncate">Launch on incentifi. Hold with purpose.</span>
+              </div>
+              <h1 className="max-w-[22rem] text-4xl font-black tracking-normal text-white sm:max-w-3xl sm:text-5xl lg:text-6xl">
+                Launch coins that reward holders.
+              </h1>
+              <p className="mt-5 max-w-[22rem] break-words text-base leading-7 text-[#8EA2A7] [overflow-wrap:anywhere] sm:max-w-2xl sm:text-lg">
+                incentifi gives every creator a launch page, coin discovery, wallet flow, and an incentive-routing mechanic that can direct below-entry exits back into the project treasury.
+              </p>
+              <div className="mt-8 flex min-w-0 flex-col gap-3 sm:flex-row">
+                <Link
+                  to="/launch"
+                  className="inline-flex min-w-0 items-center justify-center gap-2 rounded-2xl bg-[#14B8A6] px-6 py-4 font-bold text-[#031011] transition hover:bg-[#4FE0D2]"
+                >
+                  <Rocket className="h-5 w-5 shrink-0" />
+                  <span className="truncate">Create Coin</span>
+                </Link>
+                <Link
+                  to="/docs"
+                  className="inline-flex min-w-0 items-center justify-center gap-2 rounded-2xl border border-[#183033] px-6 py-4 font-bold text-[#B8C9CE] transition hover:border-[#14B8A6]/50 hover:text-white"
+                >
+                  <BookOpen className="h-5 w-5 shrink-0" />
+                  <span className="truncate">Read Docs</span>
+                </Link>
+              </div>
+            </div>
 
-      {/* Token Listing Section */}
-      <section className="relative py-12 sm:py-20 bg-[#08080D]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6">
-          {/* Total Launched Counter */}
-          <div className="text-center mb-8">
-            <p className="text-2xl font-bold text-white">
-              {tokens.length} tokens launched 🚀
-            </p>
+            <div className="min-w-0 rounded-3xl border border-[#183033] bg-[#0B171A] p-4 shadow-2xl shadow-black/30">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <div className="text-xs uppercase text-[#587075]">Live platform</div>
+                  <div className="text-xl font-bold">incentifi market</div>
+                </div>
+                <Coins className="h-8 w-8 text-[#14B8A6]" />
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                {[
+                  ['Coins', tokens.length.toString()],
+                  ['Liquidity', '$0'],
+                  ['MCap', `$${totalMarketCap.toLocaleString()}`],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-2xl border border-[#183033] bg-[#071012] p-4">
+                    <div className="text-xs text-[#708990]">{label}</div>
+                    <div className="mt-1 text-lg font-black text-white">{value}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 overflow-hidden rounded-2xl border border-[#183033] bg-[#071012]">
+                <div className="flex animate-[pulse_4s_ease-in-out_infinite] whitespace-nowrap px-4 py-3 text-sm text-[#8EA2A7]">
+                  <span className="mr-8 text-[#14B8A6]">$INCENTIFI</span>
+                  <span className="mr-8">below-entry contribution: 50%</span>
+                  <span className="mr-8">upside exits: 0% extra fee</span>
+                  <span>treasury support through incentive routing</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="market" className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-14">
+          <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h2 className="text-2xl font-black text-white sm:text-3xl">Launched coins</h2>
+              <p className="mt-2 max-w-xl text-sm leading-6 text-[#769196]">
+                Search, filter, and open any coin to view its trading page, chart area, holder details, and creator links.
+              </p>
+            </div>
+            <Link to="/launch" className="inline-flex items-center gap-2 text-sm font-bold text-[#14B8A6]">
+              Launch your coin <ChevronRight className="h-4 w-4" />
+            </Link>
           </div>
 
-          {/* Categories Tabs */}
-          <div className="flex flex-wrap gap-3 mb-10 justify-center">
-            {categories.map(cat => (
+          <div className="mb-5 flex gap-2 overflow-x-auto pb-1">
+            {categories.map((category) => (
               <button
-                key={cat.name}
-                onClick={() => setSelectedCategory(cat.name)}
-                className={`px-6 py-3 rounded-full font-medium flex items-center gap-2 transition-all ${
-                  selectedCategory === cat.name
-                    ? 'bg-white text-black shadow-lg'
-                    : 'bg-[#1A1A20] text-[#909098] hover:text-white hover:bg-[#25252B]'
+                key={category}
+                type="button"
+                onClick={() => setSelectedCategory(category)}
+                className={`shrink-0 rounded-full px-4 py-2 text-sm font-semibold transition ${
+                  selectedCategory === category
+                    ? 'bg-white text-[#061012]'
+                    : 'border border-[#183033] bg-[#0B171A] text-[#8EA2A7] hover:text-white'
                 }`}
               >
-                <span>{cat.emoji}</span>
-                {cat.name}
+                {category}
               </button>
             ))}
           </div>
 
-          {/* Search + Sort Row */}
-          <div className="flex flex-col sm:flex-row gap-4 mb-12 items-center justify-between">
-            <div className="w-full sm:w-auto max-w-2xl">
-              <div className="relative">
-                <i className="ri-search-line absolute left-6 top-1/2 -translate-y-1/2 text-[#707078] text-xl"></i>
-                <input
-                  type="text"
-                  placeholder="Search tokens..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-16 pr-6 py-4 rounded-2xl bg-[#1A1A20] text-white placeholder-[#707078] focus:outline-none focus:ring-2 focus:ring-[#14B8A6]"
-                />
-              </div>
-            </div>
-
-            {/* Sort Dropdown */}
+          <div className="mb-8 grid gap-3 md:grid-cols-[1fr_auto]">
+            <label className="relative block">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[#587075]" />
+              <input
+                type="text"
+                placeholder="Search name, symbol, or contract"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                className="h-14 w-full rounded-2xl border border-[#183033] bg-[#0B171A] pl-12 pr-4 text-white outline-none transition placeholder:text-[#587075] focus:border-[#14B8A6]"
+              />
+            </label>
             <select
               value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="px-6 py-4 rounded-2xl bg-[#1A1A20] text-white focus:outline-none focus:ring-2 focus:ring-[#14B8A6]"
+              onChange={(event) => setSortBy(event.target.value)}
+              className="h-14 rounded-2xl border border-[#183033] bg-[#0B171A] px-4 text-white outline-none focus:border-[#14B8A6]"
             >
-              <option>Newest</option>
-              <option>Trending</option>
-              <option>Top Gainers</option>
+              {sortOptions.map((option) => (
+                <option key={option}>{option}</option>
+              ))}
             </select>
           </div>
 
-          {/* Token Grid */}
           {filteredTokens.length === 0 ? (
-            <div className="text-center py-24">
-              <div className="w-32 h-32 mx-auto mb-8 rounded-full bg-[#1A1A20] flex items-center justify-center">
-                <i className="ri-coin-line text-6xl text-[#707078]"></i>
+            <div className="rounded-3xl border border-dashed border-[#183033] bg-[#0B171A] px-6 py-16 text-center">
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[#14B8A6]/10 text-[#14B8A6]">
+                <Coins className="h-8 w-8" />
               </div>
-              <h3 className="text-3xl font-bold text-white mb-4">No Tokens Launched Yet</h3>
-              <p className="text-[#707078] mb-8 max-w-md mx-auto">Be the first to launch a token with IncentiveFi</p>
-              <Link to="/launch" className="px-8 py-4 rounded-full bg-gradient-to-r from-[#14B8A6] to-[#0D9488] text-white font-bold">
-                Launch First Token
+              <h3 className="mt-6 text-2xl font-black text-white">No coins launched yet</h3>
+              <p className="mx-auto mt-2 max-w-md text-[#769196]">Bring the first incentifi coin to market.</p>
+              <Link to="/launch" className="mt-6 inline-flex items-center justify-center rounded-2xl bg-[#14B8A6] px-6 py-3 font-bold text-[#031011]">
+                Create First Coin
               </Link>
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
               {filteredTokens.map((token, index) => (
                 <Link
                   key={token.id}
                   to={`/token-preview/${token.symbol}`}
-                  className="group bg-[#0F0F15] border border-[#1A1A20] rounded-xl overflow-hidden hover:border-[#14B8A6]/30 hover:scale-[1.03] transition-all duration-300 cursor-pointer relative"
+                  className="group overflow-hidden rounded-2xl border border-[#183033] bg-[#0B171A] transition hover:-translate-y-1 hover:border-[#14B8A6]/50"
                 >
-                  {/* NEW Badge */}
-                  {token.isNew && (
-                    <div className="absolute top-2 left-2 z-10 bg-green-500 text-white text-xs font-bold px-3 py-1 rounded-full animate-pulse">
-                      NEW
-                    </div>
-                  )}
-
-                  <div className="aspect-square relative bg-gradient-to-br from-[#1A1A20] to-[#0F0F15] flex items-center justify-center p-3">
+                  <div className="relative aspect-square bg-[#071012] p-3">
+                    {token.isNew && (
+                      <div className="absolute left-3 top-3 z-10 rounded-full bg-[#14B8A6] px-3 py-1 text-xs font-black text-[#031011]">
+                        NEW
+                      </div>
+                    )}
                     {token.image_url ? (
-                      <img src={token.image_url} alt={token.name} className="w-full h-full rounded-lg object-cover" />
+                      <img src={token.image_url} alt={token.name} className="h-full w-full rounded-xl object-cover" />
                     ) : (
-                      <div className="w-full h-full rounded-lg bg-gradient-to-br from-[#14B8A6] to-[#0D9488] flex items-center justify-center text-white text-2xl font-bold">
+                      <div className="flex h-full w-full items-center justify-center rounded-xl bg-[#14B8A6]/15 text-2xl font-black text-[#72E0D5]">
                         {(token.symbol || '??').slice(0, 2).toUpperCase()}
                       </div>
                     )}
-                    <div className="absolute top-2 right-2 bg-[#0F0F15]/80 backdrop-blur-sm px-2 py-0.5 rounded text-xs text-[#707078]">
-                      {token.timeAgo}
-                    </div>
                   </div>
-
                   <div className="p-3">
-                    <h3 className="text-white font-bold text-sm truncate mb-1">{token.name}</h3>
-                    <p className="text-[#14B8A6] text-lg font-bold mb-1">${token.symbol || '??'}</p>
-                    <div className="text-[#707078] text-xs mb-3">
-                      {shortenAddress(token.creator_address)} • {token.timeAgo}
+                    <div className="truncate text-sm font-bold text-white">{token.name || 'Untitled coin'}</div>
+                    <div className="mt-1 flex items-center justify-between gap-2">
+                      <span className="truncate text-lg font-black text-[#14B8A6]">${token.symbol || '??'}</span>
+                      <span className="shrink-0 text-xs text-[#587075]">{token.timeAgo}</span>
                     </div>
-                    <div className="flex items-center justify-between mb-3">
-                      <span className="text-white text-xs font-bold">MC ${fakeMC(index).toLocaleString()}</span>
-                      <div className="w-16 h-1 bg-[#25252B] rounded-full overflow-hidden">
-                        <div className="h-full bg-gradient-to-r from-[#14B8A6] to-[#0D9488] rounded-full" style={{ width: `${Math.random() * 60 + 20}%` }}></div>
-                      </div>
+                    <div className="mt-2 truncate text-xs text-[#708990]">{shortenAddress(token.creator_address)}</div>
+                    <div className="mt-3 flex items-center justify-between">
+                      <span className="text-xs font-bold text-white">MC ${fakeMC(index).toLocaleString()}</span>
+                      <span className="rounded-full bg-[#14B8A6]/10 px-2 py-1 text-xs text-[#72E0D5]">Trade</span>
                     </div>
-
-                    {/* Buy Button */}
-                    <button className="w-full py-2 rounded-lg bg-gradient-to-r from-[#14B8A6] to-[#0D9488] text-white font-bold text-sm hover:opacity-90 transition">
-                      Buy
-                    </button>
                   </div>
                 </Link>
               ))}
             </div>
           )}
-        </div>
-      </section>
+        </section>
 
-      {/* How It Works Section */}
-      <section className="relative py-16 sm:py-24 md:py-32 bg-[#08080D]">
-        <div className="absolute inset-0 opacity-5" style={{ backgroundImage: 'linear-gradient(#1A1A20 1px, transparent 1px), linear-gradient(90deg, #1A1A20 1px, transparent 1px)', backgroundSize: '50px 50px' }}></div>
-       
-        <div className="relative max-w-7xl mx-auto px-4 sm:px-6">
-          <div className="text-center mb-12 sm:mb-16 md:mb-20">
-            <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-[#C0C0C8] mb-4">
-              How IncentiveFi Works
-            </h2>
-            <div className="w-20 sm:w-24 h-1 bg-gradient-to-r from-[#14B8A6] to-[#0D9488] mx-auto rounded-full"></div>
+        <section className="border-y border-[#10282B] bg-[#091719]">
+          <div className="mx-auto grid max-w-7xl gap-4 px-4 py-10 sm:px-6 md:grid-cols-3">
+            {[
+              {
+                icon: Rocket,
+                title: 'Create',
+                body: 'Set coin name, symbol, image, socials, and initial liquidity from one guided launch form.',
+              },
+              {
+                icon: ShieldCheck,
+                title: 'Incentivize',
+                body: 'Below-entry exits can route a contribution into treasury, while upside exits keep the standard flow.',
+              },
+              {
+                icon: LineChart,
+                title: 'Trade',
+                body: 'Each launched coin gets a market page with chart space, creator information, and buy flow.',
+              },
+            ].map((item) => (
+              <div key={item.title} className="rounded-3xl border border-[#183033] bg-[#071012] p-6">
+                <item.icon className="h-8 w-8 text-[#14B8A6]" />
+                <h3 className="mt-5 text-xl font-black text-white">{item.title}</h3>
+                <p className="mt-2 text-sm leading-6 text-[#769196]">{item.body}</p>
+              </div>
+            ))}
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8 md:gap-10">
-            <div className="group bg-[#0F0F15] border border-[#1A1A20] rounded-2xl sm:rounded-3xl p-6 sm:p-8 md:p-10 hover:border-[#14B8A6]/30 hover:-translate-y-2 hover:shadow-xl hover:shadow-[#14B8A6]/10 transition-all duration-300 cursor-pointer">
-              <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#14B8A6]/10 flex items-center justify-center mb-6 sm:mb-8 group-hover:scale-110 transition-transform">
-                <i className="ri-rocket-line text-3xl sm:text-4xl text-[#14B8A6]"></i>
-              </div>
-              <h3 className="text-xl sm:text-2xl font-bold text-[#C0C0C8] mb-3 sm:mb-4">Create Your Token</h3>
-              <p className="text-sm sm:text-base text-[#707078] leading-relaxed">
-                Launch your token instantly with customizable parameters. Set your token name, symbol, supply, and initial liquidity in minutes. No coding required.
-              </p>
-            </div>
-            <div className="group bg-[#0F0F15] border border-[#1A1A20] rounded-2xl sm:rounded-3xl p-6 sm:p-8 md:p-10 hover:border-[#14B8A6]/30 hover:-translate-y-2 hover:shadow-xl hover:shadow-[#14B8A6]/10 transition-all duration-300 cursor-pointer">
-              <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#14B8A6]/10 flex items-center justify-center mb-6 sm:mb-8 group-hover:scale-110 transition-transform">
-                <i className="ri-shield-check-line text-3xl sm:text-4xl text-[#14B8A6]"></i>
-              </div>
-              <h3 className="text-xl sm:text-2xl font-bold text-[#C0C0C8] mb-3 sm:mb-4">Set Incentive Rules</h3>
-              <p className="text-sm sm:text-base text-[#707078] leading-relaxed">
-                Built-in holder reward mechanisms automatically track cost basis and penalize sellers who exit at a loss. Diamond hands are protected and rewarded.
-              </p>
-            </div>
-            <div className="group bg-[#0F0F15] border border-[#1A1A20] rounded-2xl sm:rounded-3xl p-6 sm:p-8 md:p-10 hover:border-[#14B8A6]/30 hover:-translate-y-2 hover:shadow-xl hover:shadow-[#14B8A6]/10 transition-all duration-300 cursor-pointer">
-              <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#14B8A6]/10 flex items-center justify-center mb-6 sm:mb-8 group-hover:scale-110 transition-transform">
-                <i className="ri-line-chart-line text-3xl sm:text-4xl text-[#14B8A6]"></i>
-              </div>
-              <h3 className="text-xl sm:text-2xl font-bold text-[#C0C0C8] mb-3 sm:mb-4">Watch It Grow</h3>
-              <p className="text-sm sm:text-base text-[#707078] leading-relaxed">
-                Automatic penalty distribution ensures that paper hands contribute to the treasury. Your token ecosystem grows stronger with every trade.
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Benefits Section */}
-      <section className="relative py-16 sm:py-24 md:py-32 bg-[#0A0A0F] overflow-hidden">
-        <div className="absolute inset-0">
-          <div className="absolute top-0 left-0 w-64 sm:w-96 h-64 sm:h-96 bg-[#14B8A6]/10 rounded-full blur-3xl"></div>
-          <div className="absolute bottom-0 right-0 w-64 sm:w-96 h-64 sm:h-96 bg-[#14B8A6]/10 rounded-full blur-3xl"></div>
-        </div>
-        <div className="relative max-w-7xl mx-auto px-4 sm:px-6">
-          <div className="grid grid-cols-1 lg:grid-cols-5 gap-8 sm:gap-12 lg:gap-16 items-center">
-            <div className="lg:col-span-3">
-              <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-[#C0C0C8] mb-4 sm:mb-6">
-                Why Choose IncentiveFi?
-              </h2>
-              <p className="text-base sm:text-lg md:text-xl text-[#707078] mb-6 sm:mb-8 md:mb-10 leading-relaxed">
-                The first platform designed to reward long-term holders and create sustainable token economies.
+        <section id="profile" className="border-b border-[#10282B] bg-[#071012]">
+          <div className="mx-auto grid max-w-7xl gap-8 px-4 py-12 sm:px-6 sm:py-16 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
+            <div>
+              <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[#14B8A6]/25 bg-[#14B8A6]/10 px-4 py-2 text-sm font-bold text-[#72E0D5]">
+                <UserRound className="h-4 w-4" />
+                Creator profile
+              </div>
+              <h2 className="text-3xl font-black text-white sm:text-4xl">Every launch gets a stronger identity.</h2>
+              <p className="mt-4 max-w-xl text-base leading-7 text-[#8EA2A7]">
+                incentifi gives each coin a clear profile surface for its symbol, creator address, market stats, social links, chart area, and trading controls.
               </p>
-             
-              <div className="space-y-4 sm:space-y-6">
-                {[
-                  'Automatic cost basis tracking for all holders',
-                  'Built-in penalty system for paper hands',
-                  'Treasury accumulation from loss-making sells',
-                  'Diamond hand protection with zero fees',
-                  'Instant token deployment on Solana'
-                ].map((feature, index) => (
-                  <div
-                    key={index}
-                    className="flex items-start gap-3 sm:gap-4 group hover:translate-x-2 transition-transform cursor-pointer"
-                  >
-                    <div className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-[#14B8A6]/20 flex items-center justify-center flex-shrink-0 mt-1">
-                      <i className="ri-check-line text-[#14B8A6] text-xs sm:text-sm"></i>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              {[
+                ['Creator signal', 'Show who launched the coin and where holders can verify project links.'],
+                ['Market context', 'Keep market cap, liquidity, volume, and 24h movement close to the token identity.'],
+                ['Trading surface', 'Give buyers and sellers a focused place to review the rule before acting.'],
+                ['Documentation path', 'Send confused users straight into the docs without leaving the product flow.'],
+              ].map(([title, body]) => (
+                <div key={title} className="rounded-3xl border border-[#183033] bg-[#0B171A] p-6">
+                  <h3 className="text-lg font-black text-white">{title}</h3>
+                  <p className="mt-2 text-sm leading-6 text-[#769196]">{body}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="border-b border-[#10282B] bg-[#091719]">
+          <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 sm:py-16">
+            <div className="mb-8 max-w-3xl">
+              <h2 className="text-3xl font-black text-white sm:text-4xl">The incentifi route is visible before the trade.</h2>
+              <p className="mt-4 text-base leading-7 text-[#8EA2A7]">
+                The flow is designed so users do not guess what happens. They see the rule, see the market, connect a wallet, and decide with the incentive model in front of them.
+              </p>
+            </div>
+            <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+              <div className="rounded-3xl border border-[#183033] bg-[#071012] p-5 sm:p-7">
+                <div className="mb-5 flex items-center gap-3 text-xl font-black text-white">
+                  <Zap className="h-6 w-6 text-[#14B8A6]" />
+                  Below-entry route
+                </div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  {['Exit below entry', '50% contribution route', 'Treasury support'].map((item, index) => (
+                    <div key={item} className="contents">
+                      <div className="rounded-2xl bg-[#0B171A] px-4 py-4 text-center font-bold text-white sm:flex-1">
+                        {item}
+                      </div>
+                      {index < 2 && <div className="hidden text-center text-[#587075] sm:block">to</div>}
                     </div>
-                    <span className="text-base sm:text-lg text-[#909098] group-hover:text-[#C0C0C8] transition-colors">
-                      {feature}
-                    </span>
-                  </div>
-                ))}
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-3xl border border-[#183033] bg-[#071012] p-5 sm:p-7">
+                <div className="mb-5 flex items-center gap-3 text-xl font-black text-white">
+                  <Shield className="h-6 w-6 text-[#14B8A6]" />
+                  Upside exit
+                </div>
+                <p className="text-sm leading-6 text-[#8EA2A7]">
+                  If a holder exits above entry, the contribution route does not apply. The mechanism is meant to make the treasury path clear before the trade, so the community understands how value can flow through the system.
+                </p>
               </div>
             </div>
-            <div className="lg:col-span-2 mt-8 lg:mt-0">
-              <div className="relative">
-                <div className="absolute inset-0 bg-[#14B8A6]/10 rounded-2xl sm:rounded-3xl blur-2xl"></div>
-                <div className="relative bg-[#0F0F15]/80 backdrop-blur-xl border border-[#14B8A6]/20 rounded-2xl sm:rounded-3xl p-6 sm:p-8">
-                  <div className="space-y-4 sm:space-y-6">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[#707078] text-xs sm:text-sm">Total Tokens Launched</span>
-                      <span className="text-xl sm:text-2xl font-bold text-[#14B8A6]">{tokens.length}</span>
+          </div>
+        </section>
+
+        <section className="border-b border-[#10282B] bg-[#071012]">
+          <div className="mx-auto grid max-w-7xl gap-6 px-4 py-12 sm:px-6 sm:py-16 lg:grid-cols-3">
+            {[
+              {
+                icon: Wallet,
+                title: 'Wallet first',
+                body: 'Browse without connecting. Connect only when you are ready to create or trade.',
+              },
+              {
+                icon: Network,
+                title: 'Solana native',
+                body: 'Built around Solana Mainnet flows, RPC status, token pages, and wallet confirmations.',
+              },
+              {
+                icon: ShieldCheck,
+                title: 'Rule clarity',
+                body: 'Docs, market cards, token pages, and the How modal all explain the same incentifi routing model.',
+              },
+            ].map((item) => (
+              <div key={item.title} className="rounded-3xl border border-[#183033] bg-[#0B171A] p-6">
+                <item.icon className="h-8 w-8 text-[#14B8A6]" />
+                <h3 className="mt-5 text-xl font-black text-white">{item.title}</h3>
+                <p className="mt-2 text-sm leading-6 text-[#769196]">{item.body}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      </main>
+
+      {howModalOpen && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm">
+          <div className="scrollbar-stealth max-h-[86vh] w-full max-w-4xl overflow-y-auto rounded-3xl border border-[#264247] bg-[#102022] shadow-2xl shadow-black/60">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-[#264247] bg-[#102022] px-5 py-5 sm:px-8">
+              <div className="flex items-center gap-4">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#14B8A6]/15 text-[#14B8A6]">
+                  <CircleHelp className="h-7 w-7" />
+                </div>
+                <h2 className="text-2xl font-black text-white sm:text-3xl">How incentifi Works</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHowModalOpen(false)}
+                className="flex h-10 w-10 items-center justify-center rounded-xl text-[#8EA2A7] transition hover:bg-white/5 hover:text-white"
+                aria-label="Close how incentifi works"
+              >
+                <X className="h-6 w-6" />
+              </button>
+            </div>
+
+            <div className="space-y-7 p-5 sm:p-8">
+              <div className="rounded-3xl border border-[#14B8A6]/25 bg-[#14B8A6]/10 p-6">
+                <div className="mb-3 flex items-center gap-3 text-xl font-black text-white">
+                  <Zap className="h-6 w-6 text-[#14B8A6]" />
+                  Core Rule
+                </div>
+                <p className="text-2xl font-black text-white">
+                  Exit below entry <span className="text-[#8EA2A7]">to</span> <span className="text-[#14B8A6]">50% treasury contribution</span>
+                </p>
+                <p className="mt-3 text-[#9BB1B6]">The contribution is not burned. It routes value toward the project treasury.</p>
+              </div>
+
+              <div>
+                <h3 className="mb-4 text-sm font-black uppercase tracking-widest text-[#8EA2A7]">Incentifi flow</h3>
+                <div className="grid gap-3 sm:grid-cols-4">
+                  {['Below-entry exit', '50% contribution', 'Treasury', 'Growth tools'].map((step) => (
+                    <div key={step} className="rounded-2xl border border-[#1D3539] bg-[#071012] px-4 py-4 text-center font-bold text-white">
+                      {step}
                     </div>
-                    <div className="h-px bg-[#1A1A20]"></div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[#707078] text-xs sm:text-sm">Total Liquidity Locked</span>
-                      <span className="text-xl sm:text-2xl font-bold text-[#14B8A6]">$0</span>
-                    </div>
-                    <div className="h-px bg-[#1A1A20]"></div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[#707078] text-xs sm:text-sm">Active Holders</span>
-                      <span className="text-xl sm:text-2xl font-bold text-[#14B8A6]">0</span>
-                    </div>
-                  </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid gap-5 md:grid-cols-2">
+                <div className="rounded-3xl border border-emerald-500/30 bg-emerald-500/10 p-6">
+                  <h3 className="text-xl font-black text-emerald-300">On incentifi</h3>
+                  <ul className="mt-4 space-y-3 text-[#B9CBCF]">
+                    <li>Contract-aware flow checks the trade context.</li>
+                    <li>The routing model is shown before action.</li>
+                    <li>Users see how treasury support can happen through below-entry exits.</li>
+                  </ul>
+                </div>
+                <div className="rounded-3xl border border-rose-500/30 bg-rose-500/10 p-6">
+                  <h3 className="text-xl font-black text-rose-300">Outside the flow</h3>
+                  <ul className="mt-4 space-y-3 text-[#B9CBCF]">
+                    <li>Users may miss the holder-incentive context.</li>
+                    <li>Project links and rules can be harder to verify.</li>
+                    <li>The launch story becomes fragmented.</li>
+                  </ul>
                 </div>
               </div>
             </div>
           </div>
         </div>
-      </section>
+      )}
 
-      {/* Footer */}
-      <footer className="bg-[#05050A] border-t border-[#0F0F15]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-12 sm:py-16 md:py-20">
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-8 sm:gap-10 md:gap-12 mb-8 sm:mb-12">
+      <footer className="border-t border-[#10282B] bg-[#071012]">
+        <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-8 sm:px-6 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-3">
+            <img src={LOGO_URL} alt="incentifi" className="h-10 w-10 rounded-xl" />
             <div>
-              <div className="flex items-center gap-3 mb-4">
-                <img
-                  src="https://static.readdy.ai/image/97719340ed94173328dfb1241fbbf19e/51991647bb900b0ff0ac5e8230d485ae.png"
-                  alt="IncentiveFi"
-                  className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg"
-                />
-                <span className="text-xl sm:text-2xl font-bold text-[#C0C0C8]">IncentiveFi</span>
-              </div>
-              <p className="text-sm sm:text-base text-[#606068] mb-6">
-                The future of incentivized token launches
-              </p>
-              <div className="flex items-center gap-3">
-                <a href="#" className="w-10 h-10 rounded-full bg-[#0F0F15] border border-[#1A1A20] flex items-center justify-center text-[#707078] hover:text-[#14B8A6] hover:border-[#14B8A6]/30 transition-all cursor-pointer">
-                  <i className="ri-twitter-x-line text-lg"></i>
-                </a>
-                <a href="#" className="w-10 h-10 rounded-full bg-[#0F0F15] border border-[#1A1A20] flex items-center justify-center text-[#707078] hover:text-[#14B8A6] hover:border-[#14B8A6]/30 transition-all cursor-pointer">
-                  <i className="ri-github-line text-lg"></i>
-                </a>
-              </div>
-            </div>
-            <div>
-              <h4 className="text-xs sm:text-sm font-semibold text-[#606068] uppercase tracking-wider mb-4">Resources</h4>
-              <ul className="space-y-3">
-                {[
-                  { name: 'Whitepaper', link: '/whitepaper' },
-                  { name: 'Audit Report', link: '/audit' }
-                ].map((item, index) => (
-                  <li key={index}>
-                    <Link to={item.link} className="text-sm sm:text-base text-[#707078] hover:text-[#14B8A6] transition-colors inline-flex items-center gap-2 group cursor-pointer">
-                      {item.name}
-                      <i className="ri-arrow-right-line text-sm opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all"></i>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div>
-              <h4 className="text-xs sm:text-sm font-semibold text-[#606068] uppercase tracking-wider mb-4">Community</h4>
-              <ul className="space-y-3">
-                <li>
-                  <a href="#" className="text-sm sm:text-base text-[#707078] hover:text-[#14B8A6] transition-colors inline-flex items-center gap-2 group cursor-pointer">
-                    Follow on X
-                    <i className="ri-arrow-right-line text-sm opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all"></i>
-                  </a>
-                </li>
-                <li>
-                  <a href="#" className="text-sm sm:text-base text-[#707078] hover:text-[#14B8A6] transition-colors inline-flex items-center gap-2 group cursor-pointer">
-                    GitHub
-                    <i className="ri-arrow-right-line text-sm opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all"></i>
-                  </a>
-                </li>
-              </ul>
+              <div className="font-bold text-white">incentifi</div>
+              <div className="text-sm text-[#769196]">Solana Mainnet</div>
             </div>
           </div>
-          <div className="pt-6 sm:pt-8 border-t border-[#0F0F15] text-center">
-            <p className="text-xs sm:text-sm text-[#606068]">
-              © 2025 IncentiveFi. All rights reserved.
-            </p>
+          <div className="flex flex-wrap items-center gap-5 text-sm text-[#8EA2A7]">
+            <Link to="/docs" className="inline-flex items-center gap-2 transition hover:text-[#14B8A6]">
+              <BookOpen className="h-4 w-4" />
+              Docs
+            </Link>
+            <a href="#" className="inline-flex items-center gap-2 transition hover:text-[#14B8A6]">
+              <Github className="h-4 w-4" />
+              GitHub
+            </a>
+            <a href="#" className="transition hover:text-[#14B8A6]">X</a>
           </div>
         </div>
       </footer>

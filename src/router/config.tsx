@@ -4,6 +4,7 @@ import LaunchPage from '../pages/launch/page';
 import TokenPreviewPage from '../pages/token-preview/page';
 import Whitepaper from '../pages/whitepaper/page';
 import Audit from '../pages/audit/page';
+import DocsPage from '../pages/docs/page';
 import NotFound from '../pages/NotFound';
 
 const routes: RouteObject[] = [
@@ -26,6 +27,10 @@ const routes: RouteObject[] = [
   {
     path: '/audit',
     element: <Audit />,
+  },
+  {
+    path: '/docs',
+    element: <DocsPage />,
   },
   {
     path: '*',

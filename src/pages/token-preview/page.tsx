@@ -123,9 +123,19 @@ const GECKOTERMINAL_POOL_URL = 'https://api.geckoterminal.com/api/v2/networks/so
 
 const formatNum = (value: number, digits = 4) => {
   if (!Number.isFinite(value)) return '0';
-  if (value === 0) return '0';
-  if (value < 0.0001) return value.toExponential(2);
+  const abs = Math.abs(value);
+  if (abs < 0.0001) return '0';
+  if (abs < 1) return value.toLocaleString(undefined, { maximumFractionDigits: digits });
   return value.toLocaleString(undefined, { maximumFractionDigits: digits });
+};
+
+const formatPercent = (value: number, digits = 2) => {
+  if (!Number.isFinite(value)) return '0';
+  if (Math.abs(value) < 1) return '0';
+  return value.toLocaleString(undefined, {
+    maximumFractionDigits: digits,
+    minimumFractionDigits: 0,
+  });
 };
 
 const formatPrice = (value: number) => {
@@ -1906,10 +1916,10 @@ const TokenPreviewPage = () => {
             <Link to="/" className="flex items-center gap-3">
               <img
                 src="https://static.readdy.ai/image/97719340ed94173328dfb1241fbbf19e/51991647bb900b0ff0ac5e8230d485ae.png"
-                alt="IncentiveFi"
+                alt="incentifi"
                 className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg"
               />
-              <span className="text-[#E8EEF9] font-semibold text-lg sm:text-xl">IncentiveFi</span>
+              <span className="text-[#E8EEF9] font-semibold text-lg sm:text-xl">incentifi</span>
             </Link>
             <WalletButton />
           </div>
@@ -1952,7 +1962,7 @@ const TokenPreviewPage = () => {
                     <p className="text-3xl sm:text-4xl font-bold text-white">{formatCurrencyCompact(marketCapUsd)}</p>
                     <div className="flex items-center gap-3 mt-2">
                       <p className={`text-sm ${mcap24hDeltaPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        {mcap24hDeltaPct >= 0 ? '+' : ''}{formatNum(mcap24hDeltaPct, 2)}% 24h
+                        {mcap24hDeltaPct >= 1 ? '+' : ''}{formatPercent(mcap24hDeltaPct, 2)}% 24h
                       </p>
                       <div className="flex-1 h-2 rounded-full bg-[#22314F] overflow-hidden">
                         <div
@@ -1988,7 +1998,7 @@ const TokenPreviewPage = () => {
                 <div className="bg-[#10192C] border border-[#1D2940] rounded-xl px-3 py-2">
                   <p className="text-[#7D92BC]">24h Change</p>
                   <p className={`font-semibold ${mcap24hDeltaPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                    {mcap24hDeltaPct >= 0 ? '+' : ''}{formatNum(mcap24hDeltaPct, 2)}%
+                    {mcap24hDeltaPct >= 1 ? '+' : ''}{formatPercent(mcap24hDeltaPct, 2)}%
                   </p>
                 </div>
               </div>

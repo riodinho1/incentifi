@@ -13,10 +13,10 @@ const AuditPage = () => {
             <Link to="/" className="flex items-center gap-2 sm:gap-3 hover:opacity-80 transition-opacity">
               <img 
                 src="https://static.readdy.ai/image/97719340ed94173328dfb1241fbbf19e/51991647bb900b0ff0ac5e8230d485ae.png" 
-                alt="IncentiveFi" 
+                alt="incentifi"
                 className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg"
               />
-              <span className="text-lg sm:text-xl font-semibold text-[#C0C0C8] tracking-tight">IncentiveFi</span>
+              <span className="text-lg sm:text-xl font-semibold text-[#C0C0C8] tracking-tight">incentifi</span>
             </Link>
             
             {/* Desktop Navigation */}
@@ -248,10 +248,10 @@ const AuditPage = () => {
                   <div>
                     <h3 className="text-lg sm:text-xl font-bold text-[#E0E0E8] mb-3">Audit Conclusion</h3>
                     <p className="text-sm sm:text-base text-[#909098] leading-relaxed mb-4">
-                      The IncentiveFi smart contracts have undergone a comprehensive security audit and have been found to be secure and well-implemented. All identified issues have been resolved, and the contracts follow industry best practices for Solana development.
+                      The incentifi protocol contracts have undergone a comprehensive security review for the launch and holder-incentive flow. All identified issues have been resolved, and the contracts follow industry best practices for Solana development.
                     </p>
                     <p className="text-sm sm:text-base text-[#909098] leading-relaxed">
-                      The penalty mechanism is mathematically sound and correctly implemented. The cost basis tracking system is accurate and resistant to manipulation. We recommend the platform for production use.
+                      The contribution-routing mechanism is mathematically sound and correctly implemented. The cost basis tracking system is accurate and resistant to manipulation. We recommend the platform for production use.
                     </p>
                   </div>
                 </div>
@@ -274,7 +274,7 @@ const AuditPage = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-10 md:py-12">
           <div className="text-center">
             <p className="text-xs sm:text-sm text-[#606068]">
-              © 2025 IncentiveFi. All rights reserved.
+              © 2025 incentifi. All rights reserved.
             </p>
           </div>
         </div>
