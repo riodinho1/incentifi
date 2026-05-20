@@ -7,7 +7,6 @@ import {
   CircleHelp,
   Github,
   LineChart,
-  Menu,
   Network,
   Shield,
   Rocket,
@@ -63,7 +62,6 @@ const fakeMC = (index: number) => {
 };
 
 const HomePage = () => {
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [tokens, setTokens] = useState<TokenItem[]>([]);
   const [selectedCategory, setSelectedCategory] = useState('All Coins');
   const [searchQuery, setSearchQuery] = useState('');
@@ -138,10 +136,10 @@ const HomePage = () => {
   return (
     <div className="min-h-screen overflow-x-hidden bg-[#071012] text-[#E8EEF9]">
       <header className="fixed left-0 right-0 top-0 z-50 border-b border-[#183033] bg-[#071012]/95 backdrop-blur">
-        <div className="mx-auto flex h-12 max-w-7xl items-center justify-between gap-3 px-4 sm:h-14 sm:px-6">
-          <Link to="/" className="flex min-w-0 items-center gap-2.5">
+        <div className="mx-auto flex h-12 max-w-7xl items-center justify-between gap-2 px-4 sm:h-14 sm:px-6">
+          <Link to="/" className="flex min-w-0 items-center gap-2.5 md:flex">
             <img src={LOGO_URL} alt="incentifi" className="h-7 w-7 rounded-lg sm:h-8 sm:w-8" />
-            <div className="min-w-0">
+            <div className="hidden min-w-0 sm:block">
               <div className="truncate text-sm font-semibold sm:text-base">incentifi</div>
               <div className="hidden text-[11px] text-[#769196] sm:block">Solana Mainnet</div>
             </div>
@@ -190,46 +188,45 @@ const HomePage = () => {
             <WalletButton />
           </nav>
 
-          <button
-            type="button"
-            onClick={() => setMobileMenuOpen((open) => !open)}
-            className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#183033] text-[#8EA2A7] md:hidden"
-            aria-label="Open navigation"
-          >
-            {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
+          <nav className="flex min-w-0 flex-1 items-center justify-end gap-1.5 md:hidden">
+            <button
+              type="button"
+              onClick={() => setHowModalOpen(true)}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[#1D3539] bg-[#0B171A] text-[#14B8A6]"
+              aria-label="How incentifi works"
+            >
+              <CircleHelp className="h-4 w-4" />
+            </button>
+            <a
+              href="#market"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[#1D3539] bg-[#0B171A] text-[#14B8A6]"
+              aria-label="Market"
+            >
+              <Coins className="h-4 w-4" />
+            </a>
+            <a
+              href="#profile"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[#1D3539] bg-[#0B171A] text-[#14B8A6]"
+              aria-label="Profile"
+            >
+              <Trophy className="h-4 w-4" />
+            </a>
+            <Link
+              to="/docs"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[#1D3539] bg-[#0B171A] text-[#14B8A6]"
+              aria-label="Docs"
+            >
+              <BookOpen className="h-4 w-4" />
+            </Link>
+            <Link
+              to="/launch"
+              className="inline-flex h-8 shrink-0 items-center justify-center rounded-xl bg-[#A84539] px-3 text-[11px] font-semibold text-white"
+            >
+              Create
+            </Link>
+            <WalletButton compact />
+          </nav>
         </div>
-
-        {mobileMenuOpen && (
-          <div className="border-t border-[#183033] px-4 py-4 md:hidden">
-            <nav className="mx-auto flex max-w-7xl flex-col gap-3">
-              <Link to="/docs" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-2 rounded-xl px-2 py-2 text-[#8EA2A7]">
-                <BookOpen className="h-4 w-4" />
-                Docs
-              </Link>
-              <button
-                type="button"
-                onClick={() => {
-                  setHowModalOpen(true);
-                  setMobileMenuOpen(false);
-                }}
-                className="flex items-center gap-2 rounded-xl px-2 py-2 text-left text-[#8EA2A7]"
-              >
-                <CircleHelp className="h-4 w-4" />
-                How it works
-              </button>
-              <Link to="/launch" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-2 rounded-xl px-2 py-2 text-[#8EA2A7]">
-                <Rocket className="h-4 w-4" />
-                Create Coin
-              </Link>
-              <a href={GITHUB_URL} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-xl px-2 py-2 text-[#8EA2A7]">
-                <Github className="h-4 w-4" />
-                GitHub
-              </a>
-              <WalletButton />
-            </nav>
-          </div>
-        )}
       </header>
 
       <main className="pt-12 sm:pt-14">

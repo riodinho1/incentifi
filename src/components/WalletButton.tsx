@@ -2,7 +2,11 @@ import { useState, useEffect } from 'react';
 
 const shortenAddress = (addr: string) => `${addr.slice(0, 4)}...${addr.slice(-4)}`;
 
-export default function WalletButton() {
+type WalletButtonProps = {
+  compact?: boolean;
+};
+
+export default function WalletButton({ compact = false }: WalletButtonProps) {
   const [publicKey, setPublicKey] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
 
@@ -52,6 +56,17 @@ export default function WalletButton() {
   };
 
   if (publicKey) {
+    if (compact) {
+      return (
+        <button
+          onClick={disconnect}
+          className="inline-flex h-8 min-w-[4.35rem] items-center justify-center rounded-xl border border-[#183033] bg-[#0B171A] px-2 text-[11px] font-semibold text-[#DDE8EA]"
+        >
+          {shortenAddress(publicKey)}
+        </button>
+      );
+    }
+
     return (
       <div className="flex items-center gap-1.5 rounded-xl border border-[#183033] bg-[#0B171A] px-2 py-1.5">
         <span className="text-xs font-medium text-[#DDE8EA]">
@@ -64,6 +79,18 @@ export default function WalletButton() {
           Disconnect
         </button>
       </div>
+    );
+  }
+
+  if (compact) {
+    return (
+      <button
+        onClick={connect}
+        disabled={connecting}
+        className="inline-flex h-8 min-w-[4.35rem] items-center justify-center rounded-xl bg-[#E9E1D8] px-2 text-[11px] font-semibold text-[#061214] transition hover:bg-white disabled:opacity-70"
+      >
+        {connecting ? '...' : 'Wallet'}
+      </button>
     );
   }
 
