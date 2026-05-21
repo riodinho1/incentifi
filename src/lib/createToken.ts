@@ -1,48 +1,105 @@
 // src/lib/createToken.ts
 import * as web3 from '@solana/web3.js';
-import * as splToken from '@solana/spl-token';
 import { EXPLORER_ADDRESS_URL, EXPLORER_TX_URL, SOLANA_RPC_URL } from './network';
 
+type CreateTokenInput = {
+  tokenName: string;
+  tokenSymbol: string;
+  description?: string;
+  imageUrl?: string;
+  website?: string;
+  twitter?: string;
+  telegram?: string;
+  initialLiquidity?: string;
+};
+
+const PUMPPORTAL_LOCAL_TRADE_URL = 'https://pumpportal.fun/api/trade-local';
+
+const waitForConfirmedSignature = async (
+  connection: web3.Connection,
+  signature: string,
+  timeoutMs = 45_000
+) => {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const statuses = await connection.getSignatureStatuses([signature]);
+    const status = statuses.value[0];
+    if (status?.err) {
+      throw new Error(`Transaction failed: ${JSON.stringify(status.err)}`);
+    }
+    if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+  }
+  throw new Error('Transaction confirmation timed out. Check wallet history for final status.');
+};
+
+const makeMetadataUri = (mint: string, input: CreateTokenInput) => {
+  const origin =
+    typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : 'https://incentifi.fun';
+  const url = new URL('/api/token-metadata', origin);
+  url.searchParams.set('mint', mint);
+  url.searchParams.set('n', input.tokenName.trim().slice(0, 32));
+  url.searchParams.set('s', input.tokenSymbol.trim().toUpperCase().slice(0, 10));
+  return url.toString();
+};
+
 export const createRealToken = async (
-  provider: any
+  provider: any,
+  input: CreateTokenInput
 ) => {
   const connection = new web3.Connection(SOLANA_RPC_URL, 'confirmed');
-
-  const fromWallet = provider.publicKey;
   const mint = web3.Keypair.generate();
+  const publicKey = provider?.publicKey?.toString?.();
 
-  const mintRent = await splToken.getMinimumBalanceForRentExemptMint(connection);
+  if (!publicKey) throw new Error('Connect wallet first.');
 
-  const createAccountIx = web3.SystemProgram.createAccount({
-    fromPubkey: fromWallet,
-    newAccountPubkey: mint.publicKey,
-    space: splToken.MINT_SIZE,
-    lamports: mintRent,
-    programId: splToken.TOKEN_PROGRAM_ID,
+  const amount = Math.max(0.0001, Number(input.initialLiquidity || 0.01) || 0.01);
+  const mintAddress = mint.publicKey.toBase58();
+  const metadataUri = makeMetadataUri(mintAddress, input);
+
+  const response = await fetch(PUMPPORTAL_LOCAL_TRADE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      publicKey,
+      action: 'create',
+      tokenMetadata: {
+        name: input.tokenName.trim(),
+        symbol: input.tokenSymbol.trim().toUpperCase(),
+        uri: metadataUri,
+      },
+      mint: mintAddress,
+      denominatedInSol: 'true',
+      amount,
+      slippage: 10,
+      priorityFee: 0.0005,
+      pool: 'pump',
+    }),
   });
 
-  const initMintIx = splToken.createInitializeMintInstruction(
-    mint.publicKey,
-    6,
-    fromWallet,
-    fromWallet
-  );
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || 'Failed to build launch transaction.');
+  }
 
-  const transaction = new web3.Transaction().add(createAccountIx, initMintIx);
-
-  const { blockhash } = await connection.getLatestBlockhash();
-  transaction.recentBlockhash = blockhash;
-  transaction.feePayer = fromWallet;
-
-  transaction.partialSign(mint);
+  const txBuffer = await response.arrayBuffer();
+  const transaction = web3.VersionedTransaction.deserialize(new Uint8Array(txBuffer));
+  transaction.sign([mint]);
 
   const signed = await provider.signTransaction(transaction);
-  const txid = await connection.sendRawTransaction(signed.serialize());
-  await connection.confirmTransaction(txid);
+  const txid = await connection.sendRawTransaction(signed.serialize(), {
+    skipPreflight: false,
+    maxRetries: 3,
+  });
+  await waitForConfirmedSignature(connection, txid);
 
   return {
-    mint: mint.publicKey.toString(),
-    explorer: EXPLORER_ADDRESS_URL(mint.publicKey.toString()),
+    mint: mintAddress,
     txExplorer: EXPLORER_TX_URL(txid),
+    explorer: EXPLORER_ADDRESS_URL(mintAddress),
   };
 };

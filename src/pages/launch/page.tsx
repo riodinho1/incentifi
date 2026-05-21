@@ -46,11 +46,11 @@ const LaunchPage = () => {
       if (!provider) throw new Error('Phantom wallet not detected');
 
       // Show user we're starting
-      alert(`Creating your token on Solana ${SOLANA_NETWORK}...\nPlease approve the transaction in Phantom.`);
+      alert(`Creating your tradable mainnet launch on Solana ${SOLANA_NETWORK}...\nPlease approve the transaction in Phantom.`);
 
-      const result = await createRealToken(provider);
+      const result = await createRealToken(provider, formData);
 
-      alert(`Token launched!\n$${formData.tokenSymbol.toUpperCase()}\nMint: ${result.mint}`);
+      alert(`Token launched with a Pump.fun trading route!\n$${formData.tokenSymbol.toUpperCase()}\nMint: ${result.mint}`);
 
       // Save token to Supabase
       try {
@@ -385,13 +385,13 @@ const LaunchPage = () => {
                 {[
                   {
                     number: '1',
-                    title: 'Token Created',
-                    description: '1B tokens minted to platform pool with your custom parameters'
+                    title: 'Tradable Launch Created',
+                    description: 'A Pump.fun-style mainnet launch is created with your token metadata and mint address'
                   },
                   {
                     number: '2',
-                    title: 'Platform LP (80%)',
-                    description: 'Creates trading pool on our platform with initial liquidity'
+                    title: 'Initial Dev Buy',
+                    description: 'Your initial liquidity amount becomes the launch buy that opens the trading route'
                   },
                   {
                     number: '3',
