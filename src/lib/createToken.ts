@@ -37,7 +37,10 @@ const waitForConfirmedSignature = async (
 
 const makeMetadataUri = (mint: string, input: CreateTokenInput) => {
   const origin =
-    typeof window !== 'undefined' && window.location?.origin
+    typeof window !== 'undefined' &&
+    window.location?.origin &&
+    !window.location.hostname.includes('localhost') &&
+    !window.location.hostname.includes('127.0.0.1')
       ? window.location.origin
       : 'https://incentifi.fun';
   const url = new URL('/api/token-metadata', origin);
@@ -45,6 +48,22 @@ const makeMetadataUri = (mint: string, input: CreateTokenInput) => {
   url.searchParams.set('n', input.tokenName.trim().slice(0, 32));
   url.searchParams.set('s', input.tokenSymbol.trim().toUpperCase().slice(0, 10));
   return url.toString();
+};
+
+const uploadMetadata = async (mint: string, input: CreateTokenInput) => {
+  try {
+    const response = await fetch('/api/upload-token-metadata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...input, mint }),
+    });
+
+    if (!response.ok) return makeMetadataUri(mint, input);
+    const result = await response.json();
+    return result?.uri || makeMetadataUri(mint, input);
+  } catch {
+    return makeMetadataUri(mint, input);
+  }
 };
 
 export const createRealToken = async (
@@ -59,7 +78,7 @@ export const createRealToken = async (
 
   const amount = Math.max(0.0001, Number(input.initialLiquidity || 0.01) || 0.01);
   const mintAddress = mint.publicKey.toBase58();
-  const metadataUri = makeMetadataUri(mintAddress, input);
+  const metadataUri = await uploadMetadata(mintAddress, input);
 
   const response = await fetch(PUMPPORTAL_LOCAL_TRADE_URL, {
     method: 'POST',
