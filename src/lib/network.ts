@@ -1,6 +1,6 @@
 export type SolanaNetwork = 'devnet' | 'mainnet';
 
-const rawNetwork = String(import.meta.env.VITE_SOLANA_NETWORK || 'devnet').toLowerCase();
+const rawNetwork = String(import.meta.env.VITE_SOLANA_NETWORK || 'mainnet').toLowerCase();
 export const SOLANA_NETWORK: SolanaNetwork =
   rawNetwork === 'mainnet' || rawNetwork === 'mainnet-beta' ? 'mainnet' : 'devnet';
 
