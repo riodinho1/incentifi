@@ -51,19 +51,30 @@ const makeMetadataUri = (mint: string, input: CreateTokenInput) => {
 };
 
 const uploadMetadata = async (mint: string, input: CreateTokenInput) => {
-  try {
-    const response = await fetch('/api/upload-token-metadata', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...input, mint }),
-    });
+  const fallbackUri = makeMetadataUri(mint, input);
+  const response = await fetch('/api/upload-token-metadata', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...input, mint }),
+  });
 
-    if (!response.ok) return makeMetadataUri(mint, input);
-    const result = await response.json();
-    return result?.uri || makeMetadataUri(mint, input);
-  } catch {
-    return makeMetadataUri(mint, input);
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(
+      `Metadata upload failed before token creation. ${detail || response.statusText}`
+    );
   }
+
+  const result = await response.json();
+  const uri = result?.uri || fallbackUri;
+
+  if (result?.provider !== 'pinata' || !uri.includes('/ipfs/')) {
+    throw new Error(
+      'Pinata/IPFS metadata is not active on this deployment. Confirm PINATA_JWT is saved in Vercel and redeploy before creating a token.'
+    );
+  }
+
+  return uri;
 };
 
 export const createRealToken = async (
@@ -102,7 +113,11 @@ export const createRealToken = async (
 
   if (!response.ok) {
     const message = await response.text();
-    throw new Error(message || 'Failed to build launch transaction.');
+    throw new Error(
+      `PumpPortal create failed (${response.status} ${response.statusText}). ${
+        message || 'No extra details returned.'
+      }`
+    );
   }
 
   const txBuffer = await response.arrayBuffer();
