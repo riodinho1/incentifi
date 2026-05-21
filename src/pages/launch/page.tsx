@@ -5,6 +5,13 @@ import { useWalletConnected } from '../../hooks/useWalletConnected';
 import { createRealToken } from '../../lib/createToken';
 import { supabase } from '../../lib/supabase';
 import { SOLANA_NETWORK } from '../../lib/network';
+import {
+  IS_PLATFORM_FEE_ENABLED,
+  PLATFORM_CREATION_FEE_SOL,
+  PLATFORM_FEE_WALLET,
+  formatSolAmount,
+  shortenWallet,
+} from '../../lib/platformFee';
 
 const LaunchPage = () => {
   const connected = useWalletConnected();
@@ -45,8 +52,10 @@ const LaunchPage = () => {
       const provider = (window as any).solana;
       if (!provider) throw new Error('Phantom wallet not detected');
 
-      // Show user we're starting
-      alert(`Creating your tradable mainnet launch on Solana ${SOLANA_NETWORK}...\nPlease approve the transaction in Phantom.`);
+      const feeLine = IS_PLATFORM_FEE_ENABLED
+        ? `\n\nFirst approval: ${formatSolAmount(PLATFORM_CREATION_FEE_SOL)} SOL incentifi launch fee.`
+        : '';
+      alert(`Creating your tradable mainnet launch on Solana ${SOLANA_NETWORK}.${feeLine}\n\nPlease approve the wallet request.`);
 
       const result = await createRealToken(provider, formData);
 
@@ -345,6 +354,23 @@ const LaunchPage = () => {
                     </span>
                   </div>
                 </div>
+
+                {IS_PLATFORM_FEE_ENABLED && (
+                  <div className="p-4 sm:p-5 rounded-xl bg-[#0F0F1A] border border-[#2A3338]">
+                    <div className="flex items-center justify-between gap-4 text-xs sm:text-sm mb-2">
+                      <span className="text-[#9FA6A3]">incentifi launch fee</span>
+                      <span className="text-[#E9E1D8] font-semibold">
+                        {formatSolAmount(PLATFORM_CREATION_FEE_SOL)} SOL
+                      </span>
+                    </div>
+                    <p className="text-xs text-[#5F6A6E] leading-relaxed">
+                      Paid from the connected wallet to the incentifi treasury before the launch route is created.
+                    </p>
+                    <p className="text-xs text-[#5F6A6E] mt-2">
+                      Treasury: {shortenWallet(PLATFORM_FEE_WALLET)}
+                    </p>
+                  </div>
+                )}
 
                 {/* Incentive Mechanism Info */}
                 <div className="p-4 sm:p-6 rounded-xl bg-gradient-to-r from-[#00D9FF]/10 to-[#9D00FF]/10 border border-[#00D9FF]/30">

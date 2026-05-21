@@ -1,6 +1,8 @@
 // src/lib/createToken.ts
 import * as web3 from '@solana/web3.js';
 import { EXPLORER_ADDRESS_URL, EXPLORER_TX_URL, SOLANA_RPC_URL } from './network';
+import { payPlatformCreationFee } from './platformFee';
+import { waitForConfirmedSignature } from './solanaTransactions';
 
 type CreateTokenInput = {
   tokenName: string;
@@ -14,26 +16,6 @@ type CreateTokenInput = {
 };
 
 const PUMPPORTAL_LOCAL_TRADE_URL = 'https://pumpportal.fun/api/trade-local';
-
-const waitForConfirmedSignature = async (
-  connection: web3.Connection,
-  signature: string,
-  timeoutMs = 45_000
-) => {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const statuses = await connection.getSignatureStatuses([signature]);
-    const status = statuses.value[0];
-    if (status?.err) {
-      throw new Error(`Transaction failed: ${JSON.stringify(status.err)}`);
-    }
-    if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-  }
-  throw new Error('Transaction confirmation timed out. Check wallet history for final status.');
-};
 
 const makeMetadataUri = (mint: string, input: CreateTokenInput) => {
   const origin =
@@ -119,6 +101,7 @@ export const createRealToken = async (
   const amount = Math.max(0.0001, Number(input.initialLiquidity || 0.01) || 0.01);
   const mintAddress = mint.publicKey.toBase58();
   const metadataUri = await uploadMetadata(mintAddress, input);
+  const feePayment = await payPlatformCreationFee(provider, connection);
 
   const response = await fetch(PUMPPORTAL_LOCAL_TRADE_URL, {
     method: 'POST',
@@ -143,7 +126,8 @@ export const createRealToken = async (
   if (!response.ok) {
     const message = await response.text();
     if (message.includes('toBuffer') || response.statusText.includes('toBuffer')) {
-      return createWithLightningFallback(input, metadataUri);
+      const fallbackResult = await createWithLightningFallback(input, metadataUri);
+      return { ...fallbackResult, feePayment };
     }
     throw new Error(
       `PumpPortal create failed (${response.status} ${response.statusText}). ${
@@ -167,5 +151,6 @@ export const createRealToken = async (
     mint: mintAddress,
     txExplorer: EXPLORER_TX_URL(txid),
     explorer: EXPLORER_ADDRESS_URL(mintAddress),
+    feePayment,
   };
 };
