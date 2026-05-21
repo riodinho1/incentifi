@@ -77,6 +77,35 @@ const uploadMetadata = async (mint: string, input: CreateTokenInput) => {
   return uri;
 };
 
+const createWithLightningFallback = async (
+  input: CreateTokenInput,
+  metadataUri: string
+) => {
+  const response = await fetch('/api/create-pump-token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...input, metadataUri }),
+  });
+
+  const text = await response.text();
+  let result: any = {};
+  try {
+    result = text ? JSON.parse(text) : {};
+  } catch {
+    result = { error: text };
+  }
+
+  if (!response.ok) {
+    throw new Error(result?.error || text || 'PumpPortal Lightning fallback failed.');
+  }
+
+  return {
+    mint: result.mint,
+    explorer: result.explorer,
+    txExplorer: result.txExplorer,
+  };
+};
+
 export const createRealToken = async (
   provider: any,
   input: CreateTokenInput
@@ -113,6 +142,9 @@ export const createRealToken = async (
 
   if (!response.ok) {
     const message = await response.text();
+    if (message.includes('toBuffer') || response.statusText.includes('toBuffer')) {
+      return createWithLightningFallback(input, metadataUri);
+    }
     throw new Error(
       `PumpPortal create failed (${response.status} ${response.statusText}). ${
         message || 'No extra details returned.'
