@@ -8,7 +8,6 @@ import { SOLANA_NETWORK } from '../../lib/network';
 import {
   IS_PUMPPORTAL_FUNDED_LAUNCH_ENABLED,
   IS_PLATFORM_FEE_ENABLED,
-  PLATFORM_CREATION_FEE_SOL,
   formatSolAmount,
   getLaunchPaymentSummary,
 } from '../../lib/platformFee';
@@ -400,7 +399,7 @@ const LaunchPage = () => {
                         ? `Includes ${formatSolAmount(launchPayment.liquidityFundingSol)} SOL launch funding`
                         : 'Initial liquidity is handled by the connected wallet launch route'}
                       {IS_PLATFORM_FEE_ENABLED
-                        ? ` and ${formatSolAmount(PLATFORM_CREATION_FEE_SOL)} platform setup fee.`
+                        ? ` and ${formatSolAmount(launchPayment.setupFeeSol)} platform setup fee.`
                         : '.'}
                     </p>
                   </div>
