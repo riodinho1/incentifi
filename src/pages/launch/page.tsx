@@ -400,7 +400,7 @@ const LaunchPage = () => {
                         ? `Includes ${formatSolAmount(launchPayment.liquidityFundingSol)} SOL launch funding`
                         : 'Initial liquidity is handled by the connected wallet launch route'}
                       {IS_PLATFORM_FEE_ENABLED
-                        ? ` and ${formatSolAmount(PLATFORM_CREATION_FEE_SOL)} SOL setup fee.`
+                        ? ` and ${formatSolAmount(PLATFORM_CREATION_FEE_SOL)} platform setup fee.`
                         : '.'}
                     </p>
                   </div>
