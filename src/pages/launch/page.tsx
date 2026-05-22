@@ -24,7 +24,7 @@ const LaunchPage = () => {
     website: '',
     twitter: '',
     telegram: '',
-    initialLiquidity: '0.05'
+    initialLiquidity: '0.1'
   });
   const [errors, setErrors] = useState<{tokenName?: string; tokenSymbol?: string}>({});
   const launchPayment = getLaunchPaymentSummary(formData.initialLiquidity);
