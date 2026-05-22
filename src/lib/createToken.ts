@@ -1,7 +1,11 @@
 // src/lib/createToken.ts
 import * as web3 from '@solana/web3.js';
 import { EXPLORER_ADDRESS_URL, EXPLORER_TX_URL, SOLANA_RPC_URL } from './network';
-import { payPlatformCreationFee } from './platformFee';
+import {
+  IS_PUMPPORTAL_FUNDED_LAUNCH_ENABLED,
+  normalizeInitialLiquidity,
+  payLaunchCosts,
+} from './platformFee';
 import { waitForConfirmedSignature } from './solanaTransactions';
 
 type CreateTokenInput = {
@@ -61,12 +65,13 @@ const uploadMetadata = async (mint: string, input: CreateTokenInput) => {
 
 const createWithLightningFallback = async (
   input: CreateTokenInput,
-  metadataUri: string
+  metadataUri: string,
+  initialLiquidity: number
 ) => {
   const response = await fetch('/api/create-pump-token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...input, metadataUri }),
+    body: JSON.stringify({ ...input, initialLiquidity, metadataUri }),
   });
 
   const text = await response.text();
@@ -98,10 +103,17 @@ export const createRealToken = async (
 
   if (!publicKey) throw new Error('Connect wallet first.');
 
-  const amount = Math.max(0.0001, Number(input.initialLiquidity || 0.01) || 0.01);
+  const amount = normalizeInitialLiquidity(input.initialLiquidity);
   const mintAddress = mint.publicKey.toBase58();
   const metadataUri = await uploadMetadata(mintAddress, input);
-  const feePayment = await payPlatformCreationFee(provider, connection);
+
+  if (IS_PUMPPORTAL_FUNDED_LAUNCH_ENABLED) {
+    const launchPayment = await payLaunchCosts(provider, connection, amount);
+    const launchResult = await createWithLightningFallback(input, metadataUri, amount);
+    return { ...launchResult, launchPayment };
+  }
+
+  const launchPayment = await payLaunchCosts(provider, connection, amount);
 
   const response = await fetch(PUMPPORTAL_LOCAL_TRADE_URL, {
     method: 'POST',
@@ -126,8 +138,9 @@ export const createRealToken = async (
   if (!response.ok) {
     const message = await response.text();
     if (message.includes('toBuffer') || response.statusText.includes('toBuffer')) {
-      const fallbackResult = await createWithLightningFallback(input, metadataUri);
-      return { ...fallbackResult, feePayment };
+      throw new Error(
+        'PumpPortal direct wallet creation is unavailable right now. Add VITE_PUMPPORTAL_WALLET_PUBLIC_KEY in Vercel so the connected wallet funds the PumpPortal launch route before creation.'
+      );
     }
     throw new Error(
       `PumpPortal create failed (${response.status} ${response.statusText}). ${
@@ -151,6 +164,6 @@ export const createRealToken = async (
     mint: mintAddress,
     txExplorer: EXPLORER_TX_URL(txid),
     explorer: EXPLORER_ADDRESS_URL(mintAddress),
-    feePayment,
+    launchPayment,
   };
 };

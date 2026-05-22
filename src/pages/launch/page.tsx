@@ -6,9 +6,11 @@ import { createRealToken } from '../../lib/createToken';
 import { supabase } from '../../lib/supabase';
 import { SOLANA_NETWORK } from '../../lib/network';
 import {
+  IS_PUMPPORTAL_FUNDED_LAUNCH_ENABLED,
   IS_PLATFORM_FEE_ENABLED,
   PLATFORM_CREATION_FEE_SOL,
   formatSolAmount,
+  getLaunchPaymentSummary,
 } from '../../lib/platformFee';
 
 const LaunchPage = () => {
@@ -26,6 +28,7 @@ const LaunchPage = () => {
     initialLiquidity: '0.1'
   });
   const [errors, setErrors] = useState<{tokenName?: string; tokenSymbol?: string}>({});
+  const launchPayment = getLaunchPaymentSummary(formData.initialLiquidity);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -50,10 +53,10 @@ const LaunchPage = () => {
       const provider = (window as any).solana;
       if (!provider) throw new Error('Phantom wallet not detected');
 
-      const feeLine = IS_PLATFORM_FEE_ENABLED
-        ? `\n\nFirst approval: launch setup fee (${formatSolAmount(PLATFORM_CREATION_FEE_SOL)} SOL).`
+      const paymentLine = launchPayment.totalSol > 0
+        ? `\n\nFirst approval: launch payment (${formatSolAmount(launchPayment.totalSol)} SOL).`
         : '';
-      alert(`Creating your tradable mainnet launch on Solana ${SOLANA_NETWORK}.${feeLine}\n\nPlease approve the wallet request.`);
+      alert(`Creating your tradable mainnet launch on Solana ${SOLANA_NETWORK}.${paymentLine}\n\nPlease approve the wallet request.`);
 
       const result = await createRealToken(provider, formData);
 
@@ -351,6 +354,11 @@ const LaunchPage = () => {
                       SOL
                     </span>
                   </div>
+                  {IS_PUMPPORTAL_FUNDED_LAUNCH_ENABLED && (
+                    <p className="text-xs text-[#5F6A6E] mt-2">
+                      This amount is funded from the connected wallet for the launch route.
+                    </p>
+                  )}
                 </div>
 
                 {/* Incentive Mechanism Info */}
@@ -382,10 +390,20 @@ const LaunchPage = () => {
                 >
                   {connected ? 'Create Token' : 'Connect Wallet First'}
                 </button>
-                {IS_PLATFORM_FEE_ENABLED && (
-                  <p className="text-center text-xs text-[#5F6A6E]">
-                    Launch setup fee: {formatSolAmount(PLATFORM_CREATION_FEE_SOL)} SOL
-                  </p>
+                {launchPayment.totalSol > 0 && (
+                  <div className="text-center text-xs text-[#5F6A6E] space-y-1">
+                    <p>
+                      Launch payment: {formatSolAmount(launchPayment.totalSol)} SOL
+                    </p>
+                    <p>
+                      {IS_PUMPPORTAL_FUNDED_LAUNCH_ENABLED
+                        ? `Includes ${formatSolAmount(launchPayment.liquidityFundingSol)} SOL initial liquidity funding`
+                        : 'Initial liquidity is handled by the connected wallet launch route'}
+                      {IS_PLATFORM_FEE_ENABLED
+                        ? ` and ${formatSolAmount(PLATFORM_CREATION_FEE_SOL)} SOL setup fee.`
+                        : '.'}
+                    </p>
+                  </div>
                 )}
               </div>
             </form>
@@ -403,7 +421,7 @@ const LaunchPage = () => {
                   {
                     number: '2',
                     title: 'Initial Dev Buy',
-                    description: 'Your initial liquidity amount becomes the launch buy that opens the trading route'
+                    description: 'The connected creator wallet funds the initial liquidity that opens the trading route'
                   },
                   {
                     number: '3',
