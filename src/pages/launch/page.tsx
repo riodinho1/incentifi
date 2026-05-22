@@ -337,7 +337,7 @@ const LaunchPage = () => {
                 {/* Initial Liquidity */}
                 <div>
                   <label className="block text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2 sm:mb-3 uppercase tracking-wide">
-                    Initial Liquidity (SOL)
+                    Initial Launch Funding (SOL)
                   </label>
                   <div className="relative">
                     <input
@@ -356,7 +356,7 @@ const LaunchPage = () => {
                   </div>
                   {IS_PUMPPORTAL_FUNDED_LAUNCH_ENABLED && (
                     <p className="text-xs text-[#5F6A6E] mt-2">
-                      This amount is funded from the connected wallet for the launch route.
+                      This amount funds the launch route from the connected wallet, including its initial buy and route costs.
                     </p>
                   )}
                 </div>
@@ -397,7 +397,7 @@ const LaunchPage = () => {
                     </p>
                     <p>
                       {IS_PUMPPORTAL_FUNDED_LAUNCH_ENABLED
-                        ? `Includes ${formatSolAmount(launchPayment.liquidityFundingSol)} SOL initial liquidity funding`
+                        ? `Includes ${formatSolAmount(launchPayment.liquidityFundingSol)} SOL launch funding`
                         : 'Initial liquidity is handled by the connected wallet launch route'}
                       {IS_PLATFORM_FEE_ENABLED
                         ? ` and ${formatSolAmount(PLATFORM_CREATION_FEE_SOL)} SOL setup fee.`
