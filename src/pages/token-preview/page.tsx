@@ -2292,8 +2292,14 @@ const TokenPreviewPage = () => {
                 <h3 className="text-[#E8EEF9] font-semibold mb-3">Bonding Curve</h3>
                 <div className="space-y-2 text-sm">
                   <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
-                    <span className="text-[#7D92BC]">Mint</span>
+                    <span className="text-[#7D92BC]">Token</span>
                     <span className="text-[#E8EEF9] font-medium">{displaySymbol || '-'} ({onchainMintInfo.decimals}d)</span>
+                  </div>
+                  <div className="rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
+                    <span className="block text-[#7D92BC]">Contract Address</span>
+                    <span className="mt-1 block break-all text-xs font-medium text-[#E8EEF9]">
+                      {tokenData?.mintAddress || '-'}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
                     <span className="text-[#7D92BC]">Virtual SOL</span>
