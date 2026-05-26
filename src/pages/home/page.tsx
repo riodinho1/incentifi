@@ -36,7 +36,7 @@ type TokenItem = {
 };
 
 const LOGO_URL =
-  'https://static.readdy.ai/image/97719340ed94173328dfb1241fbbf19e/51991647bb900b0ff0ac5e8230d485ae.png';
+  '/incentifi-logo.svg';
 const GITHUB_URL = 'https://github.com/riodinho1/incentifi';
 
 const categories = ['All Coins', 'Meme', 'DeFi', 'Gaming', 'AI', 'Utility'];
