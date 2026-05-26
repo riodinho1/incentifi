@@ -281,13 +281,10 @@ const HomePage = () => {
                   </div>
                 ))}
               </div>
-              <div className="mt-3 overflow-hidden rounded-xl border border-[#183033] bg-[#071012]">
-                <div className="flex animate-[pulse_4s_ease-in-out_infinite] whitespace-nowrap px-3 py-2.5 text-xs text-[#8EA2A7]">
-                  <span className="mr-8 text-[#14B8A6]">$INCENTIFI</span>
-                  <span className="mr-8">below-entry contribution: 50%</span>
-                  <span className="mr-8">upside exits: 0% extra fee</span>
-                  <span>treasury support through incentive routing</span>
-                </div>
+              <div className="mt-3 grid gap-2 rounded-xl border border-[#183033] bg-[#071012] p-2 text-xs text-[#8EA2A7] sm:grid-cols-3">
+                <div className="rounded-lg bg-[#0B171A] px-3 py-2 text-[#14B8A6]">$INCENTIFI</div>
+                <div className="rounded-lg bg-[#0B171A] px-3 py-2">below-entry contribution: 50%</div>
+                <div className="rounded-lg bg-[#0B171A] px-3 py-2">upside exits: 0% extra fee</div>
               </div>
             </div>
           </div>
