@@ -2302,11 +2302,11 @@ const TokenPreviewPage = () => {
                     </span>
                   </div>
                   <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
-                    <span className="text-[#7D92BC]">Virtual SOL</span>
+                    <span className="text-[#7D92BC]">Curve SOL Baseline</span>
                     <span className="text-[#E8EEF9] font-medium">{formatSol(curve.virtualSolReserves)} SOL</span>
                   </div>
                   <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
-                    <span className="text-[#7D92BC]">Virtual Tokens</span>
+                    <span className="text-[#7D92BC]">Curve Token Baseline</span>
                     <span className="text-[#E8EEF9] font-medium">{formatTokenAmount(curve.virtualTokenReserves, onchainMintInfo.decimals)}</span>
                   </div>
                   <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
