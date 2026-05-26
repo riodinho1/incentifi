@@ -110,7 +110,7 @@ const LaunchPage = () => {
                 alt="incentifi"
                 className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg"
               />
-              <span className="text-lg sm:text-xl font-semibold text-[#E9E1D8] tracking-tight">incentifi</span>
+              <span className="brand-type text-lg sm:text-xl font-semibold text-[#E9E1D8] tracking-normal">incentifi</span>
             </Link>
             
             <nav className="hidden md:flex items-center gap-8">
@@ -166,7 +166,7 @@ const LaunchPage = () => {
           </div>
           
           <div className="relative max-w-4xl mx-auto px-4 sm:px-6 text-center">
-            <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold mb-3 sm:mb-4 bg-gradient-to-r from-[#00D9FF] via-[#9D00FF] to-[#FF00E5] bg-clip-text text-transparent">
+            <h1 className="text-4xl sm:text-5xl md:text-6xl font-semibold mb-3 sm:mb-4 bg-gradient-to-r from-[#00D9FF] via-[#9D00FF] to-[#FF00E5] bg-clip-text text-transparent">
               Launch Your Token
             </h1>
             <p className="text-base sm:text-lg md:text-xl text-[#9FA6A3]">

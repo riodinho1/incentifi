@@ -140,7 +140,7 @@ const HomePage = () => {
           <Link to="/" className="flex min-w-0 items-center gap-2.5 md:flex">
             <img src={LOGO_URL} alt="incentifi" className="h-7 w-7 rounded-lg sm:h-8 sm:w-8" />
             <div className="hidden min-w-0 sm:block">
-              <div className="truncate text-sm font-semibold sm:text-base">incentifi</div>
+              <div className="brand-type truncate text-sm font-semibold sm:text-base">incentifi</div>
               <div className="hidden text-[11px] text-[#769196] sm:block">Solana Mainnet</div>
             </div>
           </Link>
@@ -156,7 +156,7 @@ const HomePage = () => {
             </button>
             <a href="#market" className="inline-flex items-center gap-1.5 rounded-xl border border-[#1D3539] bg-[#0B171A] px-2.5 py-1.5 text-xs font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
               <Coins className="h-3.5 w-3.5 text-[#14B8A6]" />
-              INCENTIFI
+              Market
             </a>
             <a href="#profile" className="inline-flex items-center gap-1.5 rounded-xl border border-[#1D3539] bg-[#0B171A] px-2.5 py-1.5 text-xs font-medium text-[#DDE8EA] transition hover:border-[#14B8A6]/60 hover:text-white">
               <Trophy className="h-3.5 w-3.5 text-[#14B8A6]" />
@@ -237,7 +237,7 @@ const HomePage = () => {
                 <TrendingUp className="h-3 w-3 shrink-0" />
                 <span className="min-w-0 truncate">Launch on incentifi. Hold with purpose.</span>
               </div>
-              <h1 className="max-w-[22rem] text-[2rem] font-bold leading-[1.08] tracking-normal text-white sm:max-w-xl sm:text-[2.45rem] lg:text-[3.1rem]">
+              <h1 className="max-w-[22rem] text-[2rem] font-semibold leading-[1.08] tracking-normal text-white sm:max-w-xl sm:text-[2.45rem] lg:text-[3.1rem]">
                 Launch coins that reward holders.
               </h1>
               <p className="mt-4 max-w-[22rem] break-words text-sm leading-6 text-[#8EA2A7] [overflow-wrap:anywhere] sm:max-w-lg">
@@ -265,7 +265,7 @@ const HomePage = () => {
               <div className="mb-3 flex items-center justify-between">
                 <div>
                   <div className="text-[11px] uppercase text-[#587075]">Live platform</div>
-                  <div className="text-lg font-semibold">incentifi market</div>
+                  <div className="brand-type text-lg font-semibold">holder-aligned market</div>
                 </div>
                 <Coins className="h-7 w-7 text-[#14B8A6]" />
               </div>

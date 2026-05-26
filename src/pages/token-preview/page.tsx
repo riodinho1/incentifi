@@ -1919,7 +1919,7 @@ const TokenPreviewPage = () => {
                 alt="incentifi"
                 className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg"
               />
-              <span className="text-[#E8EEF9] font-semibold text-lg sm:text-xl">incentifi</span>
+              <span className="brand-type text-[#E8EEF9] font-semibold text-lg sm:text-xl">incentifi</span>
             </Link>
             <WalletButton />
           </div>
@@ -1953,7 +1953,7 @@ const TokenPreviewPage = () => {
                   </div>
                 )}
                 <div>
-                  <h1 className="text-xl sm:text-2xl font-bold text-[#E8EEF9]">
+                  <h1 className="text-xl sm:text-2xl font-semibold text-[#E8EEF9]">
                     {tokenData.tokenName}{' '}
                     <span className="text-[#53B8FF]">${displaySymbol}</span>
                   </h1>

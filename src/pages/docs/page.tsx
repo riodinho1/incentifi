@@ -548,7 +548,7 @@ const DocsPage = () => {
           <Link to="/" className="flex min-w-0 items-center gap-3">
             <img src={LOGO_URL} alt="incentifi" className="h-10 w-10 rounded-xl" />
             <div className="min-w-0">
-              <div className="truncate text-base font-semibold sm:text-lg">Documentation</div>
+              <div className="brand-type truncate text-base font-semibold sm:text-lg">Documentation</div>
               <div className="hidden text-xs text-[#769196] sm:block">incentifi v1.0</div>
             </div>
           </Link>
@@ -611,7 +611,7 @@ const DocsPage = () => {
               <FileText className="h-4 w-4" />
               Developer and user guide
             </div>
-            <h1 className="text-4xl font-extrabold text-white sm:text-5xl">incentifi Documentation</h1>
+            <h1 className="text-4xl font-semibold text-white sm:text-5xl">incentifi Documentation</h1>
             <p className="mt-5 max-w-3xl text-lg leading-8 text-[#8EA2A7]">
               Learn how incentifi launches work, how wallets connect, how the market is organized, and how each interface supports holder-aligned tokens.
             </p>
@@ -620,7 +620,7 @@ const DocsPage = () => {
           <div className="space-y-14">
             {sections.map((section) => (
               <section key={section.id} id={section.id} className="scroll-mt-24">
-                <h2 className="text-2xl font-extrabold text-white sm:text-3xl">{section.title}</h2>
+                <h2 className="text-2xl font-semibold text-white sm:text-3xl">{section.title}</h2>
                 <div className="mt-5 space-y-4">
                   {section.body.map((paragraph) => (
                     <p key={paragraph} className="max-w-4xl text-base leading-8 text-[#8EA2A7]">
@@ -637,7 +637,7 @@ const DocsPage = () => {
                           {index + 1}
                         </div>
                         <div>
-                          <h3 className="text-xl font-extrabold text-white">{step.title}</h3>
+                          <h3 className="text-xl font-semibold text-white">{step.title}</h3>
                           <p className="mt-2 max-w-3xl text-base leading-8 text-[#8EA2A7]">{step.body}</p>
                         </div>
                       </div>
