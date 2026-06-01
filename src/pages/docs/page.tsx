@@ -196,15 +196,15 @@ const sections = [
     title: 'UI Overview',
     body: [
       'The incentifi interface is organized around five major surfaces: fixed header navigation, the market area, token cards, token detail pages, and documentation.',
-      'The header gives quick access to How, INCENTIFI market, Profile, Docs, Create Coin, and wallet connection. The main page then expands into discovery, explanation, and creator-focused sections.',
+      'Desktop users get Guide, Market, Creators, Docs, Launch, and wallet connection in the header. On phones, the wallet stays in the header while the main actions move into a bottom navigation bar.',
     ],
   },
   {
     id: 'header-navigation',
     title: 'Header & Navigation',
     body: [
-      'The header is fixed at the top so the main actions stay available while users scroll. It uses compact icon-led buttons with incentifi wording and colors.',
-      'How opens the incentifi rule modal. INCENTIFI jumps to the market. Profile jumps to the creator/profile section. Docs opens this documentation page. Create Coin opens the launch flow.',
+      'The header is fixed at the top so wallet access and brand context stay visible while users scroll. Mobile actions are separated into a bottom four-part bar so the layout feels more like incentifi and less like an icon-only clone.',
+      'Guide opens the incentifi explainer modal. Market jumps to launched coins. Creators jumps to the creator/profile section on larger screens. Docs opens this documentation page. Launch opens the coin creation flow.',
     ],
   },
   {
@@ -227,7 +227,7 @@ const sections = [
     id: 'mobile-experience',
     title: 'Mobile Experience',
     body: [
-      'incentifi is responsive for phone screens. Navigation collapses behind a compact menu, buttons remain touch-friendly, and token cards stack into a smaller grid.',
+      'incentifi is responsive for phone screens. The main mobile actions sit in a fixed bottom bar, buttons remain touch-friendly, and token cards stack into a smaller grid.',
       'Use your laptop network address during development to view the site on a phone. On production, the GoDaddy/Vercel domain will serve the same responsive layout.',
     ],
   },
