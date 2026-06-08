@@ -5,13 +5,18 @@ import {
   ChevronRight,
   Coins,
   CircleHelp,
+  Activity,
+  Compass,
+  FileText,
   Github,
   LineChart,
   Network,
   Shield,
   Rocket,
   Search,
+  Send,
   ShieldCheck,
+  Store,
   TrendingUp,
   UserRound,
   Wallet,
@@ -37,6 +42,7 @@ type TokenItem = {
 const LOGO_URL =
   '/incentifi-logo.svg';
 const GITHUB_URL = 'https://github.com/riodinho1/incentifi';
+const X_URL = 'https://x.com/incentifi_fun';
 
 const categories = ['All Coins', 'Meme', 'DeFi', 'Gaming', 'AI', 'Utility'];
 const sortOptions = ['Newest', 'Trending', 'Top Gainers'];
@@ -196,28 +202,28 @@ const HomePage = () => {
             onClick={() => setHowModalOpen(true)}
             className="flex h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-[#1D3539] bg-[#0B171A] text-[10px] font-semibold text-[#BFD0D2]"
           >
-            <CircleHelp className="h-4 w-4 text-[#14B8A6]" />
+            <Compass className="h-4 w-4 text-[#14B8A6]" />
             <span>Guide</span>
           </button>
           <a
             href="#market"
             className="flex h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-[#1D3539] bg-[#0B171A] text-[10px] font-semibold text-[#BFD0D2]"
           >
-            <Coins className="h-4 w-4 text-[#14B8A6]" />
+            <Store className="h-4 w-4 text-[#14B8A6]" />
             <span>Market</span>
           </a>
           <Link
             to="/docs"
             className="flex h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-[#1D3539] bg-[#0B171A] text-[10px] font-semibold text-[#BFD0D2]"
           >
-            <BookOpen className="h-4 w-4 text-[#14B8A6]" />
+            <FileText className="h-4 w-4 text-[#14B8A6]" />
             <span>Docs</span>
           </Link>
           <Link
             to="/launch"
             className="flex h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl bg-[#14B8A6] text-[10px] font-bold text-[#031011]"
           >
-            <Rocket className="h-4 w-4" />
+            <Send className="h-4 w-4" />
             <span>Launch</span>
           </Link>
         </div>
@@ -261,7 +267,7 @@ const HomePage = () => {
                   <div className="text-[11px] uppercase text-[#587075]">Live platform</div>
                   <div className="brand-type text-lg font-semibold">holder-aligned market</div>
                 </div>
-                <Coins className="h-7 w-7 text-[#14B8A6]" />
+                <Activity className="h-7 w-7 text-[#14B8A6]" />
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 {[
@@ -577,7 +583,7 @@ const HomePage = () => {
       )}
 
       <footer className="border-t border-[#10282B] bg-[#071012]">
-        <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-8 sm:px-6 md:flex-row md:items-center md:justify-between">
+        <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 pb-28 pt-8 sm:px-6 md:flex-row md:items-center md:justify-between md:pb-8">
           <div className="flex items-center gap-3">
             <img src={LOGO_URL} alt="incentifi" className="h-10 w-10 rounded-xl" />
             <div>
@@ -594,7 +600,10 @@ const HomePage = () => {
               <Github className="h-4 w-4" />
               GitHub
             </a>
-            <a href={GITHUB_URL} target="_blank" rel="noreferrer" className="transition hover:text-[#14B8A6]">GitHub</a>
+            <a href={X_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 transition hover:text-[#14B8A6]">
+              <i className="ri-twitter-x-line text-base" />
+              X
+            </a>
           </div>
         </div>
       </footer>
