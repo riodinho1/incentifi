@@ -26,7 +26,7 @@ import {
 } from 'lucide-react';
 
 const LOGO_URL =
-  '/incentifi-logo.svg';
+  '/incentifi-logo.jpeg';
 
 const navGroups = [
   {

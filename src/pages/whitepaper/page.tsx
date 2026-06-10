@@ -12,7 +12,7 @@ const WhitepaperPage = () => {
           <div className="flex items-center justify-between h-16 sm:h-20">
             <Link to="/" className="flex items-center gap-2 sm:gap-3 hover:opacity-80 transition-opacity">
               <img 
-                src="/incentifi-logo.svg" 
+                src="/incentifi-logo.jpeg" 
                 alt="incentifi"
                 className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg"
               />

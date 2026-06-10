@@ -40,7 +40,7 @@ type TokenItem = {
 };
 
 const LOGO_URL =
-  '/incentifi-logo.svg';
+  '/incentifi-logo.jpeg';
 const GITHUB_URL = 'https://github.com/riodinho1/incentifi';
 const X_URL = 'https://x.com/incentifi_fun';
 

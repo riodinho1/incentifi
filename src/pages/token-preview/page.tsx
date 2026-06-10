@@ -1915,7 +1915,7 @@ const TokenPreviewPage = () => {
           <div className="h-16 sm:h-20 flex items-center justify-between">
             <Link to="/" className="flex items-center gap-3">
               <img
-                src="/incentifi-logo.svg"
+                src="/incentifi-logo.jpeg"
                 alt="incentifi"
                 className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg"
               />
