@@ -39,6 +39,15 @@ export default async function handler(request, response) {
     return;
   }
 
+  if (request.method === 'GET') {
+    const ready = Boolean(process.env.PUMPPORTAL_API_KEY);
+    response.status(ready ? 200 : 500).json({
+      ready,
+      error: ready ? '' : 'PUMPPORTAL_API_KEY is not configured for token creation.',
+    });
+    return;
+  }
+
   if (request.method !== 'POST') {
     response.status(405).json({ error: 'Method not allowed' });
     return;

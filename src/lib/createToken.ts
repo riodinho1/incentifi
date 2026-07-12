@@ -7,6 +7,8 @@ import {
   payLaunchCosts,
 } from './platformFee';
 import { waitForConfirmedSignature } from './solanaTransactions';
+import { createEvmToken } from './createEvmToken';
+import { IS_ROBINHOOD_CHAIN_MODE } from './evmNetwork';
 
 type CreateTokenInput = {
   tokenName: string;
@@ -93,10 +95,34 @@ const createWithLightningFallback = async (
   };
 };
 
+const ensureLightningFallbackReady = async () => {
+  const response = await fetch('/api/create-pump-token?preflight=1', {
+    method: 'GET',
+  });
+
+  let result: any = {};
+  try {
+    result = await response.json();
+  } catch {
+    result = {};
+  }
+
+  if (!response.ok || !result?.ready) {
+    throw new Error(
+      result?.error ||
+        'The launch backend is not ready. Confirm PUMPPORTAL_API_KEY is saved in Vercel and redeploy before collecting launch payment.'
+    );
+  }
+};
+
 export const createRealToken = async (
   provider: any,
   input: CreateTokenInput
 ) => {
+  if (IS_ROBINHOOD_CHAIN_MODE) {
+    return createEvmToken(provider, input);
+  }
+
   const connection = new web3.Connection(SOLANA_RPC_URL, 'confirmed');
   const mint = web3.Keypair.generate();
   const publicKey = provider?.publicKey?.toString?.();
@@ -108,6 +134,7 @@ export const createRealToken = async (
   const metadataUri = await uploadMetadata(mintAddress, input);
 
   if (IS_PUMPPORTAL_FUNDED_LAUNCH_ENABLED) {
+    await ensureLightningFallbackReady();
     const launchPayment = await payLaunchCosts(provider, connection, amount);
     const launchResult = await createWithLightningFallback(input, metadataUri, amount);
     return { ...launchResult, launchPayment };

@@ -1,4 +1,10 @@
 import { useState, useEffect } from 'react';
+import {
+  IS_ROBINHOOD_CHAIN_MODE,
+  ensureEvmChain,
+  getEvmProvider,
+  requestEvmAccounts,
+} from '../lib/evmNetwork';
 
 const shortenAddress = (addr: string) => `${addr.slice(0, 4)}...${addr.slice(-4)}`;
 
@@ -11,6 +17,27 @@ export default function WalletButton({ compact = false }: WalletButtonProps) {
   const [connecting, setConnecting] = useState(false);
 
   useEffect(() => {
+    if (IS_ROBINHOOD_CHAIN_MODE) {
+      const provider = getEvmProvider();
+      if (!provider) return;
+
+      provider
+        .request({ method: 'eth_accounts' })
+        .then((accounts: string[]) => setPublicKey(accounts?.[0] || null))
+        .catch(() => setPublicKey(null));
+
+      const handleAccountsChanged = (accounts: string[]) => setPublicKey(accounts?.[0] || null);
+      const handleDisconnect = () => setPublicKey(null);
+
+      provider.on?.('accountsChanged', handleAccountsChanged);
+      provider.on?.('disconnect', handleDisconnect);
+
+      return () => {
+        provider.removeListener?.('accountsChanged', handleAccountsChanged);
+        provider.removeListener?.('disconnect', handleDisconnect);
+      };
+    }
+
     const provider = (window as any).solana;
 
     if (provider && provider.isPhantom) {
@@ -36,6 +63,17 @@ export default function WalletButton({ compact = false }: WalletButtonProps) {
   const connect = async () => {
     setConnecting(true);
     try {
+      if (IS_ROBINHOOD_CHAIN_MODE) {
+        if (!getEvmProvider()) {
+          window.open('https://metamask.io/download/', '_blank');
+          return;
+        }
+        await ensureEvmChain();
+        const account = await requestEvmAccounts();
+        setPublicKey(account);
+        return;
+      }
+
       const provider = (window as any).solana;
       if (provider && provider.isPhantom) {
         await provider.connect();
@@ -50,6 +88,11 @@ export default function WalletButton({ compact = false }: WalletButtonProps) {
   };
 
   const disconnect = async () => {
+    if (IS_ROBINHOOD_CHAIN_MODE) {
+      setPublicKey(null);
+      return;
+    }
+
     const provider = (window as any).solana;
     if (provider) await provider.disconnect();
     setPublicKey(null);

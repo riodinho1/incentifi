@@ -1,5 +1,5 @@
 const LOGO_URL =
-  'https://static.readdy.ai/image/97719340ed94173328dfb1241fbbf19e/51991647bb900b0ff0ac5e8230d485ae.png';
+  'https://incentifi.fun/incentifi-logo.jpeg';
 
 const clean = (value, fallback = '') => String(value || fallback).trim();
 

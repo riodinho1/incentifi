@@ -6,6 +6,12 @@ import { createRealToken } from '../../lib/createToken';
 import { supabase } from '../../lib/supabase';
 import { SOLANA_NETWORK } from '../../lib/network';
 import {
+  EVM_CHAIN_NAME,
+  EVM_NATIVE_SYMBOL,
+  IS_ROBINHOOD_CHAIN_MODE,
+  getEvmProvider,
+} from '../../lib/evmNetwork';
+import {
   IS_PUMPPORTAL_FUNDED_LAUNCH_ENABLED,
   IS_PLATFORM_FEE_ENABLED,
   formatSolAmount,
@@ -49,17 +55,48 @@ const LaunchPage = () => {
     if (!connected) return alert('Connect wallet first');
 
     try {
-      const provider = (window as any).solana;
-      if (!provider) throw new Error('Phantom wallet not detected');
+      const symbol = formData.tokenSymbol.trim().toUpperCase();
+      const { data: existingTokens, error: symbolCheckError } = await supabase
+        .from('tokens')
+        .select('id')
+        .eq('symbol', symbol)
+        .limit(1);
 
-      const paymentLine = launchPayment.totalSol > 0
+      if (symbolCheckError) {
+        throw new Error(`Could not verify symbol availability: ${symbolCheckError.message}`);
+      }
+
+      if (existingTokens && existingTokens.length > 0) {
+        setErrors((prev) => ({ ...prev, tokenSymbol: 'Symbol already exists' }));
+        alert(`$${symbol} already exists. Choose another ticker before launching.`);
+        return;
+      }
+
+      const provider = IS_ROBINHOOD_CHAIN_MODE ? getEvmProvider() : (window as any).solana;
+      if (!provider) {
+        throw new Error(
+          IS_ROBINHOOD_CHAIN_MODE
+            ? 'EVM wallet not detected. Install MetaMask, Rabby, or Robinhood Wallet.'
+            : 'Phantom wallet not detected'
+        );
+      }
+
+      const paymentLine = !IS_ROBINHOOD_CHAIN_MODE && launchPayment.totalSol > 0
         ? `\n\nFirst approval: launch payment (${formatSolAmount(launchPayment.totalSol)} SOL).`
         : '';
-      alert(`Creating your tradable mainnet launch on Solana ${SOLANA_NETWORK}.${paymentLine}\n\nPlease approve the wallet request.`);
+      const chainLabel = IS_ROBINHOOD_CHAIN_MODE
+        ? `${EVM_CHAIN_NAME}. You will pay wallet gas in ${EVM_NATIVE_SYMBOL} for the contract deployment.`
+        : `Solana ${SOLANA_NETWORK}.${paymentLine}`;
+      alert(`Creating your token on ${chainLabel}\n\nPlease approve the wallet request.`);
 
       const result = await createRealToken(provider, formData);
+      const launchResult = result as any;
 
-      alert(`Token launched with a Pump.fun trading route!\n$${formData.tokenSymbol.toUpperCase()}\nMint: ${result.mint}`);
+      alert(
+        IS_ROBINHOOD_CHAIN_MODE
+          ? `Token deployed on ${launchResult.chain || EVM_CHAIN_NAME}!\n$${symbol}\nContract: ${launchResult.mint}`
+          : `Token launched with a Pump.fun trading route!\n$${symbol}\nMint: ${result.mint}`
+      );
 
       // Save token to Supabase
       try {
@@ -72,7 +109,8 @@ const LaunchPage = () => {
           twitter: formData.twitter || '',
           telegram: formData.telegram || '',
           mint_address: result.mint,
-          creator_address: provider.publicKey.toString(),
+          creator_address:
+            launchResult.creatorAddress || provider.publicKey?.toString?.() || '',
           created_at: new Date().toISOString(),
         });
         if (error) throw new Error(error.message);
@@ -86,8 +124,9 @@ const LaunchPage = () => {
       // Save data for preview
       const tokenData = {
         ...formData,
-        tokenSymbol: formData.tokenSymbol.trim().toUpperCase(),
+        tokenSymbol: symbol,
         mintAddress: result.mint,
+        chain: IS_ROBINHOOD_CHAIN_MODE ? 'evm' : 'solana',
       };
       localStorage.setItem('previewToken', JSON.stringify(tokenData));
 
@@ -167,11 +206,20 @@ const LaunchPage = () => {
           
           <div className="relative max-w-4xl mx-auto px-4 sm:px-6 text-center">
             <h1 className="text-4xl sm:text-5xl md:text-6xl font-semibold mb-3 sm:mb-4 bg-gradient-to-r from-[#00D9FF] via-[#9D00FF] to-[#FF00E5] bg-clip-text text-transparent">
-              Launch Your Token
+              {IS_ROBINHOOD_CHAIN_MODE ? `Launch on ${EVM_CHAIN_NAME}` : 'Launch Your Token'}
             </h1>
             <p className="text-base sm:text-lg md:text-xl text-[#9FA6A3]">
-              Create an incentifi launch in minutes
+              {IS_ROBINHOOD_CHAIN_MODE
+                ? `Deploy an EVM token contract on ${EVM_CHAIN_NAME} and save the contract address for wallet import.`
+                : 'Create an incentifi launch in minutes'}
             </p>
+            {IS_ROBINHOOD_CHAIN_MODE && (
+              <div className="mt-4 flex justify-center">
+                <span className="inline-flex items-center rounded-full border border-[#00D9FF]/30 bg-[#081b2e] px-3 py-1 text-xs text-[#9ED0FF]">
+                  {EVM_CHAIN_NAME} mode
+                </span>
+              </div>
+            )}
           </div>
         </section>
 
@@ -329,36 +377,39 @@ const LaunchPage = () => {
                   </div>
                   <div className="flex items-center justify-between text-xs sm:text-sm">
                     <span className="text-[#5F6A6E]">Decimals</span>
-                    <span className="text [#E9E1D8] font-semibold">6 (Standard)</span>
+                    <span className="text [#E9E1D8] font-semibold">
+                      {IS_ROBINHOOD_CHAIN_MODE ? '18 (EVM Standard)' : '6 (Standard)'}
+                    </span>
                   </div>
                 </div>
 
-                {/* Initial Liquidity */}
-                <div>
-                  <label className="block text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2 sm:mb-3 uppercase tracking-wide">
-                    Initial Launch Funding (SOL)
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      name="initialLiquidity"
-                      value={formData.initialLiquidity}
-                      onChange={handleInputChange}
-                      placeholder="0.1"
-                      step="0.01"
-                      min="0.01"
-                      className="w-full px-4 sm:px-5 py-3 sm:py-4 pr-16 sm:pr-20 rounded-xl bg [#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border [#00D9FF] transition-colors text-sm sm:text-base"
-                    />
-                    <span className="absolute right-4 sm:right-5 top-1/2 -translate-y-1/2 text [#9FA6A3] font-semibold text-sm sm:text-base">
-                      SOL
-                    </span>
+                {!IS_ROBINHOOD_CHAIN_MODE && (
+                  <div>
+                    <label className="block text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2 sm:mb-3 uppercase tracking-wide">
+                      Initial Launch Funding (SOL)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        name="initialLiquidity"
+                        value={formData.initialLiquidity}
+                        onChange={handleInputChange}
+                        placeholder="0.1"
+                        step="0.01"
+                        min="0.01"
+                        className="w-full px-4 sm:px-5 py-3 sm:py-4 pr-16 sm:pr-20 rounded-xl bg [#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border [#00D9FF] transition-colors text-sm sm:text-base"
+                      />
+                      <span className="absolute right-4 sm:right-5 top-1/2 -translate-y-1/2 text [#9FA6A3] font-semibold text-sm sm:text-base">
+                        SOL
+                      </span>
+                    </div>
+                    {IS_PUMPPORTAL_FUNDED_LAUNCH_ENABLED && (
+                      <p className="text-xs text-[#5F6A6E] mt-2">
+                        This amount funds the launch route from the connected wallet, including its initial buy and route costs.
+                      </p>
+                    )}
                   </div>
-                  {IS_PUMPPORTAL_FUNDED_LAUNCH_ENABLED && (
-                    <p className="text-xs text-[#5F6A6E] mt-2">
-                      This amount funds the launch route from the connected wallet, including its initial buy and route costs.
-                    </p>
-                  )}
-                </div>
+                )}
 
                 {/* Incentive Mechanism Info */}
                 <div className="p-4 sm:p-6 rounded-xl bg-gradient-to-r from-[#00D9FF]/10 to-[#9D00FF]/10 border border-[#00D9FF]/30">
@@ -371,7 +422,9 @@ const LaunchPage = () => {
                         incentifi Mechanism: 50% Treasury Contribution
                       </p>
                       <p className="text-xs text-[#9FA6A3] leading-relaxed">
-                        When a holder exits below average entry, 50% of the SOL proceeds can be routed to the project treasury. Upside exits keep the standard flow.
+                        {IS_ROBINHOOD_CHAIN_MODE
+                          ? 'This Robinhood Chain mode deploys the token contract first. Liquidity and trading routing should be connected after the DEX route is selected.'
+                          : 'When a holder exits below average entry, 50% of the SOL proceeds can be routed to the project treasury. Upside exits keep the standard flow.'}
                       </p>
                     </div>
                   </div>
@@ -389,7 +442,13 @@ const LaunchPage = () => {
                 >
                   {connected ? 'Create Token' : 'Connect Wallet First'}
                 </button>
-                {launchPayment.totalSol > 0 && (
+                {IS_ROBINHOOD_CHAIN_MODE && (
+                  <div className="text-center text-xs text-[#5F6A6E] space-y-1">
+                    <p>Robinhood Chain deployment</p>
+                    <p>Your wallet pays network gas in {EVM_NATIVE_SYMBOL}. Liquidity setup is handled separately.</p>
+                  </div>
+                )}
+                {!IS_ROBINHOOD_CHAIN_MODE && launchPayment.totalSol > 0 && (
                   <div className="text-center text-xs text-[#5F6A6E] space-y-1">
                     <p>
                       Launch payment: {formatSolAmount(launchPayment.totalSol)} SOL
@@ -414,23 +473,31 @@ const LaunchPage = () => {
                 {[
                   {
                     number: '1',
-                    title: 'Tradable Launch Created',
-                    description: 'A Pump.fun-style mainnet launch is created with your token metadata and mint address'
+                    title: IS_ROBINHOOD_CHAIN_MODE ? 'Contract Deployed' : 'Tradable Launch Created',
+                    description: IS_ROBINHOOD_CHAIN_MODE
+                      ? 'An ERC-20 token contract is deployed on Robinhood Chain with your selected name and symbol'
+                      : 'A Pump.fun-style mainnet launch is created with your token metadata and mint address'
                   },
                   {
                     number: '2',
-                    title: 'Initial Dev Buy',
-                    description: 'The connected creator wallet funds the initial liquidity that opens the trading route'
+                    title: IS_ROBINHOOD_CHAIN_MODE ? 'Creator Receives Supply' : 'Initial Dev Buy',
+                    description: IS_ROBINHOOD_CHAIN_MODE
+                      ? 'The connected creator wallet receives the fixed one billion token supply'
+                      : 'The connected creator wallet funds the initial liquidity that opens the trading route'
                   },
                   {
                     number: '3',
-                    title: 'Contribution Route Applied',
-                    description: 'Below-entry exits can route 50% of proceeds to treasury through the incentifi flow'
+                    title: IS_ROBINHOOD_CHAIN_MODE ? 'Contract Address Saved' : 'Contribution Route Applied',
+                    description: IS_ROBINHOOD_CHAIN_MODE
+                      ? 'The created contract address is saved so wallets, explorers, and token pages can reference it'
+                      : 'Below-entry exits can route 50% of proceeds to treasury through the incentifi flow'
                   },
                   {
                     number: '4',
-                    title: 'Holder-Aligned Trading',
-                    description: 'Trading keeps the incentifi model visible: below-entry exits can support treasury, while upside exits stay simple'
+                    title: IS_ROBINHOOD_CHAIN_MODE ? 'DEX Route Next' : 'Holder-Aligned Trading',
+                    description: IS_ROBINHOOD_CHAIN_MODE
+                      ? 'Next, connect the deployed token to a Robinhood Chain DEX liquidity route.'
+                      : 'Trading keeps the incentifi model visible: below-entry exits can support treasury, while upside exits stay simple'
                   }
                 ].map((step, index) => (
                   <div key={index} className="flex items-start gap-3 sm:gap-4">
@@ -456,7 +523,7 @@ const LaunchPage = () => {
             <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-6 text-xs text-[#5F6A6E]">
               <span className="font-medium text-[#9FA6A3]">incentifi</span>
               <span className="w-px h-3 bg-[#2A3338]"></span>
-              <span>Solana Mainnet</span>
+              <span>{IS_ROBINHOOD_CHAIN_MODE ? EVM_CHAIN_NAME : 'Solana Mainnet'}</span>
               <span className="w-px h-3 bg-[#2A3338]"></span>
               <a href="#" className="hover:text-[#9FA6A3] transition-colors">Docs</a>
               <span className="w-px h-3 bg[#2A3338]"></span>

@@ -24,6 +24,7 @@ import {
   Zap,
 } from 'lucide-react';
 import WalletButton from '../../components/WalletButton';
+import { IS_ROBINHOOD_CHAIN_MODE, EVM_CHAIN_NAME } from '../../lib/evmNetwork';
 import { supabase } from '../../lib/supabase';
 
 type TokenItem = {
@@ -146,7 +147,9 @@ const HomePage = () => {
             <img src={LOGO_URL} alt="incentifi" className="h-7 w-7 rounded-lg sm:h-8 sm:w-8" />
             <div className="hidden min-w-0 sm:block">
               <div className="brand-type truncate text-sm font-semibold sm:text-base">incentifi</div>
-              <div className="hidden text-[11px] text-[#769196] sm:block">Solana Mainnet</div>
+              <div className="hidden text-[11px] text-[#769196] sm:block">
+                {IS_ROBINHOOD_CHAIN_MODE ? EVM_CHAIN_NAME : 'Solana Mainnet'}
+              </div>
             </div>
           </Link>
 
@@ -240,7 +243,7 @@ const HomePage = () => {
               <h1 className="max-w-[22rem] text-[2rem] font-semibold leading-[1.08] tracking-normal text-white sm:max-w-xl sm:text-[2.45rem] lg:text-[3.1rem]">
                 Launch coins that reward holders.
               </h1>
-              <p className="mt-4 max-w-[22rem] break-words text-sm leading-6 text-[#8EA2A7] [overflow-wrap:anywhere] sm:max-w-lg">
+              <p className="mt-4 max-w-[22rem] text-sm leading-6 text-[#8EA2A7] [overflow-wrap:anywhere] sm:max-w-lg">
                 incentifi gives every creator a launch page, coin discovery, wallet flow, and an incentive-routing mechanic that can direct below-entry exits back into the project treasury.
               </p>
               <div className="mt-5 flex min-w-0 flex-col gap-3 sm:flex-row">
@@ -497,8 +500,10 @@ const HomePage = () => {
               },
               {
                 icon: Network,
-                title: 'Solana native',
-                body: 'Built around Solana Mainnet flows, RPC status, token pages, and wallet confirmations.',
+                title: IS_ROBINHOOD_CHAIN_MODE ? `${EVM_CHAIN_NAME} native` : 'Solana native',
+                body: IS_ROBINHOOD_CHAIN_MODE
+                  ? `Built around ${EVM_CHAIN_NAME} flows, RPC status, token pages, and wallet confirmations.`
+                  : 'Built around Solana Mainnet flows, RPC status, token pages, and wallet confirmations.',
               },
               {
                 icon: ShieldCheck,
@@ -588,7 +593,9 @@ const HomePage = () => {
             <img src={LOGO_URL} alt="incentifi" className="h-10 w-10 rounded-xl" />
             <div>
               <div className="font-semibold text-white">incentifi</div>
-              <div className="text-sm text-[#769196]">Solana Mainnet</div>
+              <div className="text-sm text-[#769196]">
+                {IS_ROBINHOOD_CHAIN_MODE ? EVM_CHAIN_NAME : 'Solana Mainnet'}
+              </div>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-5 text-sm text-[#8EA2A7]">

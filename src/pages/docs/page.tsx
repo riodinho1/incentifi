@@ -121,7 +121,7 @@ const sections = [
     id: 'introduction',
     title: 'Introduction',
     body: [
-      'Welcome to the official incentifi documentation. incentifi is a Solana launch platform for coins with visible holder incentives, creator tools, market discovery, and wallet-powered trading flows.',
+      'Welcome to the official incentifi documentation. incentifi is a Robinhood Chain/EVM launch platform for coins with visible holder incentives, creator tools, market discovery, and wallet-powered trading flows.',
       'The core concept is simple: when a holder exits below their average entry inside the incentifi flow, incentive routing can direct part of that value to the project treasury. Upside exits keep the standard flow, so the model is clear before anyone trades.',
       'These docs explain how the platform works from first wallet connection to launch, trading, token pages, treasury logic, mobile use, and safety considerations.',
     ],
@@ -130,7 +130,7 @@ const sections = [
     id: 'what-is-incentifi',
     title: 'What is incentifi?',
     body: [
-      'incentifi is a launchpad, marketplace, and token page experience built for Solana creators. It helps anyone create a coin, publish a market page, and explain the project rule in one place.',
+      'incentifi is a launchpad, marketplace, and token page experience built for EVM creators. It helps anyone create a coin, publish a market page, and explain the project rule in one place.',
       'The platform is designed around holder-aligned launches. That means the trading experience, docs, token cards, and modal copy all point users back to the same idea: below-entry exits can support treasury, while upside exits stay clean and simple.',
       'incentifi does not promise returns. It gives creators a clearer launch surface and gives traders more context before they act.',
     ],
@@ -149,7 +149,7 @@ const sections = [
     title: 'Quick Start Guide',
     body: ['Get started with incentifi in a few minutes.'],
     steps: [
-      { title: 'Connect Your Wallet', body: 'Use the Select Wallet or Connect Wallet button, choose your Solana wallet, and approve the connection request.' },
+      { title: 'Connect Your Wallet', body: 'Use the Select Wallet or Connect Wallet button, choose your EVM wallet, and approve the connection request.' },
       { title: 'Explore Coins', body: 'Browse the market, use search, filter by category, and open any token card to inspect the detail page.' },
       { title: 'Review the Route', body: 'Open the How modal or docs before trading so you understand how below-entry routing, treasury support, and upside exits are presented.' },
       { title: 'Create a Coin', body: 'Go to Create Coin, enter token details, add optional links, set liquidity, and approve the launch transaction.' },
@@ -178,7 +178,7 @@ const sections = [
     id: 'supported-wallets',
     title: 'Supported Wallets',
     body: [
-      'incentifi is designed for common Solana wallets such as Phantom, Solflare, Backpack, Coinbase Wallet, and wallets that expose a compatible Solana provider.',
+      'incentifi is designed for common EVM wallets such as MetaMask, Coinbase Wallet, Rainbow, Trust Wallet, and wallets that expose a compatible Ethereum provider.',
       'If your wallet is not detected, unlock the extension or mobile wallet, check browser permissions, and reload the page.',
       'Hardware wallet setups may work through a supported browser wallet, depending on the wallet provider and network settings.',
     ],
@@ -187,7 +187,7 @@ const sections = [
     id: 'network-rpc',
     title: 'Network & RPC',
     body: [
-      'incentifi runs as a Solana Mainnet launch experience. RPC availability can affect wallet prompts, transaction status, and token data refreshes.',
+      'incentifi runs as an EVM launch experience on Robinhood Chain. RPC availability can affect wallet prompts, transaction status, and token data refreshes.',
       'If a transaction seems delayed, check your wallet first, then refresh the token page after confirmation. Network congestion or RPC throttling can delay visible updates.',
     ],
   },
@@ -220,7 +220,7 @@ const sections = [
     title: 'Home Page',
     body: [
       'The home page introduces incentifi, shows live platform stats, provides the Create Coin and Read Docs actions, and then opens into the launched coin market.',
-      'Below the market, the page now includes additional explanation sections for creator identity, visible rules, wallet-first usage, Solana-native behavior, and rule clarity.',
+      'Below the market, the page now includes additional explanation sections for creator identity, visible rules, wallet-first usage, EVM-native behavior, and rule clarity.',
     ],
   },
   {
@@ -292,7 +292,7 @@ const sections = [
     title: 'Launch Process',
     steps: [
       { title: 'Navigate', body: 'Click Create Coin in the header or hero area.' },
-      { title: 'Connect Wallet', body: 'Connect a supported Solana wallet before submitting the launch transaction.' },
+      { title: 'Connect Wallet', body: 'Connect a supported EVM wallet before submitting the launch transaction.' },
       { title: 'Fill Details', body: 'Enter name, symbol, description, image, socials, and liquidity information.' },
       { title: 'Review', body: 'Check spelling, links, symbol, and rule explanation before confirming.' },
       { title: 'Approve', body: 'Approve the transaction in your wallet and wait for confirmation.' },

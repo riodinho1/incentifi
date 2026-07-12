@@ -17,6 +17,13 @@ import {
 import WalletButton from '../../components/WalletButton';
 import { supabase } from '../../lib/supabase';
 import {
+  EVM_ADDRESS_URL,
+  EVM_CHAIN_NAME,
+  EVM_NATIVE_SYMBOL,
+  EVM_TX_URL,
+  IS_ROBINHOOD_CHAIN_MODE,
+} from '../../lib/evmNetwork';
+import {
   fetchIndexedCandles,
   fetchIndexerHeartbeat,
   fetchIndexedSnapshot,
@@ -34,6 +41,7 @@ type TokenData = {
   telegram?: string;
   initialLiquidity?: string;
   mintAddress?: string;
+  chain?: 'evm' | 'solana';
 };
 
 type ChartPoint = {
@@ -797,6 +805,7 @@ const TokenPreviewPage = () => {
             telegram: first.telegram || '',
             initialLiquidity: '0.1',
             mintAddress: first.mint_address || '',
+            chain: IS_ROBINHOOD_CHAIN_MODE ? 'evm' : 'solana',
           });
           setLoading(false);
           return;
@@ -1017,6 +1026,15 @@ const TokenPreviewPage = () => {
     return ((last - first) / first) * 100;
   }, [marketSnapshot, chartData]);
   const displaySymbol = onchainMintInfo.symbol || tokenData?.tokenSymbol || '';
+  const isEvmToken = Boolean(tokenData && (IS_ROBINHOOD_CHAIN_MODE || tokenData.chain === 'evm'));
+
+  useEffect(() => {
+    if (!isEvmToken || !tokenData) return;
+    setOnchainMintInfo({
+      decimals: 18,
+      symbol: tokenData.tokenSymbol,
+    });
+  }, [isEvmToken, tokenData]);
 
   const getInitials = (symbol: string) => symbol.slice(0, 3).toUpperCase();
 
@@ -1066,6 +1084,10 @@ const TokenPreviewPage = () => {
     fallbackSol: number;
     fallbackTokens: number;
   }) => {
+    if (isEvmToken) {
+      throw new Error('Robinhood Chain trading is not connected yet.');
+    }
+
     if (!tokenData?.mintAddress) {
       return {
         timestamp: Date.now(),
@@ -1149,14 +1171,16 @@ const TokenPreviewPage = () => {
   }, [sellAmountToken, position.tokens, priceSol]);
 
   useEffect(() => {
+    if (isEvmToken) return;
     if (!tokenData?.mintAddress) return;
     const provider = (window as any).solana;
     if (!provider?.publicKey) return;
     refreshOnchainBalances();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tokenData?.mintAddress]);
+  }, [tokenData?.mintAddress, isEvmToken]);
 
   useEffect(() => {
+    if (isEvmToken) return;
     if (!tokenData || !stateHydrated) return;
     let cancelled = false;
 
@@ -1264,9 +1288,10 @@ const TokenPreviewPage = () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [tokenData, stateHydrated]);
+  }, [tokenData, stateHydrated, isEvmToken]);
 
   useEffect(() => {
+    if (isEvmToken) return;
     if (!tokenData?.mintAddress || !stateHydrated || !IS_MAINNET) return;
     let cancelled = false;
 
@@ -1331,9 +1356,13 @@ const TokenPreviewPage = () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [tokenData?.mintAddress, stateHydrated]);
+  }, [tokenData?.mintAddress, stateHydrated, isEvmToken]);
 
   useEffect(() => {
+    if (isEvmToken) {
+      setFeedStatus('disconnected');
+      return;
+    }
     if (!tokenData?.mintAddress || !stateHydrated) return;
     if (!IS_MAINNET) {
       setFeedStatus('disconnected');
@@ -1418,9 +1447,10 @@ const TokenPreviewPage = () => {
       }
       ws.close();
     };
-  }, [tokenData?.mintAddress, stateHydrated]);
+  }, [tokenData?.mintAddress, stateHydrated, isEvmToken]);
 
   useEffect(() => {
+    if (isEvmToken) return;
     if (!primaryPoolAddress || !stateHydrated || !IS_MAINNET) return;
     let cancelled = false;
 
@@ -1485,9 +1515,10 @@ const TokenPreviewPage = () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [primaryPoolAddress, stateHydrated]);
+  }, [primaryPoolAddress, stateHydrated, isEvmToken]);
 
   useEffect(() => {
+    if (isEvmToken) return;
     if (!primaryPoolAddress || !stateHydrated || !IS_MAINNET) return;
     let cancelled = false;
 
@@ -1530,7 +1561,7 @@ const TokenPreviewPage = () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [primaryPoolAddress, stateHydrated, priceSol]);
+  }, [primaryPoolAddress, stateHydrated, priceSol, isEvmToken]);
 
   if (loading || !tokenData) {
     return (
@@ -1541,6 +1572,11 @@ const TokenPreviewPage = () => {
   }
 
   const submitBuy = async () => {
+    if (isEvmToken) {
+      setStatus('Robinhood Chain contract is deployed. Trading and liquidity routing are not connected yet.');
+      return;
+    }
+
     const solIn = Number(buyAmountSol);
     if (!Number.isFinite(solIn) || solIn <= 0) {
       setStatus('Enter a valid SOL amount.');
@@ -1682,6 +1718,11 @@ const TokenPreviewPage = () => {
   };
 
   const submitSell = async () => {
+    if (isEvmToken) {
+      setStatus('Robinhood Chain contract is deployed. Trading and liquidity routing are not connected yet.');
+      return;
+    }
+
     const amount = Number(sellAmountToken);
     if (!Number.isFinite(amount) || amount <= 0) {
       setStatus('Enter a valid token amount.');
@@ -1831,6 +1872,7 @@ const TokenPreviewPage = () => {
 
   const quickBuy = (amount: number) => setBuyAmountSol(String(amount));
   const refreshOnchainBalances = async () => {
+    if (isEvmToken) return;
     if (!tokenData?.mintAddress) return;
     const provider = (window as any).solana;
     const owner = provider?.publicKey?.toString?.();
@@ -1976,9 +2018,13 @@ const TokenPreviewPage = () => {
                     </div>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                    <span className="px-2.5 py-1 rounded-md bg-[#10192C] text-[#93A9CF]">Price {formatPrice(priceSol)} SOL</span>
-                    <span className="px-2.5 py-1 rounded-md bg-[#10192C] text-[#93A9CF]">MCap {formatSol(marketCapSol)} SOL</span>
-                    {marketSnapshot?.updatedAt ? (
+                    <span className="px-2.5 py-1 rounded-md bg-[#10192C] text-[#93A9CF]">
+                      {isEvmToken ? 'Price pending DEX routing' : `Price ${formatPrice(priceSol)} SOL`}
+                    </span>
+                    <span className="px-2.5 py-1 rounded-md bg-[#10192C] text-[#93A9CF]">
+                      {isEvmToken ? 'Market cap pending DEX routing' : `MCap ${formatSol(marketCapSol)} SOL`}
+                    </span>
+                    {!isEvmToken && marketSnapshot?.updatedAt ? (
                       <span className="px-2.5 py-1 rounded-md bg-[#10192C] text-[#93A9CF]">
                         Live {new Date(marketSnapshot.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
@@ -1988,12 +2034,16 @@ const TokenPreviewPage = () => {
               </div>
               <div className="grid grid-cols-3 gap-3 text-sm">
                 <div className="bg-[#10192C] border border-[#1D2940] rounded-xl px-3 py-2">
-                  <p className="text-[#7D92BC]">Real Liquidity</p>
-                  <p className="text-[#E8EEF9] font-semibold">{formatSol(liquiditySol)} SOL</p>
+                  <p className="text-[#7D92BC]">{isEvmToken ? 'Liquidity Route' : 'Real Liquidity'}</p>
+                  <p className="text-[#E8EEF9] font-semibold">
+                    {isEvmToken ? 'Pending DEX' : `${formatSol(liquiditySol)} SOL`}
+                  </p>
                 </div>
                 <div className="bg-[#10192C] border border-[#1D2940] rounded-xl px-3 py-2">
                   <p className="text-[#7D92BC]">24h Volume</p>
-                  <p className="text-[#E8EEF9] font-semibold">{formatSol(totalVolumeSol)} SOL</p>
+                  <p className="text-[#E8EEF9] font-semibold">
+                    {isEvmToken ? 'Pending DEX' : `${formatSol(totalVolumeSol)} SOL`}
+                  </p>
                 </div>
                 <div className="bg-[#10192C] border border-[#1D2940] rounded-xl px-3 py-2">
                   <p className="text-[#7D92BC]">24h Change</p>
@@ -2061,7 +2111,11 @@ const TokenPreviewPage = () => {
               <div className="bg-[#0B1120] border border-[#1D2940] rounded-2xl p-4 sm:p-6">
                 <h2 className="text-[#E8EEF9] font-semibold mb-4">Recent Trades</h2>
                 {trades.length === 0 ? (
-                  <p className="text-sm text-[#8A9CC2]">No trades yet. Place the first trade.</p>
+                  <p className="text-sm text-[#8A9CC2]">
+                    {isEvmToken
+                      ? 'DEX routing is not connected yet. Trading data will appear after Robinhood liquidity is enabled.'
+                      : 'No trades yet. Place the first trade.'}
+                  </p>
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
@@ -2071,7 +2125,7 @@ const TokenPreviewPage = () => {
                           <th className="py-2 pr-3">Side</th>
                           <th className="py-2 pr-3">Price</th>
                           <th className="py-2 pr-3">Amount</th>
-                          <th className="py-2 pr-3">SOL</th>
+                          <th className="py-2 pr-3">{isEvmToken ? EVM_NATIVE_SYMBOL : 'SOL'}</th>
                           <th className="py-2 pr-3">Fee</th>
                           <th className="py-2 pr-3">Tx</th>
                         </tr>
@@ -2094,7 +2148,7 @@ const TokenPreviewPage = () => {
                             <td className="py-2 pr-3">
                               {trade.signature ? (
                                 <a
-                                  href={SOLSCAN_TX_URL(trade.signature)}
+                                  href={isEvmToken ? EVM_TX_URL(trade.signature) : SOLSCAN_TX_URL(trade.signature)}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="text-[#7EC8FF] hover:text-white"
@@ -2119,146 +2173,177 @@ const TokenPreviewPage = () => {
                 <div className="mb-4">
                   <p className="text-xs text-[#7D92BC] mb-2">Execution</p>
                   <p className="text-[11px] text-[#8EA6D1] mt-2">
-                    Network: <span className="uppercase">{SOLANA_NETWORK}</span>. {IS_MAINNET
-                      ? 'On-chain route requires a tradable mainnet mint + liquidity.'
-                      : 'Devnet runs local simulation mode for buy/sell testing.'}
+                    {isEvmToken ? (
+                      <>
+                        Network: <span className="uppercase">{EVM_CHAIN_NAME}</span>. Contract
+                        deployment is enabled; DEX/liquidity routing is the next integration.
+                      </>
+                    ) : (
+                      <>
+                        Network: <span className="uppercase">{SOLANA_NETWORK}</span>. {IS_MAINNET
+                          ? 'On-chain route requires a tradable mainnet mint + liquidity.'
+                          : 'Devnet runs local simulation mode for buy/sell testing.'}
+                      </>
+                    )}
                   </p>
                 </div>
 
-                <div className="grid grid-cols-2 bg-[#081122] p-1 rounded-xl mb-4">
-                  <button
-                    onClick={() => setActiveTab('buy')}
-                    className={`py-2 rounded-lg text-sm font-semibold transition ${
-                      activeTab === 'buy'
-                        ? 'bg-emerald-500 text-white'
-                        : 'text-[#7D92BC] hover:text-[#D4E1F7]'
-                    }`}
-                  >
-                    Buy
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('sell')}
-                    className={`py-2 rounded-lg text-sm font-semibold transition ${
-                      activeTab === 'sell'
-                        ? 'bg-rose-500 text-white'
-                        : 'text-[#7D92BC] hover:text-[#D4E1F7]'
-                    }`}
-                  >
-                    Sell
-                  </button>
-                </div>
+                {isEvmToken ? (
+                  <div className="rounded-xl border border-[#1D2940] bg-[#081122] p-4 text-sm text-[#A9BCDE]">
+                    <p className="font-semibold text-[#E8EEF9]">Token contract deployed</p>
+                    <p className="mt-2 text-xs leading-relaxed">
+                      Trading is disabled until a Robinhood Chain DEX/liquidity route is selected.
+                      Users can still verify or import the token by contract address.
+                    </p>
+                    {tokenData.mintAddress && (
+                      <a
+                        href={EVM_ADDRESS_URL(tokenData.mintAddress)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-3 inline-flex rounded-lg border border-[#1D2940] px-3 py-2 text-xs font-semibold text-[#7EC8FF] hover:text-white"
+                      >
+                        View contract
+                      </a>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 bg-[#081122] p-1 rounded-xl mb-4">
+                      <button
+                        onClick={() => setActiveTab('buy')}
+                        className={`py-2 rounded-lg text-sm font-semibold transition ${
+                          activeTab === 'buy'
+                            ? 'bg-emerald-500 text-white'
+                            : 'text-[#7D92BC] hover:text-[#D4E1F7]'
+                        }`}
+                      >
+                        Buy
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('sell')}
+                        className={`py-2 rounded-lg text-sm font-semibold transition ${
+                          activeTab === 'sell'
+                            ? 'bg-rose-500 text-white'
+                            : 'text-[#7D92BC] hover:text-[#D4E1F7]'
+                        }`}
+                      >
+                        Sell
+                      </button>
+                    </div>
 
-                {activeTab === 'buy' ? (
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-xs text-[#7D92BC] mb-2">You pay (SOL)</label>
+                    {activeTab === 'buy' ? (
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-xs text-[#7D92BC] mb-2">You pay (SOL)</label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={buyAmountSol}
+                            onChange={(e) => setBuyAmountSol(e.target.value)}
+                            className="w-full px-4 py-3 rounded-xl bg-[#081122] border border-[#1D2940] text-[#E8EEF9] focus:outline-none focus:border-[#36BCFF]"
+                          />
+                        </div>
+                        <div className="grid grid-cols-4 gap-2">
+                          {[0.1, 0.5, 1, 2].map((value) => (
+                            <button
+                              key={value}
+                              onClick={() => quickBuy(value)}
+                              className="py-2 rounded-lg bg-[#10192C] border border-[#1D2940] text-[#A9BCDE] hover:text-white"
+                            >
+                              {value}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="text-xs text-[#7D92BC]">
+                          Est. tokens: {formatTokenAmount((Number(buyAmountSol || 0) / priceSol) * (1 - TRADE_FEE_RATE), onchainMintInfo.decimals)}
+                        </p>
+                        <button
+                          onClick={submitBuy}
+                          disabled={onchainBusy}
+                          className="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {onchainBusy
+                            ? txPhase === 'signing'
+                              ? 'Awaiting wallet signature...'
+                              : txPhase === 'sending'
+                                ? 'Sending transaction...'
+                                : txPhase === 'confirming'
+                                  ? 'Confirming on-chain...'
+                                  : 'Processing...'
+                            : `Buy ${displaySymbol}`}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-xs text-[#7D92BC] mb-2">
+                            You sell ({displaySymbol})
+                          </label>
+                          <div className="flex gap-2">
+                            <input
+                              type="number"
+                              min="0"
+                              step={tokenInputStep}
+                              value={sellAmountToken}
+                              onChange={(e) => setSellAmountToken(normalizeTokenInput(e.target.value))}
+                              className="flex-1 px-4 py-3 rounded-xl bg-[#081122] border border-[#1D2940] text-[#E8EEF9] focus:outline-none focus:border-[#36BCFF]"
+                            />
+                            <button
+                              onClick={setMaxSell}
+                              className="px-3 py-3 rounded-xl bg-[#13213D] border border-[#1D2940] text-[#C7D8F4] text-xs font-semibold hover:text-white"
+                            >
+                              MAX
+                            </button>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-4 gap-2">
+                          {[25, 50, 75, 100].map((value) => (
+                            <button
+                              key={value}
+                              onClick={() => quickSellPct(value)}
+                              className="py-2 rounded-lg bg-[#10192C] border border-[#1D2940] text-[#A9BCDE] hover:text-white"
+                            >
+                              {value}%
+                            </button>
+                          ))}
+                        </div>
+                        <p className="text-xs text-[#7D92BC]">1% trading fee applies on each trade.</p>
+                        <p className="text-xs text-[#7D92BC]">
+                          Est. receive: {formatSol(sellQuote.netSolOut)} SOL
+                        </p>
+                        <button
+                          onClick={submitSell}
+                          disabled={onchainBusy || position.tokens <= 0 || !sellQuote.valid}
+                          className="w-full py-3 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {onchainBusy
+                            ? txPhase === 'signing'
+                              ? 'Awaiting wallet signature...'
+                              : txPhase === 'sending'
+                                ? 'Sending transaction...'
+                                : txPhase === 'confirming'
+                                  ? 'Confirming on-chain...'
+                                  : 'Processing...'
+                            : `Sell ${displaySymbol}`}
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="mt-4 pt-4 border-t border-[#16243F]">
+                      <label className="block text-xs text-[#7D92BC] mb-2">Slippage (%)</label>
                       <input
                         type="number"
                         min="0"
-                        step="0.01"
-                        value={buyAmountSol}
-                        onChange={(e) => setBuyAmountSol(e.target.value)}
-                        className="w-full px-4 py-3 rounded-xl bg-[#081122] border border-[#1D2940] text-[#E8EEF9] focus:outline-none focus:border-[#36BCFF]"
+                        max="10"
+                        step="0.1"
+                        value={slippage}
+                        onChange={(e) => setSlippage(Math.min(10, Math.max(0, Number(e.target.value))))}
+                        className="w-full px-4 py-2 rounded-xl bg-[#081122] border border-[#1D2940] text-[#E8EEF9]"
                       />
                     </div>
-                    <div className="grid grid-cols-4 gap-2">
-                      {[0.1, 0.5, 1, 2].map((value) => (
-                        <button
-                          key={value}
-                          onClick={() => quickBuy(value)}
-                          className="py-2 rounded-lg bg-[#10192C] border border-[#1D2940] text-[#A9BCDE] hover:text-white"
-                        >
-                          {value}
-                        </button>
-                      ))}
-                    </div>
-                    <p className="text-xs text-[#7D92BC]">
-                      Est. tokens: {formatTokenAmount((Number(buyAmountSol || 0) / priceSol) * (1 - TRADE_FEE_RATE), onchainMintInfo.decimals)}
-                    </p>
-                    <button
-                      onClick={submitBuy}
-                      disabled={onchainBusy}
-                      className="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {onchainBusy
-                        ? txPhase === 'signing'
-                          ? 'Awaiting wallet signature...'
-                          : txPhase === 'sending'
-                            ? 'Sending transaction...'
-                            : txPhase === 'confirming'
-                              ? 'Confirming on-chain...'
-                              : 'Processing...'
-                        : `Buy ${displaySymbol}`}
-                    </button>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-xs text-[#7D92BC] mb-2">
-                        You sell ({displaySymbol})
-                      </label>
-                      <div className="flex gap-2">
-                        <input
-                          type="number"
-                          min="0"
-                          step={tokenInputStep}
-                          value={sellAmountToken}
-                          onChange={(e) => setSellAmountToken(normalizeTokenInput(e.target.value))}
-                          className="flex-1 px-4 py-3 rounded-xl bg-[#081122] border border-[#1D2940] text-[#E8EEF9] focus:outline-none focus:border-[#36BCFF]"
-                        />
-                        <button
-                          onClick={setMaxSell}
-                          className="px-3 py-3 rounded-xl bg-[#13213D] border border-[#1D2940] text-[#C7D8F4] text-xs font-semibold hover:text-white"
-                        >
-                          MAX
-                        </button>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-4 gap-2">
-                      {[25, 50, 75, 100].map((value) => (
-                        <button
-                          key={value}
-                          onClick={() => quickSellPct(value)}
-                          className="py-2 rounded-lg bg-[#10192C] border border-[#1D2940] text-[#A9BCDE] hover:text-white"
-                        >
-                          {value}%
-                        </button>
-                      ))}
-                    </div>
-                    <p className="text-xs text-[#7D92BC]">1% trading fee applies on each trade.</p>
-                    <p className="text-xs text-[#7D92BC]">
-                      Est. receive: {formatSol(sellQuote.netSolOut)} SOL
-                    </p>
-                    <button
-                      onClick={submitSell}
-                      disabled={onchainBusy || position.tokens <= 0 || !sellQuote.valid}
-                      className="w-full py-3 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {onchainBusy
-                        ? txPhase === 'signing'
-                          ? 'Awaiting wallet signature...'
-                          : txPhase === 'sending'
-                            ? 'Sending transaction...'
-                            : txPhase === 'confirming'
-                              ? 'Confirming on-chain...'
-                              : 'Processing...'
-                        : `Sell ${displaySymbol}`}
-                    </button>
-                  </div>
+                  </>
                 )}
-
-                <div className="mt-4 pt-4 border-t border-[#16243F]">
-                  <label className="block text-xs text-[#7D92BC] mb-2">Slippage (%)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="10"
-                    step="0.1"
-                    value={slippage}
-                    onChange={(e) => setSlippage(Math.min(10, Math.max(0, Number(e.target.value))))}
-                    className="w-full px-4 py-2 rounded-xl bg-[#081122] border border-[#1D2940] text-[#E8EEF9]"
-                  />
-                </div>
 
                 {status && <p className="text-xs text-[#9ED0FF] mt-3">{status}</p>}
                 {txRetryCount > 0 && onchainBusy && (
@@ -2270,9 +2355,15 @@ const TokenPreviewPage = () => {
                 <h3 className="text-[#E8EEF9] font-semibold mb-3">Your Position</h3>
                 <div className="grid grid-cols-1 gap-2 text-sm">
                   <div className="rounded-xl border border-[#1D2940] bg-[#091325] px-3 py-2">
-                    <p className="text-[#7D92BC] text-xs">Wallet SOL</p>
+                    <p className="text-[#7D92BC] text-xs">
+                      {isEvmToken ? `Wallet ${EVM_NATIVE_SYMBOL}` : 'Wallet SOL'}
+                    </p>
                     <p className="text-[#E8EEF9] font-semibold">
-                      {onchainBalances.loading ? 'Refreshing...' : `${formatSol(onchainBalances.walletSol)} SOL`}
+                      {isEvmToken
+                        ? 'Shown in wallet'
+                        : onchainBalances.loading
+                          ? 'Refreshing...'
+                          : `${formatSol(onchainBalances.walletSol)} SOL`}
                     </p>
                   </div>
                   <div className="rounded-xl border border-[#1D2940] bg-[#091325] px-3 py-2">
@@ -2283,13 +2374,17 @@ const TokenPreviewPage = () => {
                   </div>
                   <div className="rounded-xl border border-[#1D2940] bg-[#091325] px-3 py-2">
                     <p className="text-[#7D92BC] text-xs">Average Entry</p>
-                    <p className="text-[#E8EEF9] font-semibold">{formatPrice(position.avgEntry)} SOL</p>
+                    <p className="text-[#E8EEF9] font-semibold">
+                      {isEvmToken ? 'DEX route pending' : `${formatPrice(position.avgEntry)} SOL`}
+                    </p>
                   </div>
                 </div>
               </div>
 
               <div className="bg-[#0B1120] border border-[#1D2940] rounded-2xl p-4 sm:p-5">
-                <h3 className="text-[#E8EEF9] font-semibold mb-3">Bonding Curve</h3>
+                <h3 className="text-[#E8EEF9] font-semibold mb-3">
+                  {isEvmToken ? 'Token Contract' : 'Bonding Curve'}
+                </h3>
                 <div className="space-y-2 text-sm">
                   <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
                     <span className="text-[#7D92BC]">Token</span>
@@ -2297,24 +2392,52 @@ const TokenPreviewPage = () => {
                   </div>
                   <div className="rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
                     <span className="block text-[#7D92BC]">Contract Address</span>
-                    <span className="mt-1 block break-all text-xs font-medium text-[#E8EEF9]">
-                      {tokenData?.mintAddress || '-'}
-                    </span>
+                    {tokenData?.mintAddress ? (
+                      <a
+                        href={isEvmToken ? EVM_ADDRESS_URL(tokenData.mintAddress) : undefined}
+                        target={isEvmToken ? '_blank' : undefined}
+                        rel={isEvmToken ? 'noopener noreferrer' : undefined}
+                        className="mt-1 block break-all text-xs font-medium text-[#7EC8FF] hover:text-white"
+                      >
+                        {tokenData.mintAddress}
+                      </a>
+                    ) : (
+                      <span className="mt-1 block break-all text-xs font-medium text-[#E8EEF9]">-</span>
+                    )}
                   </div>
-                  <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
-                    <span className="text-[#7D92BC]">Curve SOL Baseline</span>
-                    <span className="text-[#E8EEF9] font-medium">{formatSol(curve.virtualSolReserves)} SOL</span>
-                  </div>
-                  <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
-                    <span className="text-[#7D92BC]">Curve Token Baseline</span>
-                    <span className="text-[#E8EEF9] font-medium">{formatTokenAmount(curve.virtualTokenReserves, onchainMintInfo.decimals)}</span>
-                  </div>
-                  <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
-                    <span className="text-[#7D92BC]">Collected Fees</span>
-                    <span className="text-[#E8EEF9] font-medium">{formatSol(totalFeesSol)} SOL</span>
-                  </div>
+                  {isEvmToken ? (
+                    <>
+                      <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
+                        <span className="text-[#7D92BC]">Chain</span>
+                        <span className="text-[#E8EEF9] font-medium">{EVM_CHAIN_NAME}</span>
+                      </div>
+                      <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
+                        <span className="text-[#7D92BC]">Supply</span>
+                        <span className="text-[#E8EEF9] font-medium">1.00B</span>
+                      </div>
+                      <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
+                        <span className="text-[#7D92BC]">Gas</span>
+                        <span className="text-[#E8EEF9] font-medium">{EVM_NATIVE_SYMBOL}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
+                        <span className="text-[#7D92BC]">Curve SOL Baseline</span>
+                        <span className="text-[#E8EEF9] font-medium">{formatSol(curve.virtualSolReserves)} SOL</span>
+                      </div>
+                      <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
+                        <span className="text-[#7D92BC]">Curve Token Baseline</span>
+                        <span className="text-[#E8EEF9] font-medium">{formatTokenAmount(curve.virtualTokenReserves, onchainMintInfo.decimals)}</span>
+                      </div>
+                      <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
+                        <span className="text-[#7D92BC]">Collected Fees</span>
+                        <span className="text-[#E8EEF9] font-medium">{formatSol(totalFeesSol)} SOL</span>
+                      </div>
+                    </>
+                  )}
                 </div>
-                <div className="mt-4">
+                {!isEvmToken && <div className="mt-4">
                   <div className="flex items-center justify-between text-xs text-[#8A9CC2] mb-1">
                     <span>Curve Progress</span>
                     <span>{formatNum(progressPct, 2)}%</span>
@@ -2325,7 +2448,7 @@ const TokenPreviewPage = () => {
                       style={{ width: `${progressPct}%` }}
                     ></div>
                   </div>
-                </div>
+                </div>}
               </div>
             </aside>
           </div>
