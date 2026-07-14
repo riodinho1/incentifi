@@ -45,7 +45,7 @@ export default async function handler(request, response) {
     symbol: clean(token?.symbol, fallbackSymbol).toUpperCase(),
     description: clean(
       token?.description,
-      'Created on incentifi, a Solana launch platform for holder-aligned markets.'
+      'Created on incentifi, an EVM/Robinhood Chain launch platform for holder-aligned markets.'
     ),
     image: clean(token?.image_url, LOGO_URL),
     external_url: clean(token?.website, 'https://incentifi.fun'),
