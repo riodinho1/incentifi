@@ -13,6 +13,16 @@ type CreateTokenInput = {
   initialLiquidity?: string;
 };
 
+const describeError = (err: unknown): string => {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === 'object') {
+    const withMessage = err as { message?: unknown; error?: { message?: unknown } };
+    if (typeof withMessage.message === 'string') return withMessage.message;
+    if (typeof withMessage.error?.message === 'string') return withMessage.error.message;
+  }
+  return typeof err === 'string' ? err : 'Liquidity setup failed for an unknown reason.';
+};
+
 export const createRealToken = async (
   provider: any,
   input: CreateTokenInput
@@ -27,7 +37,7 @@ export const createRealToken = async (
     );
     return { ...deployment, liquidity, liquidityError: null };
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Liquidity setup failed.';
-    return { ...deployment, liquidity: null, liquidityError: message };
+    console.error('Liquidity setup failed:', err);
+    return { ...deployment, liquidity: null, liquidityError: describeError(err) };
   }
 };
