@@ -1,8 +1,6 @@
-export const LAUNCH_CHAIN_MODE = String(import.meta.env.VITE_LAUNCH_CHAIN || 'robinhood')
-  .trim()
-  .toLowerCase();
+export const LAUNCH_CHAIN_MODE = 'robinhood';
 
-export const IS_ROBINHOOD_CHAIN_MODE = LAUNCH_CHAIN_MODE !== 'solana';
+export const IS_ROBINHOOD_CHAIN_MODE = true;
 
 export const EVM_CHAIN_NAME = String(
   import.meta.env.VITE_EVM_CHAIN_NAME || 'Robinhood Chain'

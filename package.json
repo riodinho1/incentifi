@@ -15,8 +15,6 @@
     "phase4:health-report": "node scripts/phase4-health-report.mjs"
   },
   "dependencies": {
-    "@solana/spl-token": "^0.4.14",
-    "@solana/web3.js": "^1.98.4",
     "@stripe/react-stripe-js": "4.0.2",
     "@supabase/supabase-js": "^2.57.4",
     "buffer": "^6.0.3",

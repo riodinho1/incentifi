@@ -1,14 +1,13 @@
 export type SolanaNetwork = 'devnet' | 'mainnet';
 
+// Solana network configuration stubs for backward compatibility
 const rawNetwork = String(import.meta.env.VITE_SOLANA_NETWORK || 'mainnet').toLowerCase();
 export const SOLANA_NETWORK: SolanaNetwork =
   rawNetwork === 'mainnet' || rawNetwork === 'mainnet-beta' ? 'mainnet' : 'devnet';
 
 export const IS_MAINNET = SOLANA_NETWORK === 'mainnet';
 
-export const SOLANA_RPC_URL =
-  import.meta.env.VITE_RPC_URL ||
-  (IS_MAINNET ? 'https://api.mainnet-beta.solana.com' : 'https://api.devnet.solana.com');
+export const SOLANA_RPC_URL = '';
 
 export const SOLANA_EXPLORER_CLUSTER_QUERY = IS_MAINNET ? '' : '?cluster=devnet';
 

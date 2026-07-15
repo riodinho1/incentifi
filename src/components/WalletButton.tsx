@@ -1,10 +1,6 @@
-import { useState, useEffect } from 'react';
-import {
-  IS_ROBINHOOD_CHAIN_MODE,
-  ensureEvmChain,
-  getEvmProvider,
-  requestEvmAccounts,
-} from '../lib/evmNetwork';
+import { useState, useSyncExternalStore } from 'react';
+import { getEvmProvider, requestEvmAccounts } from '../lib/evmNetwork';
+import { getWalletAccount, setWalletAccount, subscribeWalletAccount } from '../lib/walletAccount';
 
 const shortenAddress = (addr: string) => `${addr.slice(0, 4)}...${addr.slice(-4)}`;
 
@@ -13,73 +9,18 @@ type WalletButtonProps = {
 };
 
 export default function WalletButton({ compact = false }: WalletButtonProps) {
-  const [publicKey, setPublicKey] = useState<string | null>(null);
+  const publicKey = useSyncExternalStore(subscribeWalletAccount, getWalletAccount);
   const [connecting, setConnecting] = useState(false);
-
-  useEffect(() => {
-    if (IS_ROBINHOOD_CHAIN_MODE) {
-      const provider = getEvmProvider();
-      if (!provider) return;
-
-      provider
-        .request({ method: 'eth_accounts' })
-        .then((accounts: string[]) => setPublicKey(accounts?.[0] || null))
-        .catch(() => setPublicKey(null));
-
-      const handleAccountsChanged = (accounts: string[]) => setPublicKey(accounts?.[0] || null);
-      const handleDisconnect = () => setPublicKey(null);
-
-      provider.on?.('accountsChanged', handleAccountsChanged);
-      provider.on?.('disconnect', handleDisconnect);
-
-      return () => {
-        provider.removeListener?.('accountsChanged', handleAccountsChanged);
-        provider.removeListener?.('disconnect', handleDisconnect);
-      };
-    }
-
-    const provider = (window as any).solana;
-
-    if (provider && provider.isPhantom) {
-      // Auto-connect if already connected
-      if (provider.isConnected) {
-        setPublicKey(provider.publicKey.toString());
-      }
-
-      // Listen for connect/disconnect
-      const handleConnect = (pk: any) => setPublicKey(pk.toString());
-      const handleDisconnect = () => setPublicKey(null);
-
-      provider.on('connect', handleConnect);
-      provider.on('disconnect', handleDisconnect);
-
-      return () => {
-        provider.removeListener('connect', handleConnect);
-        provider.removeListener('disconnect', handleDisconnect);
-      };
-    }
-  }, []);
 
   const connect = async () => {
     setConnecting(true);
     try {
-      if (IS_ROBINHOOD_CHAIN_MODE) {
-        if (!getEvmProvider()) {
-          window.open('https://metamask.io/download/', '_blank');
-          return;
-        }
-        await ensureEvmChain();
-        const account = await requestEvmAccounts();
-        setPublicKey(account);
+      if (!getEvmProvider()) {
+        window.open('https://metamask.io/download/', '_blank');
         return;
       }
-
-      const provider = (window as any).solana;
-      if (provider && provider.isPhantom) {
-        await provider.connect();
-      } else {
-        window.open('https://phantom.app/', '_blank');
-      }
+      const account = await requestEvmAccounts();
+      setWalletAccount(account);
     } catch {
       alert('Connection rejected');
     } finally {
@@ -88,14 +29,7 @@ export default function WalletButton({ compact = false }: WalletButtonProps) {
   };
 
   const disconnect = async () => {
-    if (IS_ROBINHOOD_CHAIN_MODE) {
-      setPublicKey(null);
-      return;
-    }
-
-    const provider = (window as any).solana;
-    if (provider) await provider.disconnect();
-    setPublicKey(null);
+    setWalletAccount(null);
   };
 
   if (publicKey) {

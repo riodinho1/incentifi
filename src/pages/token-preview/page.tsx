@@ -1,6 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Connection, PublicKey, VersionedTransaction } from '@solana/web3.js';
 import {
   CandlestickSeries,
   ColorType,
@@ -21,7 +20,6 @@ import {
   EVM_CHAIN_NAME,
   EVM_NATIVE_SYMBOL,
   EVM_TX_URL,
-  IS_ROBINHOOD_CHAIN_MODE,
 } from '../../lib/evmNetwork';
 import {
   fetchIndexedCandles,
@@ -29,7 +27,6 @@ import {
   fetchIndexedSnapshot,
   fetchIndexedTrades,
 } from '../../lib/marketData';
-import { IS_MAINNET, SOLANA_NETWORK, SOLANA_RPC_URL, SOLSCAN_TX_URL } from '../../lib/network';
 
 type TokenData = {
   tokenName: string;
@@ -41,7 +38,7 @@ type TokenData = {
   telegram?: string;
   initialLiquidity?: string;
   mintAddress?: string;
-  chain?: 'evm' | 'solana';
+  chain?: 'evm';
 };
 
 type ChartPoint = {
@@ -121,13 +118,8 @@ const CURVE_TOKENS = 800_000_000;
 const TRADE_FEE_RATE = 0.01;
 const MIN_BUY_SOL = 0.001;
 const MIN_SELL_SOL_OUT = 0.0001;
+// Fallback USD conversion used only for display until a live DEX price feed is connected.
 const SOL_USD = 180;
-const TOKEN_METADATA_PROGRAM_ID = new PublicKey(
-  'metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s'
-);
-const DEXSCREENER_TOKEN_URL = 'https://api.dexscreener.com/latest/dex/tokens';
-const PUMPPORTAL_WS_URL = 'wss://pumpportal.fun/api/data';
-const GECKOTERMINAL_POOL_URL = 'https://api.geckoterminal.com/api/v2/networks/solana/pools';
 
 const formatNum = (value: number, digits = 4) => {
   if (!Number.isFinite(value)) return '0';
@@ -259,124 +251,6 @@ const aggregateCandles = (data: ChartPoint[], minutes: number): ChartPoint[] => 
 };
 
 const shortSig = (sig: string) => `${sig.slice(0, 8)}...${sig.slice(-8)}`;
-const isRetryableSendError = (message: string) =>
-  /429|rate limit|blockhash|node is behind|temporarily unavailable|fetch failed|network/i.test(
-    message
-  );
-
-const humanizeTradeError = (raw: string) => {
-  const text = raw.toLowerCase();
-  if (text.includes('user rejected') || text.includes('rejected the request')) {
-    return 'Transaction was rejected in wallet.';
-  }
-  if (text.includes('insufficient') && text.includes('fund')) {
-    return 'Insufficient SOL balance for this transaction.';
-  }
-  if (text.includes('slippage')) {
-    return 'Trade failed due to slippage. Increase slippage or lower size.';
-  }
-  if (text.includes('timed out')) {
-    return 'Confirmation timed out. Check wallet history for final status.';
-  }
-  if (text.includes('no route') || text.includes('no solana pair')) {
-    return 'No tradable route/pool found for this token yet.';
-  }
-  return raw;
-};
-
-const waitForFinalizedSignature = async (
-  connection: Connection,
-  signature: string,
-  timeoutMs = 45_000
-) => {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const statuses = await connection.getSignatureStatuses([signature]);
-    const status = statuses.value[0];
-    if (status?.err) {
-      throw new Error(`Transaction failed: ${JSON.stringify(status.err)}`);
-    }
-    if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-  }
-  throw new Error('Transaction confirmation timed out.');
-};
-
-const executePumpPortalTrade = async ({
-  provider,
-  action,
-  mint,
-  amount,
-  denominatedInSol,
-  slippageBps,
-  onStep,
-  onRetry,
-}: {
-  provider: any;
-  action: 'buy' | 'sell';
-  mint: string;
-  amount: number;
-  denominatedInSol: boolean;
-  slippageBps: number;
-  onStep?: (step: TxPhase) => void;
-  onRetry?: (attempt: number, reason: string) => void;
-}) => {
-  const publicKey = provider?.publicKey?.toString?.();
-  if (!publicKey) throw new Error('Connect wallet first.');
-  if (!IS_MAINNET) {
-    throw new Error('On-chain trading route is currently available only on mainnet mode.');
-  }
-
-  const response = await fetch('https://pumpportal.fun/api/trade-local', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      publicKey,
-      action,
-      mint,
-      amount,
-      denominatedInSol: denominatedInSol ? 'true' : 'false',
-      slippage: Math.max(1, Math.round(slippageBps)),
-      priorityFee: 0.0005,
-      pool: 'auto',
-    }),
-  });
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(errText || 'Failed to build trade transaction.');
-  }
-
-  const txBuffer = await response.arrayBuffer();
-  const tx = VersionedTransaction.deserialize(new Uint8Array(txBuffer));
-  onStep?.('signing');
-  const signed = await provider.signTransaction(tx);
-  const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
-  onStep?.('sending');
-  let signature = '';
-  let attempt = 0;
-  while (!signature) {
-    attempt += 1;
-    try {
-      signature = await connection.sendRawTransaction(signed.serialize(), {
-        skipPreflight: false,
-        maxRetries: 3,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (attempt >= 3 || !isRetryableSendError(message)) {
-        throw err;
-      }
-      onRetry?.(attempt, message);
-      await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
-    }
-  }
-  onStep?.('confirming');
-  await waitForFinalizedSignature(connection, signature);
-  return signature;
-};
 
 const extractOwnerSolDelta = (tx: any, owner: string) => {
   const keys = tx?.transaction?.message?.accountKeys ?? [];
@@ -805,7 +679,7 @@ const TokenPreviewPage = () => {
             telegram: first.telegram || '',
             initialLiquidity: '0.1',
             mintAddress: first.mint_address || '',
-            chain: IS_ROBINHOOD_CHAIN_MODE ? 'evm' : 'solana',
+            chain: 'evm',
           });
           setLoading(false);
           return;
@@ -850,126 +724,8 @@ const TokenPreviewPage = () => {
       setStateHydrated(true);
     };
 
-    const loadSharedOrLocal = async () => {
-      if (IS_MAINNET) {
-        hydrateInitialState();
-        return;
-      }
-      const symbolKey = tokenData.tokenSymbol.toUpperCase();
-      const storageKey = `market-state:${symbolKey}`;
-      const hasLikelyBrokenShape = (rows: ChartPoint[]) =>
-        rows.length > 1 && new Set(rows.map((r) => Math.floor(r.timestamp / 60_000))).size <= 1;
-
-      try {
-        const { data, error } = await supabase
-          .from('token_market_states')
-          .select('state')
-          .eq('symbol', symbolKey)
-          .limit(1)
-          .maybeSingle();
-
-        if (!error && data?.state) {
-          const state = data.state as PersistedMarketState;
-          if (state.version === 1) {
-            const normalized = normalizeLoadedChartData(state.chartData || []);
-            if (hasLikelyBrokenShape(normalized)) {
-              throw new Error('Shared chart state has collapsed timestamps; reinitializing');
-            }
-            setCurve(state.curve);
-            setChartData(normalized);
-            const loadedTrades = (state.trades || []).map((t) => ({ ...t, timestamp: t.timestamp || Date.now() }));
-            for (const t of loadedTrades) {
-              if (t.signature) seenTradeSignaturesRef.current.add(t.signature);
-            }
-            setTrades(loadedTrades);
-            setPosition(state.position);
-            setUsingSharedState(true);
-            setStateHydrated(true);
-            return;
-          }
-        }
-      } catch (err) {
-        console.error('Failed to fetch shared market state:', err);
-      }
-
-      const raw = localStorage.getItem(storageKey);
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw) as PersistedMarketState;
-          if (parsed.version === 1) {
-            const normalized = normalizeLoadedChartData(parsed.chartData || []);
-            if (hasLikelyBrokenShape(normalized)) {
-              throw new Error('Local chart state has collapsed timestamps; reinitializing');
-            }
-            setCurve(parsed.curve);
-            setChartData(normalized);
-            const loadedTrades = (parsed.trades || []).map((t) => ({ ...t, timestamp: t.timestamp || Date.now() }));
-            for (const t of loadedTrades) {
-              if (t.signature) seenTradeSignaturesRef.current.add(t.signature);
-            }
-            setTrades(loadedTrades);
-            setPosition(parsed.position);
-            setStateHydrated(true);
-            return;
-          }
-        } catch (err) {
-          console.error('Failed to parse saved local market state:', err);
-        }
-      }
-
-      hydrateInitialState();
-    };
-
-    loadSharedOrLocal();
+    hydrateInitialState();
   }, [tokenData]);
-
-  useEffect(() => {
-    if (!tokenData || !stateHydrated || IS_MAINNET) return;
-    const symbolKey = tokenData.tokenSymbol.toUpperCase();
-    const storageKey = `market-state:${symbolKey}`;
-    const payload: PersistedMarketState = {
-      version: 1,
-      curve,
-      chartData: chartData.slice(-120),
-      trades: trades.slice(0, 80),
-      position,
-    };
-    localStorage.setItem(storageKey, JSON.stringify(payload));
-  }, [tokenData, stateHydrated, curve, chartData, trades, position]);
-
-  useEffect(() => {
-    if (!tokenData || !stateHydrated || IS_MAINNET) return;
-
-    const symbolKey = tokenData.tokenSymbol.toUpperCase();
-    const payload: PersistedMarketState = {
-      version: 1,
-      curve,
-      chartData: chartData.slice(-120),
-      trades: trades.slice(0, 80),
-      position,
-    };
-
-    const timer = setTimeout(async () => {
-      const { error } = await supabase.from('token_market_states').upsert(
-        {
-          symbol: symbolKey,
-          state: payload,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'symbol' }
-      );
-
-      if (error) {
-        if (usingSharedState) {
-          console.error('Failed to sync shared market state:', error.message);
-        }
-      } else if (!usingSharedState) {
-        setUsingSharedState(true);
-      }
-    }, 700);
-
-    return () => clearTimeout(timer);
-  }, [tokenData, stateHydrated, curve, chartData, trades, position, usingSharedState]);
 
   const chartPriceSol = useMemo(() => {
     if (chartData.length > 0) {
@@ -1026,7 +782,7 @@ const TokenPreviewPage = () => {
     return ((last - first) / first) * 100;
   }, [marketSnapshot, chartData]);
   const displaySymbol = onchainMintInfo.symbol || tokenData?.tokenSymbol || '';
-  const isEvmToken = Boolean(tokenData && (IS_ROBINHOOD_CHAIN_MODE || tokenData.chain === 'evm'));
+  const isEvmToken = Boolean(tokenData);
 
   useEffect(() => {
     if (!isEvmToken || !tokenData) return;
@@ -1084,68 +840,9 @@ const TokenPreviewPage = () => {
     fallbackSol: number;
     fallbackTokens: number;
   }) => {
-    if (isEvmToken) {
-      throw new Error('Robinhood Chain trading is not connected yet.');
-    }
-
-    if (!tokenData?.mintAddress) {
-      return {
-        timestamp: Date.now(),
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        price: priceSol,
-        amountSol: fallbackSol,
-        amountToken: fallbackTokens,
-        feeSol: 0,
-      };
-    }
-
-    const provider = (window as any).solana;
-    const owner = provider?.publicKey?.toString?.();
-    if (!owner) {
-      throw new Error('Connect Phantom wallet first.');
-    }
-
-    const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
-    const tx = await connection.getParsedTransaction(signature, {
-      maxSupportedTransactionVersion: 0,
-      commitment: 'confirmed',
-    });
-    if (!tx?.meta) {
-      throw new Error('Could not load confirmed transaction details.');
-    }
-
-    const solDelta = extractOwnerSolDelta(tx, owner);
-    const tokenDelta = extractOwnerTokenDelta(tx, owner, tokenData.mintAddress);
-    const networkFeeSol = (tx.meta.fee || 0) / 1_000_000_000;
-    const timestamp = (tx.blockTime || Math.floor(Date.now() / 1000)) * 1000;
-
-    const amountToken = Math.abs(tokenDelta) > 0 ? Math.abs(tokenDelta) : Math.max(0, fallbackTokens);
-    const sideSol =
-      side === 'buy'
-        ? Math.max(0, -solDelta - networkFeeSol)
-        : Math.max(0, solDelta + networkFeeSol);
-    const amountSol = sideSol > 0 ? sideSol : Math.max(0, fallbackSol);
-    const nextPrice = amountToken > 0 ? amountSol / amountToken : priceSol;
-
-    appendConfirmedTradePoint(nextPrice, amountSol, timestamp);
-    setCurve((prev) => ({
-      ...prev,
-      virtualSolReserves: nextPrice * prev.virtualTokenReserves,
-      realSolReserves: Math.max(
-        0,
-        prev.realSolReserves + (side === 'buy' ? amountSol : -amountSol)
-      ),
-      completed: false,
-    }));
-
-    return {
-      timestamp,
-      time: new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      price: nextPrice,
-      amountSol,
-      amountToken,
-      feeSol: networkFeeSol,
-    };
+    // EVM trading implementation not present in this UI yet.
+    // For now, indicate trading is unsupported for live ingestion.
+    throw new Error('Robinhood Chain trading ingestion not implemented.');
   };
 
   const displayedChartData = useMemo(() => {
@@ -1171,16 +868,6 @@ const TokenPreviewPage = () => {
   }, [sellAmountToken, position.tokens, priceSol]);
 
   useEffect(() => {
-    if (isEvmToken) return;
-    if (!tokenData?.mintAddress) return;
-    const provider = (window as any).solana;
-    if (!provider?.publicKey) return;
-    refreshOnchainBalances();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tokenData?.mintAddress, isEvmToken]);
-
-  useEffect(() => {
-    if (isEvmToken) return;
     if (!tokenData || !stateHydrated) return;
     let cancelled = false;
 
@@ -1291,277 +978,17 @@ const TokenPreviewPage = () => {
   }, [tokenData, stateHydrated, isEvmToken]);
 
   useEffect(() => {
-    if (isEvmToken) return;
-    if (!tokenData?.mintAddress || !stateHydrated || !IS_MAINNET) return;
-    let cancelled = false;
-
-    const loadSnapshot = async () => {
-      try {
-        const response = await fetch(`${DEXSCREENER_TOKEN_URL}/${tokenData.mintAddress}`);
-        if (!response.ok) return;
-        const body = await response.json();
-        const pairs = Array.isArray(body?.pairs) ? body.pairs : [];
-        const solanaPairs = pairs.filter((p: any) => p?.chainId === 'solana');
-        if (solanaPairs.length === 0 || cancelled) return;
-        solanaPairs.sort(
-          (a: any, b: any) =>
-            parseNumberLike(b?.liquidity?.usd) - parseNumberLike(a?.liquidity?.usd)
-        );
-        const pair = solanaPairs[0];
-        setPrimaryPoolAddress(String(pair?.pairAddress ?? ''));
-        const priceSol = parseNumberLike(
-          pair?.priceNative,
-          parseNumberLike(pair?.priceUsd) > 0 ? parseNumberLike(pair?.priceUsd) / SOL_USD : 0
-        );
-        if (!Number.isFinite(priceSol) || priceSol <= 0) return;
-
-        const snapshot: MarketSnapshot = {
-          priceSol,
-          liquiditySol: Math.max(0, parseNumberLike(pair?.liquidity?.usd) / SOL_USD),
-          volume24hSol: Math.max(0, parseNumberLike(pair?.volume?.h24) / SOL_USD),
-          marketCapUsd: Math.max(0, parseNumberLike(pair?.marketCap)),
-          fdvUsd: Math.max(0, parseNumberLike(pair?.fdv)),
-          priceChange24hPct: parseNumberLike(pair?.priceChange?.h24),
-          updatedAt: Date.now(),
-        };
-        setMarketSnapshot(snapshot);
-
-        setChartData((prev) => {
-          const now = Date.now();
-          const lastTs = prev.length > 0 ? prev[prev.length - 1].timestamp : 0;
-          if (lastTs > 0 && now - lastTs < 40_000) return prev;
-          const lastClose = prev.length > 0 ? prev[prev.length - 1].close : snapshot.priceSol;
-          const close = snapshot.priceSol;
-          const point: ChartPoint = {
-            time: new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            timestamp: now,
-            open: lastClose,
-            high: Math.max(lastClose, close) * 1.002,
-            low: Math.min(lastClose, close) * 0.998,
-            close,
-            volume: 0,
-            isUp: close >= lastClose,
-          };
-          return [...prev.slice(-60), point];
-        });
-      } catch (err) {
-        console.error('Failed to fetch market snapshot:', err);
-      }
-    };
-
-    loadSnapshot();
-    const timer = setInterval(loadSnapshot, 30_000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
+    setFeedStatus('disconnected');
   }, [tokenData?.mintAddress, stateHydrated, isEvmToken]);
 
   useEffect(() => {
-    if (isEvmToken) {
-      setFeedStatus('disconnected');
-      return;
-    }
-    if (!tokenData?.mintAddress || !stateHydrated) return;
-    if (!IS_MAINNET) {
-      setFeedStatus('disconnected');
-      return;
-    }
-    setFeedStatus('connecting');
-    const ws = new WebSocket(PUMPPORTAL_WS_URL);
-
-    ws.onopen = () => {
-      setFeedStatus('live');
-      ws.send(
-        JSON.stringify({
-          method: 'subscribeTokenTrade',
-          keys: [tokenData.mintAddress],
-        })
-      );
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const parsed = JSON.parse(event.data);
-        const live = parseLiveTrade(parsed, tokenData.mintAddress as string);
-        if (!live) return;
-        if (live.signature && seenTradeSignaturesRef.current.has(live.signature)) return;
-
-        appendConfirmedTradePoint(live.price, live.amountSol, live.timestamp);
-        setCurve((prev) => {
-          const tokenShift = live.amountToken || 0;
-          const nextTokenReserves =
-            live.side === 'buy'
-              ? Math.max(1, prev.virtualTokenReserves - tokenShift)
-              : Math.min(prev.initialVirtualTokenReserves, prev.virtualTokenReserves + tokenShift);
-          return {
-            ...prev,
-            virtualTokenReserves: nextTokenReserves,
-            virtualSolReserves: Math.max(0.000001, live.price * nextTokenReserves),
-            realSolReserves: Math.max(
-              0,
-              prev.realSolReserves + (live.side === 'buy' ? live.amountSol : -live.amountSol)
-            ),
-            completed: false,
-          };
-        });
-
-        pushTrade({
-          id: live.signature || `live-${live.timestamp}`,
-          time: new Date(live.timestamp).toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-          }),
-          timestamp: live.timestamp,
-          side: live.side,
-          price: live.price,
-          amountToken: live.amountToken,
-          amountSol: live.amountSol,
-          feeSol: 0,
-          signature: live.signature,
-        });
-      } catch (err) {
-        console.error('Failed to parse live trade event:', err);
-      }
-    };
-
-    ws.onerror = () => {
-      setFeedStatus('error');
-    };
-
-    ws.onclose = () => {
-      setFeedStatus('disconnected');
-    };
-
-    return () => {
-      try {
-        ws.send(
-          JSON.stringify({
-            method: 'unsubscribeTokenTrade',
-            keys: [tokenData.mintAddress],
-          })
-        );
-      } catch {
-        // ignore socket close race
-      }
-      ws.close();
-    };
-  }, [tokenData?.mintAddress, stateHydrated, isEvmToken]);
+    // Historical candle backfill removed for EVM-only mode.
+  }, [primaryPoolAddress, stateHydrated]);
 
   useEffect(() => {
-    if (isEvmToken) return;
-    if (!primaryPoolAddress || !stateHydrated || !IS_MAINNET) return;
-    let cancelled = false;
+    // Historical trades backfill removed for EVM-only mode.
+  }, [primaryPoolAddress, stateHydrated]);
 
-    const loadHistoricalCandles = async () => {
-      try {
-        const response = await fetch(
-          `${GECKOTERMINAL_POOL_URL}/${primaryPoolAddress}/ohlcv/minute?aggregate=1&limit=120`
-        );
-        if (!response.ok) return;
-        const body = await response.json();
-        const list = body?.data?.attributes?.ohlcv_list;
-        if (!Array.isArray(list) || cancelled) return;
-
-        const rows: ChartPoint[] = list
-          .map((item: any) => {
-            if (!Array.isArray(item) || item.length < 6) return null;
-            const tsMs = parseNumberLike(item[0]) * 1000;
-            const open = parseNumberLike(item[1]);
-            const high = parseNumberLike(item[2]);
-            const low = parseNumberLike(item[3]);
-            const close = parseNumberLike(item[4]);
-            const volumeUsd = Math.max(0, parseNumberLike(item[5]));
-            if (!Number.isFinite(tsMs) || tsMs <= 0) return null;
-            if (!Number.isFinite(close) || close <= 0) return null;
-            return {
-              time: new Date(tsMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              timestamp: tsMs,
-              open,
-              high: Math.max(high, open, close),
-              low: Math.min(low || open || close, open, close),
-              close,
-              volume: volumeUsd / SOL_USD,
-              isUp: close >= open,
-            } as ChartPoint;
-          })
-          .filter(Boolean)
-          .sort((a: ChartPoint, b: ChartPoint) => a.timestamp - b.timestamp);
-
-        if (rows.length === 0) return;
-
-        setChartData((prev) => {
-          const byMinute = new Map<number, ChartPoint>();
-          for (const point of rows) {
-            byMinute.set(Math.floor(point.timestamp / 60_000), point);
-          }
-          for (const point of prev) {
-            byMinute.set(Math.floor(point.timestamp / 60_000), point);
-          }
-          return [...byMinute.values()]
-            .sort((a, b) => a.timestamp - b.timestamp)
-            .slice(-140);
-        });
-      } catch (err) {
-        console.error('Failed to backfill historical candles:', err);
-      }
-    };
-
-    loadHistoricalCandles();
-    const timer = setInterval(loadHistoricalCandles, 90_000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [primaryPoolAddress, stateHydrated, isEvmToken]);
-
-  useEffect(() => {
-    if (isEvmToken) return;
-    if (!primaryPoolAddress || !stateHydrated || !IS_MAINNET) return;
-    let cancelled = false;
-
-    const loadHistoricalTrades = async () => {
-      try {
-        const response = await fetch(`${GECKOTERMINAL_POOL_URL}/${primaryPoolAddress}/trades?page=1`);
-        if (!response.ok) return;
-        const body = await response.json();
-        const rows = Array.isArray(body?.data) ? body.data : [];
-        if (rows.length === 0 || cancelled) return;
-
-        const parsed = rows
-          .map((row: any) => parseHistoricalTrade(row, priceSol))
-          .filter((row: Trade | null): row is Trade => Boolean(row))
-          .sort((a: Trade, b: Trade) => b.timestamp - a.timestamp);
-
-        if (parsed.length === 0) return;
-
-        setTrades((prev) => {
-          const existingIds = new Set(prev.map((t) => t.id));
-          const nextRows: Trade[] = [];
-          for (const trade of parsed) {
-            if (existingIds.has(trade.id)) continue;
-            if (trade.signature && seenTradeSignaturesRef.current.has(trade.signature)) continue;
-            if (trade.signature) seenTradeSignaturesRef.current.add(trade.signature);
-            nextRows.push(trade);
-          }
-          if (nextRows.length === 0) return prev;
-          return [...nextRows, ...prev].slice(0, 120);
-        });
-      } catch (err) {
-        console.error('Failed to backfill historical trades:', err);
-      }
-    };
-
-    loadHistoricalTrades();
-    const timer = setInterval(loadHistoricalTrades, 75_000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [primaryPoolAddress, stateHydrated, priceSol, isEvmToken]);
 
   if (loading || !tokenData) {
     return (
@@ -1572,362 +999,15 @@ const TokenPreviewPage = () => {
   }
 
   const submitBuy = async () => {
-    if (isEvmToken) {
-      setStatus('Robinhood Chain contract is deployed. Trading and liquidity routing are not connected yet.');
-      return;
-    }
-
-    const solIn = Number(buyAmountSol);
-    if (!Number.isFinite(solIn) || solIn <= 0) {
-      setStatus('Enter a valid SOL amount.');
-      return;
-    }
-    if (solIn < MIN_BUY_SOL) {
-      setStatus(`Minimum buy is ${MIN_BUY_SOL} SOL.`);
-      return;
-    }
-
-    if (!IS_MAINNET) {
-      const solAfterFee = solIn * (1 - TRADE_FEE_RATE);
-      const k = curve.virtualSolReserves * curve.virtualTokenReserves;
-      const nextVirtualSol = curve.virtualSolReserves + solAfterFee;
-      let tokensOut = curve.virtualTokenReserves - k / nextVirtualSol;
-      tokensOut = Math.max(0, Math.min(tokensOut, curve.virtualTokenReserves - 1));
-      if (tokensOut <= 0) {
-        setStatus('Simulated buy rejected: amount too small.');
-        return;
-      }
-      const nextVirtualToken = curve.virtualTokenReserves - tokensOut;
-      const nextPrice = nextVirtualSol / Math.max(nextVirtualToken, 1);
-      const timestamp = Date.now();
-
-      setCurve((prev) => ({
-        ...prev,
-        virtualSolReserves: nextVirtualSol,
-        virtualTokenReserves: nextVirtualToken,
-        realSolReserves: prev.realSolReserves + solAfterFee,
-        completed: nextVirtualToken <= prev.initialVirtualTokenReserves * 0.01,
-      }));
-      appendConfirmedTradePoint(nextPrice, solIn, timestamp);
-      pushTrade({
-        id: `${timestamp}-buy-sim`,
-        time: new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        timestamp,
-        side: 'buy',
-        price: nextPrice,
-        amountToken: tokensOut,
-        amountSol: solIn,
-        feeSol: solIn * TRADE_FEE_RATE,
-      });
-      setPosition((prev) => {
-        const nextTokens = prev.tokens + tokensOut;
-        const nextInvested = prev.investedSol + solIn;
-        return {
-          ...prev,
-          tokens: nextTokens,
-          investedSol: nextInvested,
-          avgEntry: nextTokens > 0 ? nextInvested / nextTokens : 0,
-        };
-      });
-      setTxPhase('idle');
-      setStatus(
-        `Simulated buy: ${formatTokenAmount(tokensOut, onchainMintInfo.decimals)} ${displaySymbol} for ${formatSol(solIn)} SOL.`
-      );
-      return;
-    }
-
-    try {
-      if (!tokenData.mintAddress) {
-        throw new Error('No mint address found for this token.');
-      }
-      const provider = (window as any).solana;
-      if (!provider?.isPhantom || !provider?.publicKey) {
-        throw new Error('Connect Phantom wallet first.');
-      }
-      setOnchainBusy(true);
-      setTxRetryCount(0);
-      setTxPhase('signing');
-      const signature = await executePumpPortalTrade({
-        provider,
-        action: 'buy',
-        mint: tokenData.mintAddress,
-        amount: solIn,
-        denominatedInSol: true,
-        slippageBps: slippage * 100,
-        onStep: (step) => setTxPhase(step),
-        onRetry: (attempt) => {
-          setTxRetryCount(attempt);
-          setStatus(`Retrying transaction broadcast (${attempt}/2)...`);
-        },
-      });
-
-      const estimatedTokens = (solIn / Math.max(priceSol, 0.0000000001)) * (1 - TRADE_FEE_RATE);
-      let confirmed = {
-        timestamp: Date.now(),
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        price: priceSol,
-        amountSol: solIn,
-        amountToken: Math.max(0, estimatedTokens),
-        feeSol: 0,
-      };
-      try {
-        confirmed = await ingestConfirmedExecution({
-          signature,
-          side: 'buy',
-          fallbackSol: solIn,
-          fallbackTokens: estimatedTokens,
-        });
-      } catch (ingestErr) {
-        console.error('Failed to ingest confirmed buy details:', ingestErr);
-        appendConfirmedTradePoint(confirmed.price, confirmed.amountSol, confirmed.timestamp);
-      }
-
-      pushTrade({
-        id: `${Date.now()}-buy-chain`,
-        time: confirmed.time,
-        timestamp: confirmed.timestamp,
-        side: 'buy',
-        price: confirmed.price,
-        amountToken: confirmed.amountToken,
-        amountSol: confirmed.amountSol,
-        feeSol: confirmed.feeSol,
-        signature,
-      });
-      setPosition((prev) => {
-        const nextTokens = prev.tokens + confirmed.amountToken;
-        const nextInvested = prev.investedSol + confirmed.amountSol;
-        return {
-          ...prev,
-          tokens: nextTokens,
-          investedSol: nextInvested,
-          avgEntry: nextTokens > 0 ? nextInvested / nextTokens : 0,
-        };
-      });
-      await refreshOnchainBalances();
-      setTxPhase('success');
-      setStatus(
-        `Buy confirmed: ${formatTokenAmount(confirmed.amountToken, onchainMintInfo.decimals)} ${displaySymbol} for ${formatSol(confirmed.amountSol)} SOL (${shortSig(signature)}).`
-      );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'On-chain buy failed.';
-      setTxPhase('error');
-      setStatus(humanizeTradeError(message));
-    } finally {
-      setOnchainBusy(false);
-    }
+    setStatus('Robinhood Chain contract is deployed. Trading and liquidity routing are not connected yet.');
   };
 
   const submitSell = async () => {
-    if (isEvmToken) {
-      setStatus('Robinhood Chain contract is deployed. Trading and liquidity routing are not connected yet.');
-      return;
-    }
-
-    const amount = Number(sellAmountToken);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setStatus('Enter a valid token amount.');
-      return;
-    }
-    if (amount > position.tokens) {
-      setStatus('Insufficient token balance.');
-      return;
-    }
-
-    if (!IS_MAINNET) {
-      const k = curve.virtualSolReserves * curve.virtualTokenReserves;
-      const nextVirtualToken = curve.virtualTokenReserves + amount;
-      const grossSolOut = curve.virtualSolReserves - k / nextVirtualToken;
-      const feeSol = grossSolOut * TRADE_FEE_RATE;
-      const netSolOut = grossSolOut - feeSol;
-      if (netSolOut < MIN_SELL_SOL_OUT) {
-        setStatus(`Simulated sell output too small (min ${MIN_SELL_SOL_OUT} SOL).`);
-        return;
-      }
-      const nextVirtualSol = Math.max(0.000001, curve.virtualSolReserves - grossSolOut);
-      const nextPrice = nextVirtualSol / Math.max(nextVirtualToken, 1);
-      const timestamp = Date.now();
-
-      setCurve((prev) => ({
-        ...prev,
-        virtualSolReserves: nextVirtualSol,
-        virtualTokenReserves: nextVirtualToken,
-        realSolReserves: Math.max(0, prev.realSolReserves - grossSolOut),
-        completed: false,
-      }));
-      appendConfirmedTradePoint(nextPrice, grossSolOut, timestamp);
-      pushTrade({
-        id: `${timestamp}-sell-sim`,
-        time: new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        timestamp,
-        side: 'sell',
-        price: nextPrice,
-        amountToken: amount,
-        amountSol: grossSolOut,
-        feeSol,
-      });
-      setPosition((prev) => {
-        const sold = Math.min(prev.tokens, amount);
-        const basis = sold * prev.avgEntry;
-        const nextTokens = Math.max(0, prev.tokens - sold);
-        const nextInvested = Math.max(0, prev.investedSol - basis);
-        return {
-          ...prev,
-          tokens: nextTokens,
-          investedSol: nextInvested,
-          avgEntry: nextTokens > 0 ? nextInvested / nextTokens : 0,
-          realizedPnl: prev.realizedPnl + (netSolOut - basis),
-        };
-      });
-      setSellAmountToken('');
-      setTxPhase('idle');
-      setStatus(
-        `Simulated sell: ${formatTokenAmount(amount, onchainMintInfo.decimals)} ${displaySymbol} for ${formatSol(netSolOut)} SOL net.`
-      );
-      return;
-    }
-
-    try {
-      if (!tokenData.mintAddress) {
-        throw new Error('No mint address found for this token.');
-      }
-      const provider = (window as any).solana;
-      if (!provider?.isPhantom || !provider?.publicKey) {
-        throw new Error('Connect Phantom wallet first.');
-      }
-      setOnchainBusy(true);
-      setTxRetryCount(0);
-      setTxPhase('signing');
-      const signature = await executePumpPortalTrade({
-        provider,
-        action: 'sell',
-        mint: tokenData.mintAddress,
-        amount,
-        denominatedInSol: false,
-        slippageBps: slippage * 100,
-        onStep: (step) => setTxPhase(step),
-        onRetry: (attempt) => {
-          setTxRetryCount(attempt);
-          setStatus(`Retrying transaction broadcast (${attempt}/2)...`);
-        },
-      });
-
-      let confirmed = {
-        timestamp: Date.now(),
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        price: priceSol,
-        amountSol: Math.max(0, sellQuote.netSolOut),
-        amountToken: Math.max(0, amount),
-        feeSol: 0,
-      };
-      try {
-        confirmed = await ingestConfirmedExecution({
-          signature,
-          side: 'sell',
-          fallbackSol: sellQuote.netSolOut,
-          fallbackTokens: amount,
-        });
-      } catch (ingestErr) {
-        console.error('Failed to ingest confirmed sell details:', ingestErr);
-        appendConfirmedTradePoint(confirmed.price, confirmed.amountSol, confirmed.timestamp);
-      }
-
-      pushTrade({
-        id: `${Date.now()}-sell-chain`,
-        time: confirmed.time,
-        timestamp: confirmed.timestamp,
-        side: 'sell',
-        price: confirmed.price,
-        amountToken: confirmed.amountToken,
-        amountSol: confirmed.amountSol,
-        feeSol: confirmed.feeSol,
-        signature,
-      });
-      setPosition((prev) => {
-        const sold = Math.min(prev.tokens, confirmed.amountToken);
-        const basis = sold * prev.avgEntry;
-        const nextTokens = Math.max(0, prev.tokens - sold);
-        const nextInvested = Math.max(0, prev.investedSol - basis);
-        return {
-          ...prev,
-          tokens: nextTokens,
-          investedSol: nextInvested,
-          avgEntry: nextTokens > 0 ? nextInvested / nextTokens : 0,
-          realizedPnl: prev.realizedPnl + (confirmed.amountSol - basis),
-        };
-      });
-      await refreshOnchainBalances();
-      setTxPhase('success');
-      setStatus(
-        `Sell confirmed: ${formatTokenAmount(confirmed.amountToken, onchainMintInfo.decimals)} ${displaySymbol} for ${formatSol(confirmed.amountSol)} SOL (${shortSig(signature)}).`
-      );
-      setSellAmountToken('');
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'On-chain sell failed.';
-      setTxPhase('error');
-      setStatus(humanizeTradeError(message));
-    } finally {
-      setOnchainBusy(false);
-    }
+    setStatus('Robinhood Chain contract is deployed. Trading and liquidity routing are not connected yet.');
   };
 
   const quickBuy = (amount: number) => setBuyAmountSol(String(amount));
-  const refreshOnchainBalances = async () => {
-    if (isEvmToken) return;
-    if (!tokenData?.mintAddress) return;
-    const provider = (window as any).solana;
-    const owner = provider?.publicKey?.toString?.();
-    if (!owner) return;
-
-    try {
-      setOnchainBalances((prev) => ({ ...prev, loading: true }));
-      const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
-      const ownerPk = new PublicKey(owner);
-      const mintPk = new PublicKey(tokenData.mintAddress);
-      const [metadataPda] = PublicKey.findProgramAddressSync(
-        [new TextEncoder().encode('metadata'), TOKEN_METADATA_PROGRAM_ID.toBuffer(), mintPk.toBuffer()],
-        TOKEN_METADATA_PROGRAM_ID
-      );
-
-      const [lamports, tokenAccounts, mintInfo, metadataInfo] = await Promise.all([
-        connection.getBalance(ownerPk, 'confirmed'),
-        connection.getParsedTokenAccountsByOwner(ownerPk, { mint: mintPk }, 'confirmed'),
-        connection.getParsedAccountInfo(mintPk, 'confirmed'),
-        connection.getAccountInfo(metadataPda, 'confirmed'),
-      ]);
-
-      let tokenBalance = 0;
-      for (const acct of tokenAccounts.value) {
-        const parsed = acct.account.data.parsed as {
-          info?: { tokenAmount?: { uiAmount?: number | null } };
-        };
-        tokenBalance += parsed?.info?.tokenAmount?.uiAmount || 0;
-      }
-
-      const mintParsed = mintInfo.value?.data as
-        | { parsed?: { info?: { decimals?: number } } }
-        | undefined;
-      const decimals = mintParsed?.parsed?.info?.decimals ?? onchainMintInfo.decimals;
-      const metadataSymbol = metadataInfo?.data ? parseMetadataSymbol(metadataInfo.data) : '';
-
-      setOnchainBalances({
-        walletSol: lamports / 1_000_000_000,
-        tokenBalance,
-        loading: false,
-      });
-      setOnchainMintInfo((prev) => ({
-        decimals,
-        symbol: metadataSymbol || prev.symbol,
-      }));
-
-      setPosition((prev) => ({
-        ...prev,
-        tokens: tokenBalance,
-      }));
-    } catch (err) {
-      console.error('Failed to refresh on-chain balances:', err);
-      setOnchainBalances((prev) => ({ ...prev, loading: false }));
-    }
-  };
+  const refreshOnchainBalances = async () => {};
   const normalizeTokenInput = (raw: string) => {
     if (!raw) return '';
     const num = Number(raw);
@@ -2019,24 +1099,19 @@ const TokenPreviewPage = () => {
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2 text-xs">
                     <span className="px-2.5 py-1 rounded-md bg-[#10192C] text-[#93A9CF]">
-                      {isEvmToken ? 'Price pending DEX routing' : `Price ${formatPrice(priceSol)} SOL`}
+                        Price pending DEX routing
                     </span>
                     <span className="px-2.5 py-1 rounded-md bg-[#10192C] text-[#93A9CF]">
-                      {isEvmToken ? 'Market cap pending DEX routing' : `MCap ${formatSol(marketCapSol)} SOL`}
+                        Market cap pending DEX routing
                     </span>
-                    {!isEvmToken && marketSnapshot?.updatedAt ? (
-                      <span className="px-2.5 py-1 rounded-md bg-[#10192C] text-[#93A9CF]">
-                        Live {new Date(marketSnapshot.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    ) : null}
                   </div>
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-3 text-sm">
                 <div className="bg-[#10192C] border border-[#1D2940] rounded-xl px-3 py-2">
-                  <p className="text-[#7D92BC]">{isEvmToken ? 'Liquidity Route' : 'Real Liquidity'}</p>
+                    <p className="text-[#7D92BC]">Liquidity Route</p>
                   <p className="text-[#E8EEF9] font-semibold">
-                    {isEvmToken ? 'Pending DEX' : `${formatSol(liquiditySol)} SOL`}
+                      Pending DEX
                   </p>
                 </div>
                 <div className="bg-[#10192C] border border-[#1D2940] rounded-xl px-3 py-2">
@@ -2076,7 +1151,7 @@ const TokenPreviewPage = () => {
                         Feed: {feedStatus}
                       </span>
                       <span className="text-xs text-[#8A9CC2]">TradingView-style candles</span>
-                      {IS_MAINNET && (
+                      {(
                         <span
                           className={`text-[10px] px-2 py-1 rounded-full border ${
                             indexerStale
@@ -2148,7 +1223,7 @@ const TokenPreviewPage = () => {
                             <td className="py-2 pr-3">
                               {trade.signature ? (
                                 <a
-                                  href={isEvmToken ? EVM_TX_URL(trade.signature) : SOLSCAN_TX_URL(trade.signature)}
+                                  href={EVM_TX_URL(trade.signature)}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="text-[#7EC8FF] hover:text-white"
@@ -2173,18 +1248,7 @@ const TokenPreviewPage = () => {
                 <div className="mb-4">
                   <p className="text-xs text-[#7D92BC] mb-2">Execution</p>
                   <p className="text-[11px] text-[#8EA6D1] mt-2">
-                    {isEvmToken ? (
-                      <>
-                        Network: <span className="uppercase">{EVM_CHAIN_NAME}</span>. Contract
-                        deployment is enabled; DEX/liquidity routing is the next integration.
-                      </>
-                    ) : (
-                      <>
-                        Network: <span className="uppercase">{SOLANA_NETWORK}</span>. {IS_MAINNET
-                          ? 'On-chain route requires a tradable mainnet mint + liquidity.'
-                          : 'Devnet runs local simulation mode for buy/sell testing.'}
-                      </>
-                    )}
+                    Network: <span className="uppercase">{EVM_CHAIN_NAME}</span>. Contract deployment is enabled; DEX/liquidity routing is the next integration.
                   </p>
                 </div>
 

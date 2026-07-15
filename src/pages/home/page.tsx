@@ -148,7 +148,7 @@ const HomePage = () => {
             <div className="hidden min-w-0 sm:block">
               <div className="brand-type truncate text-sm font-semibold sm:text-base">incentifi</div>
               <div className="hidden text-[11px] text-[#769196] sm:block">
-                {IS_ROBINHOOD_CHAIN_MODE ? EVM_CHAIN_NAME : 'Solana Mainnet'}
+                {EVM_CHAIN_NAME}
               </div>
             </div>
           </Link>
@@ -500,10 +500,8 @@ const HomePage = () => {
               },
               {
                 icon: Network,
-                title: IS_ROBINHOOD_CHAIN_MODE ? `${EVM_CHAIN_NAME} native` : 'Solana native',
-                body: IS_ROBINHOOD_CHAIN_MODE
-                  ? `Built around ${EVM_CHAIN_NAME} flows, RPC status, token pages, and wallet confirmations.`
-                  : 'Built around Solana Mainnet flows, RPC status, token pages, and wallet confirmations.',
+                title: `${EVM_CHAIN_NAME} native`,
+                body: `Built around ${EVM_CHAIN_NAME} flows, RPC status, token pages, and wallet confirmations.`,
               },
               {
                 icon: ShieldCheck,
@@ -594,7 +592,7 @@ const HomePage = () => {
             <div>
               <div className="font-semibold text-white">incentifi</div>
               <div className="text-sm text-[#769196]">
-                {IS_ROBINHOOD_CHAIN_MODE ? EVM_CHAIN_NAME : 'Solana Mainnet'}
+                {EVM_CHAIN_NAME}
               </div>
             </div>
           </div>
