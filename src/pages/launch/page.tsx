@@ -68,12 +68,20 @@ const LaunchPage = () => {
         throw new Error('EVM wallet not detected. Install MetaMask, Rabby, or Robinhood Wallet.');
       }
 
-      alert(`Creating your token on ${EVM_CHAIN_NAME}. You will pay wallet gas in ${EVM_NATIVE_SYMBOL} for the contract deployment.\n\nPlease approve the wallet request.`);
+      alert(`Creating your token on ${EVM_CHAIN_NAME}. This takes a few wallet approvals: deploying the contract, approving the liquidity pool, seeding it, and locking it.\n\nPlease approve each wallet request as it appears.`);
 
       const result = await createRealToken(provider, formData);
       const launchResult = result as any;
 
-      alert(`Token deployed on ${launchResult.chain || EVM_CHAIN_NAME}!\n$${symbol}\nContract: ${launchResult.mint}`);
+      if (launchResult.liquidity) {
+        alert(
+          `Token deployed and liquidity locked on ${launchResult.chain || EVM_CHAIN_NAME}!\n$${symbol}\nContract: ${launchResult.mint}\nLocked position ID: ${launchResult.liquidity.tokenId}`
+        );
+      } else {
+        alert(
+          `Token deployed on ${launchResult.chain || EVM_CHAIN_NAME}, but liquidity setup failed: ${launchResult.liquidityError}\n\n$${symbol}\nContract: ${launchResult.mint}\n\nThe token contract is live - liquidity can be added later.`
+        );
+      }
 
       // Save token to Supabase
       try {
@@ -354,6 +362,31 @@ const LaunchPage = () => {
                   </div>
                 </div>
 
+                {/* Initial Liquidity */}
+                <div>
+                  <label className="block text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2 sm:mb-3 uppercase tracking-wide">
+                    Initial Liquidity ({EVM_NATIVE_SYMBOL})
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      name="initialLiquidity"
+                      value={formData.initialLiquidity}
+                      onChange={handleInputChange}
+                      placeholder="0.1"
+                      step="0.01"
+                      min="0.01"
+                      className="w-full px-4 sm:px-5 py-3 sm:py-4 pr-16 sm:pr-20 rounded-xl bg [#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border [#00D9FF] transition-colors text-sm sm:text-base"
+                    />
+                    <span className="absolute right-4 sm:right-5 top-1/2 -translate-y-1/2 text [#9FA6A3] font-semibold text-sm sm:text-base">
+                      {EVM_NATIVE_SYMBOL}
+                    </span>
+                  </div>
+                  <p className="text-xs text-[#5F6A6E] mt-2">
+                    Paired with your full token supply to seed a Uniswap V3 pool. The resulting liquidity position is permanently locked - it can never be withdrawn.
+                  </p>
+                </div>
+
                 {/* Incentive Mechanism Info */}
                 <div className="p-4 sm:p-6 rounded-xl bg-gradient-to-r from-[#00D9FF]/10 to-[#9D00FF]/10 border border-[#00D9FF]/30">
                   <div className="flex items-start gap-3 sm:gap-4">
@@ -365,7 +398,7 @@ const LaunchPage = () => {
                         Robinhood Chain EVM Deployment
                       </p>
                       <p className="text-xs text-[#9FA6A3] leading-relaxed">
-                        This deploys an ERC-20 token contract on Robinhood Chain. Liquidity and trading routing should be connected after the DEX route is selected.
+                        This deploys an ERC-20 token contract on Robinhood Chain, then seeds and permanently locks a Uniswap V3 liquidity position in the same launch.
                       </p>
                     </div>
                   </div>
@@ -384,8 +417,8 @@ const LaunchPage = () => {
                   {connected ? 'Create Token' : 'Connect Wallet First'}
                 </button>
                 <div className="text-center text-xs text-[#5F6A6E] space-y-1">
-                  <p>Robinhood Chain deployment</p>
-                  <p>Your wallet pays network gas in {EVM_NATIVE_SYMBOL}. Liquidity setup is handled separately.</p>
+                  <p>Robinhood Chain deployment + locked liquidity</p>
+                  <p>Your wallet pays network gas and the {EVM_NATIVE_SYMBOL} liquidity amount above.</p>
                 </div>
               </div>
             </form>
@@ -412,8 +445,8 @@ const LaunchPage = () => {
                   },
                   {
                     number: '4',
-                    title: 'DEX Route Next',
-                    description: 'Next, connect the deployed token to a Robinhood Chain DEX liquidity route.'
+                    title: 'Liquidity Locked',
+                    description: 'Your full supply is paired with the ETH you provide into a Uniswap V3 pool, then the position is sent to a burn address - permanently locked, unruggable.'
                   }
                 ].map((step, index) => (
                   <div key={index} className="flex items-start gap-3 sm:gap-4">
