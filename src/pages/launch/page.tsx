@@ -374,8 +374,8 @@ const LaunchPage = () => {
                       value={formData.initialLiquidity}
                       onChange={handleInputChange}
                       placeholder="0.1"
-                      step="0.01"
-                      min="0.01"
+                      step="0.0001"
+                      min="0.0001"
                       className="w-full px-4 sm:px-5 py-3 sm:py-4 pr-16 sm:pr-20 rounded-xl bg [#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border [#00D9FF] transition-colors text-sm sm:text-base"
                     />
                     <span className="absolute right-4 sm:right-5 top-1/2 -translate-y-1/2 text [#9FA6A3] font-semibold text-sm sm:text-base">
