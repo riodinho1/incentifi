@@ -1,8 +1,8 @@
-// Verified on-chain against Robinhood Chain mainnet (robinhoodchain.blockscout.com):
-// - UniswapV3Factory / NonfungiblePositionManager / SwapRouter02 confirmed as verified,
-//   named contracts, cross-checked against the real creator of a live trading pool.
-// - WETH pulled directly from SwapRouter02's own constructor args and confirmed as a
-//   real ERC-20 named/symbol "WETH".
+// Verified on-chain against Robinhood Chain mainnet, not just trusted from docs:
+// PositionManager.factory() and PositionManager.WETH9() were called directly and
+// cross-checked against these exact addresses; SwapRouter02.factory() and .WETH9()
+// were independently checked the same way and match too. WETH's own symbol()/decimals()
+// were also read directly and confirm a real 18-decimal "WETH" token.
 // Override via env vars to point at testnet equivalents for testing.
 
 export const UNISWAP_V3_FACTORY = String(

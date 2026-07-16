@@ -1,6 +1,7 @@
 // src/lib/createToken.ts
 import { createEvmToken } from './createEvmToken';
 import { addLiquidityAndLock } from './addLiquidity';
+import { describeError } from './errors';
 
 type CreateTokenInput = {
   tokenName: string;
@@ -11,16 +12,6 @@ type CreateTokenInput = {
   twitter?: string;
   telegram?: string;
   initialLiquidity?: string;
-};
-
-const describeError = (err: unknown): string => {
-  if (err instanceof Error) return err.message;
-  if (err && typeof err === 'object') {
-    const withMessage = err as { message?: unknown; error?: { message?: unknown } };
-    if (typeof withMessage.message === 'string') return withMessage.message;
-    if (typeof withMessage.error?.message === 'string') return withMessage.error.message;
-  }
-  return typeof err === 'string' ? err : 'Liquidity setup failed for an unknown reason.';
 };
 
 export const createRealToken = async (

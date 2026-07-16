@@ -20,6 +20,7 @@ import {
   EVM_CHAIN_NAME,
   EVM_NATIVE_SYMBOL,
   EVM_TX_URL,
+  getEvmProvider,
 } from '../../lib/evmNetwork';
 import {
   fetchIndexedCandles,
@@ -27,6 +28,10 @@ import {
   fetchIndexedSnapshot,
   fetchIndexedTrades,
 } from '../../lib/marketData';
+import { buyToken, sellToken } from '../../lib/swap';
+import { getWalletAccount } from '../../lib/walletAccount';
+import { describeError } from '../../lib/errors';
+import { encodeFunctionData, parseAbi, getAddress } from 'viem';
 
 type TokenData = {
   tokenName: string;
@@ -785,6 +790,43 @@ const TokenPreviewPage = () => {
   const isEvmToken = Boolean(tokenData);
 
   useEffect(() => {
+    if (!isEvmToken || !tokenData?.mintAddress) return;
+    const trader = getWalletAccount();
+    const provider = getEvmProvider();
+    if (!trader || !provider) return;
+
+    let cancelled = false;
+    const loadBalances = async () => {
+      try {
+        const balanceData = encodeFunctionData({
+          abi: parseAbi(['function balanceOf(address account) view returns (uint256)']),
+          functionName: 'balanceOf',
+          args: [getAddress(tokenData.mintAddress as string)],
+        });
+        const [tokenBalanceHex, weiBalanceHex] = await Promise.all([
+          provider.request({
+            method: 'eth_call',
+            params: [{ to: tokenData.mintAddress, data: balanceData }, 'latest'],
+          }),
+          provider.request({ method: 'eth_getBalance', params: [trader, 'latest'] }),
+        ]);
+        if (cancelled) return;
+        const tokenBalance = Number(BigInt(tokenBalanceHex)) / 1e18;
+        const walletSol = Number(BigInt(weiBalanceHex)) / 1e18;
+        setOnchainBalances({ walletSol, tokenBalance, loading: false });
+        setPosition((prev) => ({ ...prev, tokens: tokenBalance }));
+      } catch (err) {
+        console.error('Failed to load initial on-chain balances:', err);
+      }
+    };
+
+    loadBalances();
+    return () => {
+      cancelled = true;
+    };
+  }, [isEvmToken, tokenData?.mintAddress]);
+
+  useEffect(() => {
     if (!isEvmToken || !tokenData) return;
     setOnchainMintInfo({
       decimals: 18,
@@ -999,15 +1041,107 @@ const TokenPreviewPage = () => {
   }
 
   const submitBuy = async () => {
-    setStatus('Robinhood Chain contract is deployed. Trading and liquidity routing are not connected yet.');
+    const trader = getWalletAccount();
+    if (!trader) {
+      setStatus('Connect wallet first.');
+      return;
+    }
+    const ethIn = Number(buyAmountSol);
+    if (!Number.isFinite(ethIn) || ethIn <= 0) {
+      setStatus('Enter a valid ETH amount.');
+      return;
+    }
+    if (!tokenData?.mintAddress) {
+      setStatus('No contract address found for this token.');
+      return;
+    }
+    try {
+      setOnchainBusy(true);
+      setTxPhase('signing');
+      const result = await buyToken(tokenData.mintAddress, trader, ethIn, slippage);
+      setTxPhase('success');
+      setStatus(`Buy confirmed (${shortSig(result.txHash)}).`);
+      await refreshOnchainBalances();
+    } catch (err) {
+      console.error('Buy failed:', err);
+      setTxPhase('error');
+      setStatus(describeError(err));
+    } finally {
+      setOnchainBusy(false);
+    }
   };
 
   const submitSell = async () => {
-    setStatus('Robinhood Chain contract is deployed. Trading and liquidity routing are not connected yet.');
+    const trader = getWalletAccount();
+    if (!trader) {
+      setStatus('Connect wallet first.');
+      return;
+    }
+    const amount = Number(sellAmountToken);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setStatus('Enter a valid token amount.');
+      return;
+    }
+    if (!tokenData?.mintAddress) {
+      setStatus('No contract address found for this token.');
+      return;
+    }
+    try {
+      setOnchainBusy(true);
+      setTxPhase('signing');
+      const result = await sellToken(
+        tokenData.mintAddress,
+        trader,
+        amount,
+        onchainMintInfo.decimals,
+        slippage
+      );
+      setTxPhase('success');
+      setStatus(`Sell confirmed (${shortSig(result.txHash)}).`);
+      setSellAmountToken('');
+      await refreshOnchainBalances();
+    } catch (err) {
+      console.error('Sell failed:', err);
+      setTxPhase('error');
+      setStatus(describeError(err));
+    } finally {
+      setOnchainBusy(false);
+    }
   };
 
   const quickBuy = (amount: number) => setBuyAmountSol(String(amount));
-  const refreshOnchainBalances = async () => {};
+  const refreshOnchainBalances = async () => {
+    const trader = getWalletAccount();
+    const provider = getEvmProvider();
+    if (!trader || !provider || !tokenData?.mintAddress) return;
+
+    try {
+      setOnchainBalances((prev) => ({ ...prev, loading: true }));
+
+      const balanceData = encodeFunctionData({
+        abi: parseAbi(['function balanceOf(address account) view returns (uint256)']),
+        functionName: 'balanceOf',
+        args: [getAddress(tokenData.mintAddress)],
+      });
+
+      const [tokenBalanceHex, weiBalanceHex] = await Promise.all([
+        provider.request({
+          method: 'eth_call',
+          params: [{ to: tokenData.mintAddress, data: balanceData }, 'latest'],
+        }),
+        provider.request({ method: 'eth_getBalance', params: [trader, 'latest'] }),
+      ]);
+
+      const tokenBalance = Number(BigInt(tokenBalanceHex)) / 10 ** onchainMintInfo.decimals;
+      const walletSol = Number(BigInt(weiBalanceHex)) / 1e18;
+
+      setOnchainBalances({ walletSol, tokenBalance, loading: false });
+      setPosition((prev) => ({ ...prev, tokens: tokenBalance }));
+    } catch (err) {
+      console.error('Failed to refresh on-chain balances:', err);
+      setOnchainBalances((prev) => ({ ...prev, loading: false }));
+    }
+  };
   const normalizeTokenInput = (raw: string) => {
     if (!raw) return '';
     const num = Number(raw);
@@ -1248,29 +1382,21 @@ const TokenPreviewPage = () => {
                 <div className="mb-4">
                   <p className="text-xs text-[#7D92BC] mb-2">Execution</p>
                   <p className="text-[11px] text-[#8EA6D1] mt-2">
-                    Network: <span className="uppercase">{EVM_CHAIN_NAME}</span>. Contract deployment is enabled; DEX/liquidity routing is the next integration.
+                    Network: <span className="uppercase">{EVM_CHAIN_NAME}</span>. Trades execute directly against the token's locked Uniswap V3 pool.
                   </p>
+                  {tokenData.mintAddress && (
+                    <a
+                      href={EVM_ADDRESS_URL(tokenData.mintAddress)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-2 inline-flex text-[11px] font-semibold text-[#7EC8FF] hover:text-white"
+                    >
+                      View contract
+                    </a>
+                  )}
                 </div>
 
-                {isEvmToken ? (
-                  <div className="rounded-xl border border-[#1D2940] bg-[#081122] p-4 text-sm text-[#A9BCDE]">
-                    <p className="font-semibold text-[#E8EEF9]">Token contract deployed</p>
-                    <p className="mt-2 text-xs leading-relaxed">
-                      Trading is disabled until a Robinhood Chain DEX/liquidity route is selected.
-                      Users can still verify or import the token by contract address.
-                    </p>
-                    {tokenData.mintAddress && (
-                      <a
-                        href={EVM_ADDRESS_URL(tokenData.mintAddress)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="mt-3 inline-flex rounded-lg border border-[#1D2940] px-3 py-2 text-xs font-semibold text-[#7EC8FF] hover:text-white"
-                      >
-                        View contract
-                      </a>
-                    )}
-                  </div>
-                ) : (
+                {(
                   <>
                     <div className="grid grid-cols-2 bg-[#081122] p-1 rounded-xl mb-4">
                       <button
@@ -1298,18 +1424,18 @@ const TokenPreviewPage = () => {
                     {activeTab === 'buy' ? (
                       <div className="space-y-4">
                         <div>
-                          <label className="block text-xs text-[#7D92BC] mb-2">You pay (SOL)</label>
+                          <label className="block text-xs text-[#7D92BC] mb-2">You pay ({EVM_NATIVE_SYMBOL})</label>
                           <input
                             type="number"
                             min="0"
-                            step="0.01"
+                            step="0.001"
                             value={buyAmountSol}
                             onChange={(e) => setBuyAmountSol(e.target.value)}
                             className="w-full px-4 py-3 rounded-xl bg-[#081122] border border-[#1D2940] text-[#E8EEF9] focus:outline-none focus:border-[#36BCFF]"
                           />
                         </div>
                         <div className="grid grid-cols-4 gap-2">
-                          {[0.1, 0.5, 1, 2].map((value) => (
+                          {[0.01, 0.05, 0.1, 0.5].map((value) => (
                             <button
                               key={value}
                               onClick={() => quickBuy(value)}
@@ -1320,7 +1446,7 @@ const TokenPreviewPage = () => {
                           ))}
                         </div>
                         <p className="text-xs text-[#7D92BC]">
-                          Est. tokens: {formatTokenAmount((Number(buyAmountSol || 0) / priceSol) * (1 - TRADE_FEE_RATE), onchainMintInfo.decimals)}
+                          Executes against the live pool price with {slippage}% slippage tolerance.
                         </p>
                         <button
                           onClick={submitBuy}
@@ -1372,13 +1498,16 @@ const TokenPreviewPage = () => {
                             </button>
                           ))}
                         </div>
-                        <p className="text-xs text-[#7D92BC]">1% trading fee applies on each trade.</p>
                         <p className="text-xs text-[#7D92BC]">
-                          Est. receive: {formatSol(sellQuote.netSolOut)} SOL
+                          Executes against the live pool price with {slippage}% slippage tolerance.
                         </p>
                         <button
                           onClick={submitSell}
-                          disabled={onchainBusy || position.tokens <= 0 || !sellQuote.valid}
+                          disabled={
+                            onchainBusy ||
+                            position.tokens <= 0 ||
+                            !(Number(sellAmountToken) > 0 && Number(sellAmountToken) <= position.tokens)
+                          }
                           className="w-full py-3 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           {onchainBusy
@@ -1419,27 +1548,17 @@ const TokenPreviewPage = () => {
                 <h3 className="text-[#E8EEF9] font-semibold mb-3">Your Position</h3>
                 <div className="grid grid-cols-1 gap-2 text-sm">
                   <div className="rounded-xl border border-[#1D2940] bg-[#091325] px-3 py-2">
-                    <p className="text-[#7D92BC] text-xs">
-                      {isEvmToken ? `Wallet ${EVM_NATIVE_SYMBOL}` : 'Wallet SOL'}
-                    </p>
+                    <p className="text-[#7D92BC] text-xs">Wallet {EVM_NATIVE_SYMBOL}</p>
                     <p className="text-[#E8EEF9] font-semibold">
-                      {isEvmToken
-                        ? 'Shown in wallet'
-                        : onchainBalances.loading
-                          ? 'Refreshing...'
-                          : `${formatSol(onchainBalances.walletSol)} SOL`}
+                      {onchainBalances.loading
+                        ? 'Refreshing...'
+                        : `${formatSol(onchainBalances.walletSol)} ${EVM_NATIVE_SYMBOL}`}
                     </p>
                   </div>
                   <div className="rounded-xl border border-[#1D2940] bg-[#091325] px-3 py-2">
                     <p className="text-[#7D92BC] text-xs">Token Balance</p>
                     <p className="text-[#E8EEF9] font-semibold">
                       {formatTokenAmount(position.tokens, onchainMintInfo.decimals)} {displaySymbol}
-                    </p>
-                  </div>
-                  <div className="rounded-xl border border-[#1D2940] bg-[#091325] px-3 py-2">
-                    <p className="text-[#7D92BC] text-xs">Average Entry</p>
-                    <p className="text-[#E8EEF9] font-semibold">
-                      {isEvmToken ? 'DEX route pending' : `${formatPrice(position.avgEntry)} SOL`}
                     </p>
                   </div>
                 </div>
