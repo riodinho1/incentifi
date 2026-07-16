@@ -28,7 +28,8 @@ import {
   fetchIndexedSnapshot,
   fetchIndexedTrades,
 } from '../../lib/marketData';
-import { buyToken, sellToken } from '../../lib/swap';
+import { buyToken, sellToken, getPoolQuote } from '../../lib/swap';
+import { fetchChatMessages, postChatMessage, type ChatMessage } from '../../lib/chat';
 import { getWalletAccount } from '../../lib/walletAccount';
 import { describeError } from '../../lib/errors';
 import { encodeFunctionData, parseAbi, getAddress } from 'viem';
@@ -619,6 +620,10 @@ const TokenPreviewPage = () => {
   const [marketSnapshot, setMarketSnapshot] = useState<MarketSnapshot | null>(null);
   const [primaryPoolAddress, setPrimaryPoolAddress] = useState('');
   const [indexerStale, setIndexerStale] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatSending, setChatSending] = useState(false);
+  const [chatError, setChatError] = useState('');
 
   const [curve, setCurve] = useState<CurveState>({
     virtualSolReserves: 30,
@@ -788,6 +793,64 @@ const TokenPreviewPage = () => {
   }, [marketSnapshot, chartData]);
   const displaySymbol = onchainMintInfo.symbol || tokenData?.tokenSymbol || '';
   const isEvmToken = Boolean(tokenData);
+
+  useEffect(() => {
+    if (!isEvmToken || !tokenData?.mintAddress) return;
+    let cancelled = false;
+    getPoolQuote(tokenData.mintAddress)
+      .then(({ poolAddress }) => {
+        if (!cancelled) setPrimaryPoolAddress(poolAddress);
+      })
+      .catch((err) => console.error('Failed to load pool address:', err));
+    return () => {
+      cancelled = true;
+    };
+  }, [isEvmToken, tokenData?.mintAddress]);
+
+  useEffect(() => {
+    if (!tokenData?.tokenSymbol) return;
+    let cancelled = false;
+
+    const loadChat = async () => {
+      try {
+        const messages = await fetchChatMessages(tokenData.tokenSymbol);
+        if (!cancelled) setChatMessages(messages);
+      } catch (err) {
+        console.error('Failed to load chat messages:', err);
+      }
+    };
+
+    loadChat();
+    const timer = setInterval(loadChat, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [tokenData?.tokenSymbol]);
+
+  const submitChatMessage = async () => {
+    const trader = getWalletAccount();
+    if (!trader) {
+      setChatError('Connect wallet to chat.');
+      return;
+    }
+    if (!chatInput.trim()) return;
+    if (!tokenData?.tokenSymbol) return;
+
+    try {
+      setChatSending(true);
+      setChatError('');
+      await postChatMessage(tokenData.tokenSymbol, trader, chatInput);
+      setChatInput('');
+      const messages = await fetchChatMessages(tokenData.tokenSymbol);
+      setChatMessages(messages);
+    } catch (err) {
+      console.error('Failed to post chat message:', err);
+      setChatError(describeError(err));
+    } finally {
+      setChatSending(false);
+    }
+  };
 
   useEffect(() => {
     if (!isEvmToken || !tokenData?.mintAddress) return;
@@ -1213,6 +1276,53 @@ const TokenPreviewPage = () => {
                     {tokenData.tokenName}{' '}
                     <span className="text-[#53B8FF]">${displaySymbol}</span>
                   </h1>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {tokenData.website && (
+                      <a
+                        href={tokenData.website}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-[#10192C] border border-[#1D2940] px-2.5 py-1.5 text-xs text-[#9FB0CF] hover:text-white transition-colors"
+                      >
+                        <i className="ri-global-line"></i>
+                        Website
+                      </a>
+                    )}
+                    {primaryPoolAddress && (
+                      <a
+                        href={`https://dexscreener.com/robinhood/${primaryPoolAddress}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-[#10192C] border border-[#1D2940] px-2.5 py-1.5 text-xs text-[#9FB0CF] hover:text-white transition-colors"
+                      >
+                        <i className="ri-line-chart-line"></i>
+                        Dexscreener
+                      </a>
+                    )}
+                    {tokenData.mintAddress && (
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(tokenData.mintAddress as string);
+                          setStatus('Contract address copied.');
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-[#10192C] border border-[#1D2940] px-2.5 py-1.5 text-xs text-[#9FB0CF] hover:text-white transition-colors"
+                      >
+                        <i className="ri-file-copy-line"></i>
+                        Contract
+                      </button>
+                    )}
+                    {primaryPoolAddress && (
+                      <a
+                        href={EVM_ADDRESS_URL(primaryPoolAddress)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-[#10192C] border border-[#1D2940] px-2.5 py-1.5 text-xs text-[#9FB0CF] hover:text-white transition-colors"
+                      >
+                        <i className="ri-link"></i>
+                        Pool
+                      </a>
+                    )}
+                  </div>
                   <div className="mt-3">
                     <p className="text-xs text-[#8DA3CD] uppercase tracking-wide">Market Cap</p>
                     <p className="text-3xl sm:text-4xl font-bold text-white">{formatCurrencyCompact(marketCapUsd)}</p>
@@ -1233,10 +1343,7 @@ const TokenPreviewPage = () => {
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2 text-xs">
                     <span className="px-2.5 py-1 rounded-md bg-[#10192C] text-[#93A9CF]">
-                        Price pending DEX routing
-                    </span>
-                    <span className="px-2.5 py-1 rounded-md bg-[#10192C] text-[#93A9CF]">
-                        Market cap pending DEX routing
+                        {primaryPoolAddress ? 'Live on Uniswap V3' : 'Loading pool...'}
                     </span>
                   </div>
                 </div>
@@ -1245,13 +1352,13 @@ const TokenPreviewPage = () => {
                 <div className="bg-[#10192C] border border-[#1D2940] rounded-xl px-3 py-2">
                     <p className="text-[#7D92BC]">Liquidity Route</p>
                   <p className="text-[#E8EEF9] font-semibold">
-                      Pending DEX
+                      {primaryPoolAddress ? 'Uniswap V3 (locked)' : 'Loading...'}
                   </p>
                 </div>
                 <div className="bg-[#10192C] border border-[#1D2940] rounded-xl px-3 py-2">
                   <p className="text-[#7D92BC]">24h Volume</p>
                   <p className="text-[#E8EEF9] font-semibold">
-                    {isEvmToken ? 'Pending DEX' : `${formatSol(totalVolumeSol)} SOL`}
+                    Not tracked yet
                   </p>
                 </div>
                 <div className="bg-[#10192C] border border-[#1D2940] rounded-xl px-3 py-2">
@@ -1374,6 +1481,46 @@ const TokenPreviewPage = () => {
                     </table>
                   </div>
                 )}
+              </div>
+
+              <div className="bg-[#0B1120] border border-[#1D2940] rounded-2xl p-4 sm:p-6">
+                <h2 className="text-[#E8EEF9] font-semibold mb-1">Chat</h2>
+                <p className="text-xs text-[#7D92BC] mb-4">Connected wallets can post. Be nice.</p>
+                <div className="max-h-80 overflow-y-auto space-y-3 pr-1">
+                  {chatMessages.length === 0 ? (
+                    <p className="text-sm text-[#8A9CC2]">No messages yet. Be the first to say something.</p>
+                  ) : (
+                    chatMessages.map((msg) => (
+                      <div key={msg.id} className="text-sm">
+                        <span className="text-[#7EC8FF] font-medium">
+                          {msg.walletAddress.slice(0, 6)}...{msg.walletAddress.slice(-4)}
+                        </span>{' '}
+                        <span className="text-[#D4E1F7] break-words">{msg.message}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="mt-4 flex gap-2">
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') submitChatMessage();
+                    }}
+                    maxLength={500}
+                    placeholder="Say something..."
+                    className="flex-1 px-4 py-2.5 rounded-xl bg-[#081122] border border-[#1D2940] text-[#E8EEF9] placeholder-[#5F6A6E] focus:outline-none focus:border-[#36BCFF] text-sm"
+                  />
+                  <button
+                    onClick={submitChatMessage}
+                    disabled={chatSending || !chatInput.trim()}
+                    className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Send
+                  </button>
+                </div>
+                {chatError && <p className="text-xs text-rose-400 mt-2">{chatError}</p>}
               </div>
             </div>
 
