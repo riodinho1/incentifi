@@ -864,7 +864,7 @@ const TokenPreviewPage = () => {
         const balanceData = encodeFunctionData({
           abi: parseAbi(['function balanceOf(address account) view returns (uint256)']),
           functionName: 'balanceOf',
-          args: [getAddress(tokenData.mintAddress as string)],
+          args: [getAddress(trader)],
         });
         const [tokenBalanceHex, weiBalanceHex] = await Promise.all([
           provider.request({
@@ -1184,7 +1184,7 @@ const TokenPreviewPage = () => {
       const balanceData = encodeFunctionData({
         abi: parseAbi(['function balanceOf(address account) view returns (uint256)']),
         functionName: 'balanceOf',
-        args: [getAddress(tokenData.mintAddress)],
+        args: [getAddress(trader)],
       });
 
       const [tokenBalanceHex, weiBalanceHex] = await Promise.all([
@@ -1429,7 +1429,7 @@ const TokenPreviewPage = () => {
                 {trades.length === 0 ? (
                   <p className="text-sm text-[#8A9CC2]">
                     {isEvmToken
-                      ? 'DEX routing is not connected yet. Trading data will appear after Robinhood liquidity is enabled.'
+                      ? 'Trading is live on the locked Uniswap V3 pool. This feed isn\'t wired up to show past trades yet - check Dexscreener above for live trade history.'
                       : 'No trades yet. Place the first trade.'}
                   </p>
                 ) : (
