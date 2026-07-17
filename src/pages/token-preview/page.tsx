@@ -1428,54 +1428,22 @@ const TokenPreviewPage = () => {
           <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-6">
             <div className="space-y-6">
               <div className="bg-[#0B1120] border border-[#1D2940] rounded-2xl p-4 sm:p-6">
-                <div className="flex flex-col gap-3 mb-4">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-[#E8EEF9] font-semibold">Price Chart</h2>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`text-[10px] px-2 py-1 rounded-full border ${
-                          feedStatus === 'live'
-                            ? 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10'
-                            : feedStatus === 'connecting'
-                              ? 'text-amber-300 border-amber-500/40 bg-amber-500/10'
-                              : feedStatus === 'error'
-                                ? 'text-rose-300 border-rose-500/40 bg-rose-500/10'
-                                : 'text-[#8A9CC2] border-[#304368] bg-[#10192C]'
-                        }`}
-                      >
-                        Feed: {feedStatus}
-                      </span>
-                      <span className="text-xs text-[#8A9CC2]">TradingView-style candles</span>
-                      {(
-                        <span
-                          className={`text-[10px] px-2 py-1 rounded-full border ${
-                            indexerStale
-                              ? 'text-rose-300 border-rose-500/40 bg-rose-500/10'
-                              : 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10'
-                          }`}
-                        >
-                          Indexer: {indexerStale ? 'stale' : 'ok'}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {(['1m', '5m', '15m', '1h'] as Timeframe[]).map((tf) => (
-                      <button
-                        key={tf}
-                        onClick={() => setTimeframe(tf)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                          timeframe === tf
-                            ? 'bg-[#22C55E] text-white'
-                            : 'bg-[#10192C] text-[#9CB0D4] hover:text-white'
-                        }`}
-                      >
-                        {tf}
-                      </button>
-                    ))}
-                  </div>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-[#E8EEF9] font-semibold">Price Chart</h2>
+                  <span className="text-xs text-[#8A9CC2]">Live from Dexscreener</span>
                 </div>
-                <TradingViewChart data={displayedChartData} trades={trades} />
+                {primaryPoolAddress ? (
+                  <iframe
+                    key={primaryPoolAddress}
+                    src={`https://dexscreener.com/robinhood/${primaryPoolAddress}?embed=1&theme=dark&trades=0&info=0`}
+                    className="h-[520px] w-full rounded-xl border-0"
+                    title="Dexscreener chart"
+                  />
+                ) : (
+                  <div className="h-[520px] w-full rounded-xl bg-[#070A12] flex items-center justify-center text-sm text-[#8A9CC2]">
+                    Loading pool...
+                  </div>
+                )}
               </div>
 
               <div className="bg-[#0B1120] border border-[#1D2940] rounded-2xl p-4 sm:p-6">
