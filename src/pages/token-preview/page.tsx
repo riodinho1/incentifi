@@ -1675,10 +1675,10 @@ const TokenPreviewPage = () => {
                       <input
                         type="number"
                         min="0"
-                        max="10"
+                        max="100"
                         step="0.1"
                         value={slippage}
-                        onChange={(e) => setSlippage(Math.min(10, Math.max(0, Number(e.target.value))))}
+                        onChange={(e) => setSlippage(Math.min(100, Math.max(0, Number(e.target.value))))}
                         className="w-full px-4 py-2 rounded-xl bg-[#081122] border border-[#1D2940] text-[#E8EEF9]"
                       />
                     </div>
