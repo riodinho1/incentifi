@@ -125,8 +125,8 @@ const CURVE_TOKENS = 800_000_000;
 const TRADE_FEE_RATE = 0.01;
 const MIN_BUY_SOL = 0.001;
 const MIN_SELL_SOL_OUT = 0.0001;
-// Fallback USD conversion used only for display until a live DEX price feed is connected.
-const SOL_USD = 180;
+// Fallback ETH/USD price used only if the live price fetch fails.
+const FALLBACK_ETH_USD = 1840;
 
 const formatNum = (value: number, digits = 4) => {
   if (!Number.isFinite(value)) return '0';
@@ -626,6 +626,27 @@ const TokenPreviewPage = () => {
   const [chatSending, setChatSending] = useState(false);
   const [chatError, setChatError] = useState('');
   const [contractCopied, setContractCopied] = useState(false);
+  const [ethUsdPrice, setEthUsdPrice] = useState(FALLBACK_ETH_USD);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadEthPrice = async () => {
+      try {
+        const response = await fetch('https://api.coinbase.com/v2/prices/ETH-USD/spot');
+        const body = await response.json();
+        const price = Number(body?.data?.amount);
+        if (!cancelled && Number.isFinite(price) && price > 0) setEthUsdPrice(price);
+      } catch (err) {
+        console.error('Failed to load live ETH/USD price:', err);
+      }
+    };
+    loadEthPrice();
+    const timer = setInterval(loadEthPrice, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
 
   const [curve, setCurve] = useState<CurveState>({
     virtualSolReserves: 30,
@@ -753,9 +774,9 @@ const TokenPreviewPage = () => {
   );
   const marketCapUsd = useMemo(() => {
     if (marketSnapshot?.marketCapUsd && marketSnapshot.marketCapUsd > 0) return marketSnapshot.marketCapUsd;
-    return priceSol * TOTAL_SUPPLY * SOL_USD;
-  }, [marketSnapshot?.marketCapUsd, priceSol]);
-  const marketCapSol = useMemo(() => marketCapUsd / SOL_USD, [marketCapUsd]);
+    return priceSol * TOTAL_SUPPLY * ethUsdPrice;
+  }, [marketSnapshot?.marketCapUsd, priceSol, ethUsdPrice]);
+  const marketCapSol = useMemo(() => marketCapUsd / ethUsdPrice, [marketCapUsd, ethUsdPrice]);
   const liquiditySol = useMemo(
     () => (marketSnapshot?.liquiditySol && marketSnapshot.liquiditySol > 0 ? marketSnapshot.liquiditySol : curve.realSolReserves),
     [marketSnapshot?.liquiditySol, curve.realSolReserves]
@@ -780,9 +801,9 @@ const TokenPreviewPage = () => {
       return Math.max(marketSnapshot.fdvUsd, marketCapUsd);
     }
     const highest = chartData.reduce((max, p) => Math.max(max, p.high), 0);
-    const fromHistory = highest * TOTAL_SUPPLY * SOL_USD;
+    const fromHistory = highest * TOTAL_SUPPLY * ethUsdPrice;
     return Math.max(fromHistory, marketCapUsd);
-  }, [marketSnapshot?.fdvUsd, chartData, marketCapUsd]);
+  }, [marketSnapshot?.fdvUsd, chartData, marketCapUsd, ethUsdPrice]);
   const mcap24hDeltaPct = useMemo(() => {
     if (marketSnapshot && Number.isFinite(marketSnapshot.priceChange24hPct)) {
       return marketSnapshot.priceChange24hPct;
