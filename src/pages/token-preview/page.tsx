@@ -625,6 +625,7 @@ const TokenPreviewPage = () => {
   const [chatInput, setChatInput] = useState('');
   const [chatSending, setChatSending] = useState(false);
   const [chatError, setChatError] = useState('');
+  const [contractCopied, setContractCopied] = useState(false);
 
   const [curve, setCurve] = useState<CurveState>({
     virtualSolReserves: 30,
@@ -759,13 +760,13 @@ const TokenPreviewPage = () => {
     () => (marketSnapshot?.liquiditySol && marketSnapshot.liquiditySol > 0 ? marketSnapshot.liquiditySol : curve.realSolReserves),
     [marketSnapshot?.liquiditySol, curve.realSolReserves]
   );
-  const totalVolumeSol = useMemo(
-    () =>
-      marketSnapshot?.volume24hSol && marketSnapshot.volume24hSol > 0
-        ? marketSnapshot.volume24hSol
-        : trades.reduce((sum, t) => sum + t.amountSol, 0),
-    [marketSnapshot?.volume24hSol, trades]
-  );
+  const totalVolumeSol = useMemo(() => {
+    if (marketSnapshot?.volume24hSol && marketSnapshot.volume24hSol > 0) {
+      return marketSnapshot.volume24hSol;
+    }
+    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    return trades.filter((t) => t.timestamp >= dayAgo).reduce((sum, t) => sum + t.amountSol, 0);
+  }, [marketSnapshot?.volume24hSol, trades]);
   const totalFeesSol = useMemo(
     () => trades.reduce((sum, t) => sum + t.feeSol, 0),
     [trades]
@@ -1351,12 +1352,17 @@ const TokenPreviewPage = () => {
                       <button
                         onClick={() => {
                           navigator.clipboard.writeText(tokenData.mintAddress as string);
-                          setStatus('Contract address copied.');
+                          setContractCopied(true);
+                          setTimeout(() => setContractCopied(false), 2000);
                         }}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-[#10192C] border border-[#1D2940] px-2.5 py-1.5 text-xs text-[#9FB0CF] hover:text-white transition-colors"
+                        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors ${
+                          contractCopied
+                            ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
+                            : 'bg-[#10192C] border-[#1D2940] text-[#9FB0CF] hover:text-white'
+                        }`}
                       >
-                        <i className="ri-file-copy-line"></i>
-                        Contract
+                        <i className={contractCopied ? 'ri-check-line' : 'ri-file-copy-line'}></i>
+                        {contractCopied ? 'Copied!' : 'Contract'}
                       </button>
                     )}
                     {primaryPoolAddress && (
@@ -1406,7 +1412,7 @@ const TokenPreviewPage = () => {
                 <div className="bg-[#10192C] border border-[#1D2940] rounded-xl px-3 py-2">
                   <p className="text-[#7D92BC]">24h Volume</p>
                   <p className="text-[#E8EEF9] font-semibold">
-                    Not tracked yet
+                    {totalVolumeSol > 0 ? `${formatSol(totalVolumeSol)} ${EVM_NATIVE_SYMBOL}` : 'No trades yet'}
                   </p>
                 </div>
                 <div className="bg-[#10192C] border border-[#1D2940] rounded-xl px-3 py-2">
