@@ -29,6 +29,7 @@ import {
   fetchIndexedTrades,
 } from '../../lib/marketData';
 import { buyToken, sellToken, getPoolQuote } from '../../lib/swap';
+import { fetchPoolHistory } from '../../lib/poolHistory';
 import { fetchChatMessages, postChatMessage, type ChatMessage } from '../../lib/chat';
 import { getWalletAccount } from '../../lib/walletAccount';
 import { describeError } from '../../lib/errors';
@@ -1083,16 +1084,63 @@ const TokenPreviewPage = () => {
   }, [tokenData, stateHydrated, isEvmToken]);
 
   useEffect(() => {
-    setFeedStatus('disconnected');
-  }, [tokenData?.mintAddress, stateHydrated, isEvmToken]);
+    if (!isEvmToken || !primaryPoolAddress || !tokenData?.mintAddress) {
+      setFeedStatus('disconnected');
+      return;
+    }
 
-  useEffect(() => {
-    // Historical candle backfill removed for EVM-only mode.
-  }, [primaryPoolAddress, stateHydrated]);
+    let cancelled = false;
+    const loadPoolHistory = async () => {
+      setFeedStatus('connecting');
+      try {
+        const { trades: poolTrades, candles } = await fetchPoolHistory(
+          primaryPoolAddress,
+          tokenData.mintAddress as string,
+          onchainMintInfo.decimals || 18
+        );
+        if (cancelled) return;
 
-  useEffect(() => {
-    // Historical trades backfill removed for EVM-only mode.
-  }, [primaryPoolAddress, stateHydrated]);
+        setChartData(
+          candles.map((c) => ({
+            time: new Date(c.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            timestamp: c.timestamp,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+            volume: c.volume,
+            isUp: c.close >= c.open,
+          }))
+        );
+
+        setTrades(
+          poolTrades.map((t) => ({
+            id: t.id,
+            time: new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            timestamp: t.timestamp,
+            side: t.side,
+            price: t.priceEth,
+            amountToken: t.tokenAmount,
+            amountSol: t.ethAmount,
+            feeSol: 0,
+            signature: t.txHash,
+          }))
+        );
+
+        setFeedStatus('live');
+      } catch (err) {
+        console.error('Failed to load pool trade history:', err);
+        if (!cancelled) setFeedStatus('error');
+      }
+    };
+
+    loadPoolHistory();
+    const timer = setInterval(loadPoolHistory, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isEvmToken, primaryPoolAddress, tokenData?.mintAddress, onchainMintInfo.decimals]);
 
 
   if (loading || !tokenData) {
