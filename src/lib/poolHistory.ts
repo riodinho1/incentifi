@@ -38,11 +38,48 @@ const priceInEth = (sqrtPriceX96: bigint, tokenIsToken0: boolean): number => {
   return tokenIsToken0 ? 1 / price0in1 : price0in1;
 };
 
+// Alchemy's free tier caps eth_getLogs to a 10-block range per call, so pull
+// recent history in small chunks instead of one large request. Upgrading the
+// Alchemy plan later would let this look back much further in one call.
+const CHUNK_SIZE = 10;
+const PARALLEL_CHUNKS = 8;
+
+const fetchLogsInChunks = async (
+  poolAddress: string,
+  topics: string[],
+  fromBlock: number,
+  toBlock: number
+): Promise<any[]> => {
+  const ranges: Array<[number, number]> = [];
+  for (let start = fromBlock; start <= toBlock; start += CHUNK_SIZE) {
+    ranges.push([start, Math.min(start + CHUNK_SIZE - 1, toBlock)]);
+  }
+
+  const allLogs: any[] = [];
+  for (let i = 0; i < ranges.length; i += PARALLEL_CHUNKS) {
+    const batch = ranges.slice(i, i + PARALLEL_CHUNKS);
+    const results = await Promise.all(
+      batch.map(([start, end]) =>
+        call('eth_getLogs', [
+          {
+            address: poolAddress,
+            topics,
+            fromBlock: `0x${start.toString(16)}`,
+            toBlock: `0x${end.toString(16)}`,
+          },
+        ]).catch(() => [])
+      )
+    );
+    for (const logs of results) allLogs.push(...(logs as any[]));
+  }
+  return allLogs;
+};
+
 export const fetchPoolHistory = async (
   poolAddress: string,
   tokenAddress: string,
   tokenDecimals: number,
-  blockRange = 50_000
+  blockRange = 500
 ): Promise<{ trades: PoolTrade[]; candles: PoolCandle[] }> => {
   const token = getAddress(tokenAddress);
   const weth = getAddress(WETH_ADDRESS);
@@ -54,14 +91,7 @@ export const fetchPoolHistory = async (
   const latestBlock = Number(BigInt(latestBlockHex));
   const fromBlock = Math.max(0, latestBlock - blockRange);
 
-  const logs = (await call('eth_getLogs', [
-    {
-      address: poolAddress,
-      topics,
-      fromBlock: `0x${fromBlock.toString(16)}`,
-      toBlock: 'latest',
-    },
-  ])) as any[];
+  const logs = await fetchLogsInChunks(poolAddress, topics as string[], fromBlock, latestBlock);
 
   if (!logs.length) return { trades: [], candles: [] };
 
