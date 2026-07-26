@@ -28,7 +28,7 @@ import {
   fetchIndexedSnapshot,
   fetchIndexedTrades,
 } from '../../lib/marketData';
-import { buyToken, sellToken, getPoolQuote } from '../../lib/swap';
+import { buyToken, sellToken, getPoolMarketState } from '../../lib/swap';
 import { fetchPoolHistory } from '../../lib/poolHistory';
 import { fetchChatMessages, postChatMessage, type ChatMessage } from '../../lib/chat';
 import { getWalletAccount } from '../../lib/walletAccount';
@@ -118,6 +118,11 @@ type MarketSnapshot = {
   priceChange24hPct: number;
   updatedAt: number;
 };
+type LivePoolState = {
+  priceEth: number;
+  liquidityEth: number;
+  updatedAt: number;
+};
 type TxPhase = 'idle' | 'signing' | 'sending' | 'confirming' | 'success' | 'error';
 
 const TOTAL_SUPPLY = 1_000_000_000;
@@ -172,7 +177,8 @@ const formatTokenAmount = (value: number, decimals = 6) => {
 };
 
 const formatCurrencyCompact = (value: number) => {
-  if (!Number.isFinite(value)) return '$0';
+  if (!Number.isFinite(value) || value <= 0) return '$0';
+  if (value < 0.01) return '<$0.01';
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
@@ -619,6 +625,7 @@ const TokenPreviewPage = () => {
   const [txRetryCount, setTxRetryCount] = useState(0);
   const [feedStatus, setFeedStatus] = useState<FeedStatus>('disconnected');
   const [marketSnapshot, setMarketSnapshot] = useState<MarketSnapshot | null>(null);
+  const [livePoolState, setLivePoolState] = useState<LivePoolState | null>(null);
   const [primaryPoolAddress, setPrimaryPoolAddress] = useState('');
   const [indexerStale, setIndexerStale] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -732,6 +739,7 @@ const TokenPreviewPage = () => {
     setStateHydrated(false);
     setUsingSharedState(false);
     setMarketSnapshot(null);
+    setLivePoolState(null);
     setPrimaryPoolAddress('');
 
     const hydrateInitialState = () => {
@@ -768,18 +776,24 @@ const TokenPreviewPage = () => {
     return curve.virtualSolReserves / Math.max(curve.virtualTokenReserves, 1);
   }, [chartData, curve.virtualSolReserves, curve.virtualTokenReserves]);
 
-  const priceSol = useMemo(
-    () => (marketSnapshot?.priceSol && marketSnapshot.priceSol > 0 ? marketSnapshot.priceSol : chartPriceSol),
-    [marketSnapshot?.priceSol, chartPriceSol]
-  );
+  const isEvmToken = Boolean(tokenData);
+  const priceSol = useMemo(() => {
+    if (isEvmToken) return livePoolState?.priceEth || 0;
+    return marketSnapshot?.priceSol && marketSnapshot.priceSol > 0 ? marketSnapshot.priceSol : chartPriceSol;
+  }, [isEvmToken, livePoolState?.priceEth, marketSnapshot?.priceSol, chartPriceSol]);
   const marketCapUsd = useMemo(() => {
-    if (marketSnapshot?.marketCapUsd && marketSnapshot.marketCapUsd > 0) return marketSnapshot.marketCapUsd;
+    if (!isEvmToken && marketSnapshot?.marketCapUsd && marketSnapshot.marketCapUsd > 0) return marketSnapshot.marketCapUsd;
     return priceSol * TOTAL_SUPPLY * ethUsdPrice;
-  }, [marketSnapshot?.marketCapUsd, priceSol, ethUsdPrice]);
+  }, [isEvmToken, marketSnapshot?.marketCapUsd, priceSol, ethUsdPrice]);
   const marketCapSol = useMemo(() => marketCapUsd / ethUsdPrice, [marketCapUsd, ethUsdPrice]);
   const liquiditySol = useMemo(
-    () => (marketSnapshot?.liquiditySol && marketSnapshot.liquiditySol > 0 ? marketSnapshot.liquiditySol : curve.realSolReserves),
-    [marketSnapshot?.liquiditySol, curve.realSolReserves]
+    () => {
+      if (isEvmToken) return livePoolState?.liquidityEth || 0;
+      return marketSnapshot?.liquiditySol && marketSnapshot.liquiditySol > 0
+        ? marketSnapshot.liquiditySol
+        : curve.realSolReserves;
+    },
+    [isEvmToken, livePoolState?.liquidityEth, marketSnapshot?.liquiditySol, curve.realSolReserves]
   );
   const totalVolumeSol = useMemo(() => {
     if (marketSnapshot?.volume24hSol && marketSnapshot.volume24hSol > 0) {
@@ -788,6 +802,7 @@ const TokenPreviewPage = () => {
     const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
     return trades.filter((t) => t.timestamp >= dayAgo).reduce((sum, t) => sum + t.amountSol, 0);
   }, [marketSnapshot?.volume24hSol, trades]);
+  const liquidityUsd = useMemo(() => liquiditySol * ethUsdPrice, [liquiditySol, ethUsdPrice]);
   const totalFeesSol = useMemo(
     () => trades.reduce((sum, t) => sum + t.feeSol, 0),
     [trades]
@@ -797,15 +812,15 @@ const TokenPreviewPage = () => {
     return Math.max(0, Math.min(100, (sold / curve.initialVirtualTokenReserves) * 100));
   }, [curve.initialVirtualTokenReserves, curve.virtualTokenReserves]);
   const athMcapUsd = useMemo(() => {
-    if (marketSnapshot?.fdvUsd && marketSnapshot.fdvUsd > 0) {
+    if (!isEvmToken && marketSnapshot?.fdvUsd && marketSnapshot.fdvUsd > 0) {
       return Math.max(marketSnapshot.fdvUsd, marketCapUsd);
     }
     const highest = chartData.reduce((max, p) => Math.max(max, p.high), 0);
     const fromHistory = highest * TOTAL_SUPPLY * ethUsdPrice;
     return Math.max(fromHistory, marketCapUsd);
-  }, [marketSnapshot?.fdvUsd, chartData, marketCapUsd, ethUsdPrice]);
+  }, [isEvmToken, marketSnapshot?.fdvUsd, chartData, marketCapUsd, ethUsdPrice]);
   const mcap24hDeltaPct = useMemo(() => {
-    if (marketSnapshot && Number.isFinite(marketSnapshot.priceChange24hPct)) {
+    if (!isEvmToken && marketSnapshot && Number.isFinite(marketSnapshot.priceChange24hPct)) {
       return marketSnapshot.priceChange24hPct;
     }
     if (chartData.length < 2) return 0;
@@ -813,20 +828,35 @@ const TokenPreviewPage = () => {
     const last = chartData[chartData.length - 1].close;
     if (!first) return 0;
     return ((last - first) / first) * 100;
-  }, [marketSnapshot, chartData]);
+  }, [isEvmToken, marketSnapshot, chartData]);
   const displaySymbol = onchainMintInfo.symbol || tokenData?.tokenSymbol || '';
-  const isEvmToken = Boolean(tokenData);
 
   useEffect(() => {
     if (!isEvmToken || !tokenData?.mintAddress) return;
     let cancelled = false;
-    getPoolQuote(tokenData.mintAddress)
-      .then(({ poolAddress }) => {
-        if (!cancelled) setPrimaryPoolAddress(poolAddress);
-      })
-      .catch((err) => console.error('Failed to load pool address:', err));
+    const loadLivePoolState = async () => {
+      try {
+        const pool = await getPoolMarketState(tokenData.mintAddress);
+        if (cancelled) return;
+        setPrimaryPoolAddress(pool.poolAddress);
+        setLivePoolState({
+          priceEth: pool.priceEth,
+          liquidityEth: pool.liquidityEth,
+          updatedAt: Date.now(),
+        });
+      } catch (err) {
+        console.error('Failed to load live pool state:', err);
+        if (!cancelled) {
+          setPrimaryPoolAddress('');
+          setLivePoolState(null);
+        }
+      }
+    };
+    loadLivePoolState();
+    const timer = setInterval(loadLivePoolState, 15_000);
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
   }, [isEvmToken, tokenData?.mintAddress]);
 
@@ -1192,6 +1222,25 @@ const TokenPreviewPage = () => {
       setOnchainBusy(true);
       setTxPhase('signing');
       const result = await buyToken(tokenData.mintAddress, trader, ethIn, slippage);
+      const timestamp = Date.now();
+      if (result.trade.side !== 'buy') {
+        throw new Error('Transaction confirmed, but the pool reported a sell instead of a buy. Check the transaction before retrying.');
+      }
+      pushTrade({
+        id: result.txHash,
+        signature: result.txHash,
+        time: new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp,
+        side: result.trade.side,
+        price: result.trade.priceEth,
+        amountToken: result.trade.amountToken,
+        amountSol: result.trade.amountEth,
+        feeSol: 0,
+      });
+      appendConfirmedTradePoint(result.trade.priceEth, result.trade.amountEth, timestamp);
+      const pool = await getPoolMarketState(tokenData.mintAddress);
+      setPrimaryPoolAddress(pool.poolAddress);
+      setLivePoolState({ priceEth: pool.priceEth, liquidityEth: pool.liquidityEth, updatedAt: Date.now() });
       setTxPhase('success');
       setStatus(`Buy confirmed (${shortSig(result.txHash)}).`);
       await refreshOnchainBalances();
@@ -1229,6 +1278,25 @@ const TokenPreviewPage = () => {
         onchainMintInfo.decimals,
         slippage
       );
+      const timestamp = Date.now();
+      if (result.trade.side !== 'sell') {
+        throw new Error('Transaction confirmed, but the pool reported a buy instead of a sell. Check the transaction before retrying.');
+      }
+      pushTrade({
+        id: result.txHash,
+        signature: result.txHash,
+        time: new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp,
+        side: result.trade.side,
+        price: result.trade.priceEth,
+        amountToken: result.trade.amountToken,
+        amountSol: result.trade.amountEth,
+        feeSol: 0,
+      });
+      appendConfirmedTradePoint(result.trade.priceEth, result.trade.amountEth, timestamp);
+      const pool = await getPoolMarketState(tokenData.mintAddress);
+      setPrimaryPoolAddress(pool.poolAddress);
+      setLivePoolState({ priceEth: pool.priceEth, liquidityEth: pool.liquidityEth, updatedAt: Date.now() });
       setTxPhase('success');
       setStatus(`Sell confirmed (${shortSig(result.txHash)}).`);
       setSellAmountToken('');
@@ -1399,8 +1467,10 @@ const TokenPreviewPage = () => {
                     )}
                   </div>
                   <div className="mt-3">
-                    <p className="text-xs text-[#8DA3CD] uppercase tracking-wide">Market Cap</p>
-                    <p className="text-3xl sm:text-4xl font-bold text-white">{formatCurrencyCompact(marketCapUsd)}</p>
+                    <p className="text-xs text-[#8DA3CD] uppercase tracking-wide">Live Market Cap</p>
+                    <p className="text-3xl sm:text-4xl font-bold text-white">
+                      {livePoolState ? formatCurrencyCompact(marketCapUsd) : 'Awaiting liquidity'}
+                    </p>
                     <div className="flex items-center gap-3 mt-2">
                       <p className={`text-sm ${mcap24hDeltaPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                         {mcap24hDeltaPct >= 1 ? '+' : ''}{formatPercent(mcap24hDeltaPct, 2)}% 24h
@@ -1418,16 +1488,21 @@ const TokenPreviewPage = () => {
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2 text-xs">
                     <span className="px-2.5 py-1 rounded-md bg-[#10192C] text-[#93A9CF]">
-                        {primaryPoolAddress ? 'Live on Uniswap V3' : 'Loading pool...'}
+                        {primaryPoolAddress ? 'Live Uniswap V3 pool' : 'Awaiting live pool'}
                     </span>
+                    {livePoolState && liquidityUsd < 50 && (
+                      <span className="px-2.5 py-1 rounded-md bg-amber-400/10 text-amber-300 border border-amber-400/20">
+                        Very low liquidity: price is highly unstable
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-3 text-sm">
                 <div className="bg-[#10192C] border border-[#1D2940] rounded-xl px-3 py-2">
-                    <p className="text-[#7D92BC]">Liquidity Route</p>
+                  <p className="text-[#7D92BC]">Live Liquidity</p>
                   <p className="text-[#E8EEF9] font-semibold">
-                      {primaryPoolAddress ? 'Uniswap V3 (locked)' : 'Loading...'}
+                    {livePoolState ? formatCurrencyCompact(liquidityUsd) : 'Awaiting pool'}
                   </p>
                 </div>
                 <div className="bg-[#10192C] border border-[#1D2940] rounded-xl px-3 py-2">
