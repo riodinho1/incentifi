@@ -27,6 +27,8 @@ const TRANSFER_EVENT_ABI = parseAbi([
 ]);
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+const TOTAL_SUPPLY_RAW = 1_000_000_000n * 10n ** 18n;
+const WEI_PER_ETH = 10n ** 18n;
 
 const toQuantityHex = (value: bigint) => `0x${value.toString(16)}`;
 
@@ -83,12 +85,17 @@ export type AddLiquidityResult = {
   poolTxHash: string;
   lockTxHash: string;
   tokenId: string;
+  tokenAmount: string;
+  ethAmount: string;
+  targetMarketCapUsd: string;
 };
 
 export const addLiquidityAndLock = async (
   tokenAddress: string,
   creatorAddress: string,
-  ethAmount: string | number
+  ethAmount: string | number,
+  targetMarketCapUsd: string | number,
+  ethUsdPrice: number
 ): Promise<AddLiquidityResult> => {
   const provider = getEvmProvider();
   if (!provider) throw new Error('Connect wallet first.');
@@ -100,14 +107,29 @@ export const addLiquidityAndLock = async (
   const ethWei = BigInt(Math.round(Number(ethAmount) * 1e18));
   if (ethWei <= 0n) throw new Error('Enter a valid ETH amount for liquidity.');
 
+  const targetMarketCapCents = BigInt(Math.round(Number(targetMarketCapUsd) * 100));
+  const ethUsdCents = BigInt(Math.round(ethUsdPrice * 100));
+  if (targetMarketCapCents <= 0n || ethUsdCents <= 0n) {
+    throw new Error('Enter a valid starting market cap and use a valid ETH/USD rate.');
+  }
+
   const tokenBalance = await readTokenBalance(token, creator);
   if (tokenBalance <= 0n) throw new Error('No token balance available to seed liquidity with.');
+
+  // Target price is target market cap / fixed 1B supply. This determines the
+  // token side needed for the selected ETH liquidity without inventing a price.
+  const tokenAmount = (ethWei * ethUsdCents * TOTAL_SUPPLY_RAW) /
+    (WEI_PER_ETH * targetMarketCapCents);
+  if (tokenAmount <= 0n) throw new Error('The selected launch settings produce zero pool tokens.');
+  if (tokenAmount > tokenBalance) {
+    throw new Error('The target market cap is too low for this ETH amount and would require more than the available token supply. Increase the target market cap or lower ETH liquidity.');
+  }
 
   const isTokenFirst = BigInt(token) < BigInt(weth);
   const token0 = isTokenFirst ? token : weth;
   const token1 = isTokenFirst ? weth : token;
-  const amount0 = isTokenFirst ? tokenBalance : ethWei;
-  const amount1 = isTokenFirst ? ethWei : tokenBalance;
+  const amount0 = isTokenFirst ? tokenAmount : ethWei;
+  const amount1 = isTokenFirst ? ethWei : tokenAmount;
 
   const sqrtPriceX96 = computeSqrtPriceX96(amount0, amount1);
 
@@ -115,7 +137,7 @@ export const addLiquidityAndLock = async (
   const approveData = encodeFunctionData({
     abi: ERC20_ABI,
     functionName: 'approve',
-    args: [UNISWAP_POSITION_MANAGER, tokenBalance],
+    args: [UNISWAP_POSITION_MANAGER, tokenAmount],
   });
   const approveTxHash = await provider.request({
     method: 'eth_sendTransaction',
@@ -212,5 +234,8 @@ export const addLiquidityAndLock = async (
     poolTxHash,
     lockTxHash,
     tokenId: tokenId.toString(),
+    tokenAmount: (Number(tokenAmount) / 1e18).toLocaleString(undefined, { maximumFractionDigits: 4 }),
+    ethAmount: String(ethAmount),
+    targetMarketCapUsd: String(targetMarketCapUsd),
   };
 };

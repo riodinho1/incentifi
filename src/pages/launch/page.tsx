@@ -22,9 +22,10 @@ const LaunchPage = () => {
     website: '',
     twitter: '',
     telegram: '',
-    initialLiquidity: '0.1'
+    initialLiquidity: '0.1',
+    initialMarketCapUsd: '2000',
   });
-  const [errors, setErrors] = useState<{tokenName?: string; tokenSymbol?: string}>({});
+  const [errors, setErrors] = useState<{tokenName?: string; tokenSymbol?: string; initialMarketCapUsd?: string}>({});
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -32,10 +33,13 @@ const LaunchPage = () => {
   };
 
   const validate = () => {
-    const newErrors: {tokenName?: string; tokenSymbol?: string} = {};
+    const newErrors: {tokenName?: string; tokenSymbol?: string; initialMarketCapUsd?: string} = {};
     if (!formData.tokenName.trim()) newErrors.tokenName = 'Token name is required';
     if (!formData.tokenSymbol.trim()) newErrors.tokenSymbol = 'Token symbol is required';
     if (formData.tokenSymbol.length > 10) newErrors.tokenSymbol = 'Symbol must be 10 characters or less';
+    if (!Number.isFinite(Number(formData.initialMarketCapUsd)) || Number(formData.initialMarketCapUsd) <= 0) {
+      newErrors.initialMarketCapUsd = 'Starting market cap must be greater than $0';
+    }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -68,7 +72,7 @@ const LaunchPage = () => {
         throw new Error('EVM wallet not detected. Install MetaMask, Rabby, or Robinhood Wallet.');
       }
 
-      alert(`Creating your token on ${EVM_CHAIN_NAME}. This takes a few wallet approvals: deploying the contract, approving the liquidity pool, seeding it, and locking it.\n\nPlease approve each wallet request as it appears.`);
+      alert(`Creating your token on ${EVM_CHAIN_NAME}. The pool will be initialized at about $${Number(formData.initialMarketCapUsd).toLocaleString()} market cap using real ${EVM_NATIVE_SYMBOL} liquidity.\n\nThis takes a few wallet approvals: deploying the contract, approving the liquidity pool, seeding it, and locking it.`);
 
       const result = await createRealToken(provider, formData);
       const launchResult = result as any;
@@ -383,7 +387,30 @@ const LaunchPage = () => {
                     </span>
                   </div>
                   <p className="text-xs text-[#5F6A6E] mt-2">
-                    Paired with your full token supply to seed a Uniswap V3 pool. The resulting liquidity position is permanently locked - it can never be withdrawn.
+                    Real {EVM_NATIVE_SYMBOL} is paired with the calculated portion of supply needed for your selected starting market cap. The resulting liquidity position is permanently locked.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2 sm:mb-3 uppercase tracking-wide">
+                    Starting Market Cap (USD)
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-4 sm:left-5 top-1/2 -translate-y-1/2 text-[#9FA6A3] font-semibold">$</span>
+                    <input
+                      type="number"
+                      name="initialMarketCapUsd"
+                      value={formData.initialMarketCapUsd}
+                      onChange={handleInputChange}
+                      placeholder="2000"
+                      step="100"
+                      min="1"
+                      className="w-full pl-8 sm:pl-10 pr-4 sm:pr-5 py-3 sm:py-4 rounded-xl bg [#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border [#00D9FF] transition-colors text-sm sm:text-base"
+                    />
+                  </div>
+                  {errors.initialMarketCapUsd && <p className="text-xs text-red-400 mt-2">{errors.initialMarketCapUsd}</p>}
+                  <p className="text-xs text-[#5F6A6E] mt-2">
+                    The launch price is calculated from this target and the live ETH/USD rate. It is a real pool price, not a display-only number; trading moves it from there.
                   </p>
                 </div>
 
