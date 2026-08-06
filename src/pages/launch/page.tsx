@@ -426,7 +426,7 @@ const LaunchPage = () => {
                       className="w-full px-4 sm:px-5 py-3 sm:py-4 pr-16 sm:pr-20 rounded-xl bg [#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border [#00D9FF] transition-colors text-sm sm:text-base"
                     />
                     <span className="absolute right-4 sm:right-5 top-1/2 -translate-y-1/2 text [#9FA6A3] font-semibold text-sm sm:text-base">
-                      {EVM_NATIVE_SYMBOL}
+                      <span className="inline-flex items-center gap-1.5"><img src="/ethereum.svg" alt="" className="h-4 w-4" />{EVM_NATIVE_SYMBOL}</span>
                     </span>
                   </div>
                   <p className="text-xs text-[#5F6A6E] mt-2">
@@ -512,7 +512,7 @@ const LaunchPage = () => {
                   </p>
                 </div>
                 <div className="border-t border-[#37373B] py-2">
-                  <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Paired with</span><span className="font-semibold text-[#F2F0EB]">{EVM_NATIVE_SYMBOL}</span></div>
+                  <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Paired with</span><span className="inline-flex items-center gap-2 font-semibold text-[#F2F0EB]"><img src="/ethereum.svg" alt="Ethereum" className="h-4 w-4" />{EVM_NATIVE_SYMBOL}</span></div>
                   <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Pool fee</span><span className="font-semibold text-[#F2F0EB]">1.00%</span></div>
                   <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Initial liquidity</span><span className="font-semibold text-[#F2F0EB]">{formData.initialLiquidity || '0'} {EVM_NATIVE_SYMBOL}</span></div>
                   <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Starting market cap</span><span className="font-semibold text-[#F2F0EB]">${Number(formData.initialMarketCapUsd || 0).toLocaleString()}</span></div>
