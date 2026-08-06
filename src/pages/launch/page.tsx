@@ -28,9 +28,11 @@ const LaunchPage = () => {
   const [errors, setErrors] = useState<{
     tokenName?: string;
     tokenSymbol?: string;
+    description?: string;
     initialLiquidity?: string;
     initialMarketCapUsd?: string;
   }>({});
+  const [imageError, setImageError] = useState('');
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -43,15 +45,37 @@ const LaunchPage = () => {
     setFormData(prev => ({ ...prev, initialMarketCapUsd: value }));
   };
 
+  const handleImageFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setImageError('Choose a PNG, JPG, WEBP, or GIF image.');
+      return;
+    }
+    if (file.size > 1_000_000) {
+      setImageError('Image must be 1 MB or smaller.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setFormData(prev => ({ ...prev, imageUrl: String(reader.result || '') }));
+      setImageError('');
+    };
+    reader.readAsDataURL(file);
+  };
+
   const validate = () => {
     const newErrors: {
       tokenName?: string;
       tokenSymbol?: string;
+      description?: string;
       initialLiquidity?: string;
       initialMarketCapUsd?: string;
     } = {};
     if (!formData.tokenName.trim()) newErrors.tokenName = 'Token name is required';
     if (!formData.tokenSymbol.trim()) newErrors.tokenSymbol = 'Token symbol is required';
+    if (!formData.description.trim()) newErrors.description = 'A short token description is required';
     if (formData.tokenSymbol.length > 10) newErrors.tokenSymbol = 'Symbol must be 10 characters or less';
     if (!Number.isFinite(Number(formData.initialLiquidity)) || Number(formData.initialLiquidity) < 0.0001) {
       newErrors.initialLiquidity = 'Initial liquidity must be at least 0.0001 ETH';
@@ -229,7 +253,7 @@ const LaunchPage = () => {
 
         {/* Form */}
         <section className="py-8 sm:py-12 md:py-16">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6">
             <div className="mb-6 sm:mb-8">
               <Link 
                 to="/"
@@ -240,7 +264,8 @@ const LaunchPage = () => {
               </Link>
             </div>
 
-            <form noValidate onSubmit={handleSubmit} className="bg-[#1A1A2E] border border-[#2A3338] rounded-2xl sm:rounded-3xl p-6 sm:p-8 md:p-12 shadow-2xl">
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
+            <form noValidate onSubmit={handleSubmit} className="min-w-0 bg-[#1A1A2E] border border-[#2A3338] rounded-2xl sm:rounded-3xl p-6 sm:p-8 md:p-10 shadow-2xl">
               {/* Wallet Notice */}
               <div className="mb-6 sm:mb-8 p-4 sm:p-6 rounded-xl sm:rounded-2xl bg-[#0E1518] border border-[#2A3338] text-center">
                 <p className="text-xs sm:text-sm text-[#9FA6A3] mb-3 sm:mb-4">Connect your wallet to launch a token</p>
@@ -287,36 +312,45 @@ const LaunchPage = () => {
                 {/* Description */}
                 <div>
                   <label className="block text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2 sm:mb-3 uppercase tracking-wide">
-                    Description
+                    Description *
                   </label>
                   <textarea
                     name="description"
                     value={formData.description}
                     onChange={handleInputChange}
-                    placeholder="Describe your token..."
+                    placeholder="A short description of your token"
                     rows={4}
                     maxLength={500}
                     className="w-full px-4 sm:px-5 py-3 sm:py-4 rounded-xl bg-[#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border-[#00D9FF] transition-colors resize-none text-sm sm:text-base"
                   />
                   <p className="text-xs text-[#5F6A6E] mt-2">{formData.description.length}/500 characters</p>
+                  {errors.description && <p className="text-red-400 text-xs mt-1">{errors.description}</p>}
                 </div>
 
-                {/* Token Image URL */}
+                {/* Token image */}
                 <div>
                   <label className="block text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2 sm:mb-3 uppercase tracking-wide">
-                    Token Image URL (Optional)
+                    Token Image
                   </label>
-                  <input
-                    type="url"
-                    name="imageUrl"
-                    value={formData.imageUrl}
-                    onChange={handleInputChange}
-                    placeholder="https://example.com/my-token-logo.png"
-                    className="w-full px-4 sm:px-5 py-3 sm:py-4 rounded-xl bg-[#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border-[#00D9FF] transition-colors text-sm sm:text-base"
-                  />
-                  <p className="text-xs text-[#5F6A6E] mt-2">
-                    Direct link to your token's logo image (PNG, JPG, SVG). If left empty, initials will be shown.
-                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-3">
+                    <label className="group flex min-h-24 cursor-pointer items-center gap-3 rounded-xl border border-dashed border-[#3A4A64] bg-[#0F1624] px-4 text-sm text-[#DCE6F8] hover:border-[#53B8FF] hover:bg-[#12213A] transition-colors">
+                      <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-[#16243D] text-xl text-[#7EC8FF] group-hover:text-white">
+                        <i className="ri-image-add-line"></i>
+                      </span>
+                      <span><span className="block font-semibold">Choose image</span><span className="text-xs text-[#7D92BC]">PNG, JPG, WEBP or GIF, max 1 MB</span></span>
+                      <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={handleImageFile} className="sr-only" />
+                    </label>
+                    <input
+                      type="url"
+                      name="imageUrl"
+                      value={formData.imageUrl.startsWith('data:') ? '' : formData.imageUrl}
+                      onChange={handleInputChange}
+                      placeholder="or paste an image URL"
+                      className="w-full px-4 py-3 rounded-xl bg-[#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border-[#53B8FF] transition-colors text-sm"
+                    />
+                  </div>
+                  {imageError && <p className="text-xs text-red-400 mt-2">{imageError}</p>}
+                  <p className="text-xs text-[#5F6A6E] mt-2">Your selected image is shown in the launch preview. If left empty, token initials are used.</p>
                 </div>
 
                 {/* Social Links */}
@@ -470,6 +504,38 @@ const LaunchPage = () => {
               </div>
             </form>
 
+            <aside className="lg:sticky lg:top-28">
+              <div className="overflow-hidden rounded-3xl border border-[#2A3338] bg-[#10131E] shadow-2xl shadow-black/30">
+                <div className="h-24 bg-[radial-gradient(circle_at_20%_0%,rgba(0,194,255,.32),transparent_48%),radial-gradient(circle_at_85%_20%,rgba(157,0,255,.3),transparent_45%)]"></div>
+                <div className="px-6 pb-6 -mt-10">
+                  {formData.imageUrl ? (
+                    <img src={formData.imageUrl} alt="Token preview" className="h-20 w-20 rounded-2xl border-4 border-[#10131E] object-cover bg-[#0A0E17]" />
+                  ) : (
+                    <div className="flex h-20 w-20 items-center justify-center rounded-2xl border-4 border-[#10131E] bg-[#1A2942] text-2xl font-bold text-[#7EC8FF]">
+                      {(formData.tokenSymbol || 'IF').slice(0, 3).toUpperCase()}
+                    </div>
+                  )}
+                  <p className="mt-5 text-xs font-semibold uppercase tracking-[0.18em] text-[#7D92BC]">Launch preview</p>
+                  <h2 className="mt-1 text-2xl font-semibold text-white">{formData.tokenName || 'Your token'}</h2>
+                  <p className="mt-1 text-sm text-[#8DA3CD]">${formData.tokenSymbol.toUpperCase() || 'TICKER'}</p>
+                  <p className="mt-5 min-h-12 text-sm leading-6 text-[#A7B6D2]">
+                    {formData.description || 'Add a clear description so traders understand what this token is about.'}
+                  </p>
+                </div>
+                <div className="border-t border-[#26334A] px-6 py-2">
+                  <div className="flex items-center justify-between border-b border-[#26334A] py-4 text-sm"><span className="text-[#8291AA]">Paired with</span><span className="font-semibold text-white">{EVM_NATIVE_SYMBOL}</span></div>
+                  <div className="flex items-center justify-between border-b border-[#26334A] py-4 text-sm"><span className="text-[#8291AA]">Pool fee</span><span className="font-semibold text-white">1.00%</span></div>
+                  <div className="flex items-center justify-between border-b border-[#26334A] py-4 text-sm"><span className="text-[#8291AA]">Initial liquidity</span><span className="font-semibold text-white">{formData.initialLiquidity || '0'} {EVM_NATIVE_SYMBOL}</span></div>
+                  <div className="flex items-center justify-between border-b border-[#26334A] py-4 text-sm"><span className="text-[#8291AA]">Starting market cap</span><span className="font-semibold text-white">${Number(formData.initialMarketCapUsd || 0).toLocaleString()}</span></div>
+                  <div className="flex items-center justify-between py-4 text-sm"><span className="text-[#8291AA]">Liquidity</span><span className="font-semibold text-emerald-300">Locked after launch</span></div>
+                </div>
+                <div className="mx-6 mb-6 rounded-2xl bg-[#0A0E17] p-4 text-xs leading-5 text-[#8DA3CD]">
+                  Your wallet submits every transaction. Launches are irreversible once confirmed on {EVM_CHAIN_NAME}.
+                </div>
+              </div>
+            </aside>
+            </div>
+
             {/* How It Works Panel */}
             <div className="mt-12 sm:mt-16 p-6 sm:p-8 md:p-10 rounded-2xl sm:rounded-3xl bg-[#1A1A2E]/50 border-2 border-dashed border-[#00D9FF]/30">
               <h2 className="text-xl sm:text-2xl font-bold text-[#E9E1D8] mb-4 sm:mb-6">How Token Creation Works</h2>
@@ -493,7 +559,7 @@ const LaunchPage = () => {
                   {
                     number: '4',
                     title: 'Liquidity Locked',
-                    description: 'Your full supply is paired with the ETH you provide into a Uniswap V3 pool, then the position is sent to a burn address - permanently locked, unruggable.'
+                    description: 'The calculated portion of supply is paired with your ETH into a Uniswap V3 pool, then the position is sent to a burn address and permanently locked.'
                   }
                 ].map((step, index) => (
                   <div key={index} className="flex items-start gap-3 sm:gap-4">
