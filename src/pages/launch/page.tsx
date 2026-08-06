@@ -25,18 +25,37 @@ const LaunchPage = () => {
     initialLiquidity: '0.1',
     initialMarketCapUsd: '2000',
   });
-  const [errors, setErrors] = useState<{tokenName?: string; tokenSymbol?: string; initialMarketCapUsd?: string}>({});
+  const [errors, setErrors] = useState<{
+    tokenName?: string;
+    tokenSymbol?: string;
+    initialLiquidity?: string;
+    initialMarketCapUsd?: string;
+  }>({});
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
+  const handleMarketCapChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Keep the value numeric while avoiding inconsistent mobile number-input validation.
+    const value = e.target.value.replace(/[^0-9.]/g, '');
+    setFormData(prev => ({ ...prev, initialMarketCapUsd: value }));
+  };
+
   const validate = () => {
-    const newErrors: {tokenName?: string; tokenSymbol?: string; initialMarketCapUsd?: string} = {};
+    const newErrors: {
+      tokenName?: string;
+      tokenSymbol?: string;
+      initialLiquidity?: string;
+      initialMarketCapUsd?: string;
+    } = {};
     if (!formData.tokenName.trim()) newErrors.tokenName = 'Token name is required';
     if (!formData.tokenSymbol.trim()) newErrors.tokenSymbol = 'Token symbol is required';
     if (formData.tokenSymbol.length > 10) newErrors.tokenSymbol = 'Symbol must be 10 characters or less';
+    if (!Number.isFinite(Number(formData.initialLiquidity)) || Number(formData.initialLiquidity) < 0.0001) {
+      newErrors.initialLiquidity = 'Initial liquidity must be at least 0.0001 ETH';
+    }
     if (!Number.isFinite(Number(formData.initialMarketCapUsd)) || Number(formData.initialMarketCapUsd) <= 0) {
       newErrors.initialMarketCapUsd = 'Starting market cap must be greater than $0';
     }
@@ -221,7 +240,7 @@ const LaunchPage = () => {
               </Link>
             </div>
 
-            <form onSubmit={handleSubmit} className="bg-[#1A1A2E] border border-[#2A3338] rounded-2xl sm:rounded-3xl p-6 sm:p-8 md:p-12 shadow-2xl">
+            <form noValidate onSubmit={handleSubmit} className="bg-[#1A1A2E] border border-[#2A3338] rounded-2xl sm:rounded-3xl p-6 sm:p-8 md:p-12 shadow-2xl">
               {/* Wallet Notice */}
               <div className="mb-6 sm:mb-8 p-4 sm:p-6 rounded-xl sm:rounded-2xl bg-[#0E1518] border border-[#2A3338] text-center">
                 <p className="text-xs sm:text-sm text-[#9FA6A3] mb-3 sm:mb-4">Connect your wallet to launch a token</p>
@@ -389,6 +408,7 @@ const LaunchPage = () => {
                   <p className="text-xs text-[#5F6A6E] mt-2">
                     Real {EVM_NATIVE_SYMBOL} is paired with the calculated portion of supply needed for your selected starting market cap. The resulting liquidity position is permanently locked.
                   </p>
+                  {errors.initialLiquidity && <p className="text-xs text-red-400 mt-2">{errors.initialLiquidity}</p>}
                 </div>
 
                 <div>
@@ -398,13 +418,13 @@ const LaunchPage = () => {
                   <div className="relative">
                     <span className="absolute left-4 sm:left-5 top-1/2 -translate-y-1/2 text-[#9FA6A3] font-semibold">$</span>
                     <input
-                      type="number"
+                      type="text"
                       name="initialMarketCapUsd"
                       value={formData.initialMarketCapUsd}
-                      onChange={handleInputChange}
+                      onChange={handleMarketCapChange}
                       placeholder="2000"
-                      step="100"
-                      min="1"
+                      inputMode="decimal"
+                      autoComplete="off"
                       className="w-full pl-8 sm:pl-10 pr-4 sm:pr-5 py-3 sm:py-4 rounded-xl bg [#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border [#00D9FF] transition-colors text-sm sm:text-base"
                     />
                   </div>
