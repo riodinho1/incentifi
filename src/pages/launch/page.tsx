@@ -414,7 +414,7 @@ const LaunchPage = () => {
                   <label className="block text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2 sm:mb-3 uppercase tracking-wide">
                     Initial Liquidity ({EVM_NATIVE_SYMBOL})
                   </label>
-                  <div className="relative">
+                  <div className="relative rounded-2xl border border-[#414146] bg-[#1B1B1D] transition-colors focus-within:border-[#C8FF49] focus-within:ring-4 focus-within:ring-[#C8FF49]/10">
                     <input
                       type="number"
                       name="initialLiquidity"
@@ -423,10 +423,10 @@ const LaunchPage = () => {
                       placeholder="0.1"
                       step="0.0001"
                       min="0.0001"
-                      className="w-full px-4 sm:px-5 py-3 sm:py-4 pr-16 sm:pr-20 rounded-xl bg [#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border [#00D9FF] transition-colors text-sm sm:text-base"
+                      className="w-full rounded-2xl bg-transparent px-5 py-4 pr-28 text-xl font-medium text-[#F4F2ED] placeholder-[#77777C] outline-none sm:text-2xl"
                     />
-                    <span className="absolute right-4 sm:right-5 top-1/2 -translate-y-1/2 text [#9FA6A3] font-semibold text-sm sm:text-base">
-                      <span className="inline-flex items-center gap-1.5"><img src="/ethereum.svg" alt="" className="h-4 w-4" />{EVM_NATIVE_SYMBOL}</span>
+                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded-xl border border-[#3B3B40] bg-[#111112] px-3 py-2 text-sm font-semibold text-[#E8E6E1] sm:right-4">
+                      <span className="inline-flex items-center gap-2"><img src="/ethereum.svg" alt="" className="h-4 w-4" />{EVM_NATIVE_SYMBOL}</span>
                     </span>
                   </div>
                   <p className="text-xs text-[#5F6A6E] mt-2">
@@ -439,8 +439,8 @@ const LaunchPage = () => {
                   <label className="block text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2 sm:mb-3 uppercase tracking-wide">
                     Starting Market Cap (USD)
                   </label>
-                  <div className="relative">
-                    <span className="absolute left-4 sm:left-5 top-1/2 -translate-y-1/2 text-[#9FA6A3] font-semibold">$</span>
+                  <div className="relative rounded-2xl border border-[#414146] bg-[#1B1B1D] transition-colors focus-within:border-[#C8FF49] focus-within:ring-4 focus-within:ring-[#C8FF49]/10">
+                    <span className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-xl font-medium text-[#8E8E94] sm:text-2xl">$</span>
                     <input
                       type="text"
                       name="initialMarketCapUsd"
@@ -449,7 +449,7 @@ const LaunchPage = () => {
                       placeholder="2000"
                       inputMode="decimal"
                       autoComplete="off"
-                      className="w-full pl-8 sm:pl-10 pr-4 sm:pr-5 py-3 sm:py-4 rounded-xl bg [#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border [#00D9FF] transition-colors text-sm sm:text-base"
+                      className="w-full rounded-2xl bg-transparent py-4 pl-11 pr-5 text-xl font-medium text-[#F4F2ED] placeholder-[#77777C] outline-none sm:text-2xl"
                     />
                   </div>
                   {errors.initialMarketCapUsd && <p className="text-xs text-red-400 mt-2">{errors.initialMarketCapUsd}</p>}
