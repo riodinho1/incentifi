@@ -53,7 +53,6 @@ type TokenData = {
   website?: string;
   twitter?: string;
   telegram?: string;
-  initialLiquidity?: string;
   mintAddress?: string;
   chain?: 'evm';
 };
@@ -790,7 +789,6 @@ const TokenPreviewPage = () => {
             website: first.website || '',
             twitter: first.twitter || '',
             telegram: first.telegram || '',
-            initialLiquidity: '0.1',
             mintAddress: first.mint_address || '',
             chain: 'evm',
           });
@@ -816,12 +814,11 @@ const TokenPreviewPage = () => {
     setPrimaryPoolAddress('');
 
     const hydrateInitialState = () => {
-      const initialLiquidity = parseFloat(tokenData.initialLiquidity || '0.1') * 2;
-      const initialVirtualSol = Math.max(30, initialLiquidity * 100);
+      const initialVirtualSol = 30;
       const initialCurve: CurveState = {
         virtualSolReserves: initialVirtualSol,
         virtualTokenReserves: CURVE_TOKENS,
-        realSolReserves: initialLiquidity,
+        realSolReserves: 0.2,
         initialVirtualTokenReserves: CURVE_TOKENS,
         completed: false,
       };
@@ -1619,9 +1616,7 @@ const TokenPreviewPage = () => {
                 <h2 className="text-[#E8EEF9] font-semibold mb-4">Recent Trades</h2>
                 {trades.length === 0 ? (
                   <p className="text-sm text-[#8A9CC2]">
-                    {isEvmToken
-                      ? 'Trading is live on the locked Uniswap V3 pool. This feed isn\'t wired up to show past trades yet - check Dexscreener above for live trade history.'
-                      : 'No trades yet. Place the first trade.'}
+                    Trading is live through the Incentifi Router. This feed updates with live router trades.
                   </p>
                 ) : (
                   <div className="overflow-x-auto">
@@ -1632,7 +1627,7 @@ const TokenPreviewPage = () => {
                           <th className="py-2 pr-3">Side</th>
                           <th className="py-2 pr-3">Price</th>
                           <th className="py-2 pr-3">Amount</th>
-                          <th className="py-2 pr-3">{isEvmToken ? EVM_NATIVE_SYMBOL : 'SOL'}</th>
+                          <th className="py-2 pr-3">{EVM_NATIVE_SYMBOL}</th>
                           <th className="py-2 pr-3">Fee</th>
                           <th className="py-2 pr-3">Tx</th>
                         </tr>
@@ -1720,7 +1715,7 @@ const TokenPreviewPage = () => {
                 <div className="mb-4">
                   <p className="text-xs text-[#7D92BC] mb-2">Execution</p>
                   <p className="text-[11px] text-[#8EA6D1] mt-2">
-                    Network: <span className="uppercase">{EVM_CHAIN_NAME}</span>. Trades execute directly against the token's locked Uniswap V3 pool.
+                    Network: <span className="uppercase">{EVM_CHAIN_NAME}</span>. Trades route through the IncentifiSwapRouter contract with creator fee sharing and holder loss rewards.
                   </p>
                   {tokenData.mintAddress && (
                     <a
@@ -2001,7 +1996,7 @@ const TokenPreviewPage = () => {
 
               <div className="bg-[#0B1120] border border-[#1D2940] rounded-2xl p-4 sm:p-5">
                 <h3 className="text-[#E8EEF9] font-semibold mb-3">
-                  {isEvmToken ? 'Token Contract' : 'Bonding Curve'}
+                  Token Contract
                 </h3>
                 <div className="space-y-2 text-sm">
                   <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
@@ -2012,9 +2007,9 @@ const TokenPreviewPage = () => {
                     <span className="block text-[#7D92BC]">Contract Address</span>
                     {tokenData?.mintAddress ? (
                       <a
-                        href={isEvmToken ? EVM_ADDRESS_URL(tokenData.mintAddress) : undefined}
-                        target={isEvmToken ? '_blank' : undefined}
-                        rel={isEvmToken ? 'noopener noreferrer' : undefined}
+                        href={EVM_ADDRESS_URL(tokenData.mintAddress)}
+                        target="_blank"
+                        rel="noopener noreferrer"
                         className="mt-1 block break-all text-xs font-medium text-[#7EC8FF] hover:text-white"
                       >
                         {tokenData.mintAddress}
@@ -2023,50 +2018,19 @@ const TokenPreviewPage = () => {
                       <span className="mt-1 block break-all text-xs font-medium text-[#E8EEF9]">-</span>
                     )}
                   </div>
-                  {isEvmToken ? (
-                    <>
-                      <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
-                        <span className="text-[#7D92BC]">Chain</span>
-                        <span className="text-[#E8EEF9] font-medium">{EVM_CHAIN_NAME}</span>
-                      </div>
-                      <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
-                        <span className="text-[#7D92BC]">Supply</span>
-                        <span className="text-[#E8EEF9] font-medium">1.00B</span>
-                      </div>
-                      <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
-                        <span className="text-[#7D92BC]">Gas</span>
-                        <span className="text-[#E8EEF9] font-medium">{EVM_NATIVE_SYMBOL}</span>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
-                        <span className="text-[#7D92BC]">Curve SOL Baseline</span>
-                        <span className="text-[#E8EEF9] font-medium">{formatSol(curve.virtualSolReserves)} SOL</span>
-                      </div>
-                      <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
-                        <span className="text-[#7D92BC]">Curve Token Baseline</span>
-                        <span className="text-[#E8EEF9] font-medium">{formatTokenAmount(curve.virtualTokenReserves, onchainMintInfo.decimals)}</span>
-                      </div>
-                      <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
-                        <span className="text-[#7D92BC]">Collected Fees</span>
-                        <span className="text-[#E8EEF9] font-medium">{formatSol(totalFeesSol)} SOL</span>
-                      </div>
-                    </>
-                  )}
+                  <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
+                    <span className="text-[#7D92BC]">Chain</span>
+                    <span className="text-[#E8EEF9] font-medium">{EVM_CHAIN_NAME}</span>
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
+                    <span className="text-[#7D92BC]">Supply</span>
+                    <span className="text-[#E8EEF9] font-medium">1.00B</span>
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg bg-[#091325] px-3 py-2 border border-[#1D2940]">
+                    <span className="text-[#7D92BC]">Gas</span>
+                    <span className="text-[#E8EEF9] font-medium">{EVM_NATIVE_SYMBOL}</span>
+                  </div>
                 </div>
-                {!isEvmToken && <div className="mt-4">
-                  <div className="flex items-center justify-between text-xs text-[#8A9CC2] mb-1">
-                    <span>Curve Progress</span>
-                    <span>{formatNum(progressPct, 2)}%</span>
-                  </div>
-                  <div className="w-full h-2.5 bg-[#1A2846] rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-[#00C2FF] to-[#22C55E]"
-                      style={{ width: `${progressPct}%` }}
-                    ></div>
-                  </div>
-                </div>}
               </div>
             </aside>
           </div>
