@@ -45,6 +45,11 @@ const LaunchPage = () => {
     setFormData(prev => ({ ...prev, initialMarketCapUsd: value }));
   };
 
+  const handleLiquidityChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value.replace(/[^0-9.]/g, '');
+    setFormData(prev => ({ ...prev, initialLiquidity: value }));
+  };
+
   const handleImageFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -416,13 +421,13 @@ const LaunchPage = () => {
                   </label>
                   <div className="relative rounded-2xl border border-[#414146] bg-[#1B1B1D] transition-colors focus-within:border-[#C8FF49] focus-within:ring-4 focus-within:ring-[#C8FF49]/10">
                     <input
-                      type="number"
+                      type="text"
                       name="initialLiquidity"
                       value={formData.initialLiquidity}
-                      onChange={handleInputChange}
+                      onChange={handleLiquidityChange}
                       placeholder="0.1"
-                      step="0.0001"
-                      min="0.0001"
+                      inputMode="decimal"
+                      autoComplete="off"
                       className="w-full rounded-2xl bg-transparent px-5 py-4 pr-28 text-xl font-medium text-[#F4F2ED] placeholder-[#77777C] outline-none sm:text-2xl"
                     />
                     <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded-xl border border-[#3B3B40] bg-[#111112] px-3 py-2 text-sm font-semibold text-[#E8E6E1] sm:right-4">
@@ -533,26 +538,31 @@ const LaunchPage = () => {
                   {
                     number: '1',
                     title: 'Contract Deployed',
-                    description: 'An ERC-20 token contract is deployed on Robinhood Chain with your selected name and symbol'
+                    description: 'An ERC-20 token contract is deployed on Robinhood Chain with your selected name and symbol.'
                   },
                   {
                     number: '2',
                     title: 'Creator Receives Supply',
-                    description: 'The connected creator wallet receives the fixed one billion token supply'
+                    description: 'The connected creator wallet receives the fixed one billion token supply.'
                   },
                   {
                     number: '3',
                     title: 'Contract Address Saved',
-                    description: 'The created contract address is saved so wallets, explorers, and token pages can reference it'
+                    description: 'The created contract address is saved so wallets, explorers, and token pages can reference it.'
                   },
                   {
                     number: '4',
                     title: 'Liquidity Locked',
-                    description: 'The calculated portion of supply is paired with your ETH into a Uniswap V3 pool, then the position is sent to a burn address and permanently locked.'
+                    description: 'The calculated portion of supply is paired with your ETH into a Uniswap V3 pool, then the position is permanently locked.'
+                  },
+                  {
+                    number: '5',
+                    title: 'Loss-Reward Protection Active',
+                    description: 'All trades route through the Incentifi Router with a 1.0% creator fee (0.5% to creator, 0.5% to the Loss Reward Pool). Eligible underwater holders receive hourly 10% loss-reward distributions in native ETH.'
                   }
                 ].map((step, index) => (
                   <div key={index} className="flex items-start gap-3 sm:gap-4">
-                    <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-gradient-to-r from-[#00D9FF] to [#9D00FF] flex items-center justify-center flex-shrink-0 font-bold text-white text-sm sm:text-base">
+                    <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-gradient-to-r from-[#00D9FF] to-[#9D00FF] flex items-center justify-center flex-shrink-0 font-bold text-white text-sm sm:text-base">
                       {step.number}
                     </div>
                     <div>
@@ -577,7 +587,7 @@ const LaunchPage = () => {
               <span>{EVM_CHAIN_NAME}</span>
               <span className="w-px h-3 bg-[#2A3338]"></span>
               <a href="#" className="hover:text-[#9FA6A3] transition-colors">Docs</a>
-              <span className="w-px h-3 bg[#2A3338]"></span>
+              <span className="w-px h-3 bg-[#2A3338]"></span>
               <a href="#" className="hover:text-[#9FA6A3] transition-colors">GitHub</a>
             </div>
             <p className="text-xs text-[#5F6A6E] text-center">

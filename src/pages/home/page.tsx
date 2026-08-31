@@ -24,7 +24,7 @@ import {
   Zap,
 } from 'lucide-react';
 import WalletButton from '../../components/WalletButton';
-import { IS_ROBINHOOD_CHAIN_MODE, EVM_CHAIN_NAME } from '../../lib/evmNetwork';
+import { EVM_CHAIN_NAME } from '../../lib/evmNetwork';
 import { supabase } from '../../lib/supabase';
 
 type TokenItem = {
@@ -34,9 +34,13 @@ type TokenItem = {
   symbol?: string;
   image_url?: string;
   creator_address?: string;
+  mint_address?: string;
   description?: string;
   timeAgo?: string;
   isNew?: boolean;
+  marketCapUsd?: number;
+  priceEth?: number;
+  lossPoolEth?: number;
   [key: string]: unknown;
 };
 
@@ -62,9 +66,11 @@ const shortenAddress = (addr?: string) => {
   return `${addr.slice(0, 4)}...${addr.slice(-4)}`;
 };
 
-const fakeMC = (index: number) => {
-  const mcValues = [4200, 6900, 8500, 12300, 5600, 17800, 32000, 7100];
-  return mcValues[index % mcValues.length] || 6900;
+const formatMarketCap = (val?: number) => {
+  if (!val || val <= 0) return 'Awaiting pool';
+  if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(2)}M`;
+  if (val >= 1_000) return `$${(val / 1_000).toFixed(1)}k`;
+  return `$${val.toFixed(0)}`;
 };
 
 const HomePage = () => {
@@ -77,19 +83,40 @@ const HomePage = () => {
   useEffect(() => {
     const fetchTokens = async () => {
       try {
-        const { data, error } = await supabase
-          .from('tokens')
-          .select('*')
-          .order('created_at', { ascending: false });
+        const [tokensRes, snapshotsRes] = await Promise.all([
+          supabase.from('tokens').select('*').order('created_at', { ascending: false }),
+          supabase.from('token_market_snapshots_evm').select('*'),
+        ]);
 
-        if (error) throw new Error(error.message);
+        if (tokensRes.error) throw new Error(tokensRes.error.message);
+
+        const snapshotsByMint = new Map<string, any>();
+        for (const s of snapshotsRes.data || []) {
+          if (s.token_address) {
+            snapshotsByMint.set(s.token_address.toLowerCase(), s);
+          }
+        }
 
         const tenMinutes = 10 * 60 * 1000;
-        const tokensList = ((data || []).map((row: Record<string, unknown>) => {
+        const tokensList = ((tokensRes.data || []).map((row: Record<string, unknown>) => {
           const createdAt = row.created_at || new Date();
+          const mint = String(row.mint_address || '').toLowerCase();
+          const snap = snapshotsByMint.get(mint);
+
+          // Calculate real Pump.fun market cap: 1,000,000,000 tokens * price
+          const priceEth = snap ? Number(snap.price_eth || 0) : 0;
+          const marketCapUsd = snap?.market_cap_usd
+            ? Number(snap.market_cap_usd)
+            : priceEth > 0
+              ? 1_000_000_000 * priceEth * 2500
+              : 0;
+
           return {
             id: String(row.id || ''),
             ...row,
+            priceEth,
+            marketCapUsd,
+            lossPoolEth: snap ? Number(snap.loss_pool_tvl_eth || 0) : 0,
             timeAgo: formatAge(createdAt as string | number | Date),
             isNew: Date.now() - new Date(createdAt as string | number | Date).getTime() < tenMinutes,
           };
@@ -98,6 +125,7 @@ const HomePage = () => {
         });
 
         setTokens(tokensList);
+
       } catch (err) {
         console.error('Supabase fetch error:', err);
       }
@@ -123,7 +151,7 @@ const HomePage = () => {
     }
 
     if (sortBy === 'Trending') {
-      list = [...list].sort((a, b) => fakeMC(tokens.indexOf(b)) - fakeMC(tokens.indexOf(a)));
+      list = [...list].sort((a, b) => (b.marketCapUsd || 0) - (a.marketCapUsd || 0));
     }
 
     if (sortBy === 'Top Gainers') {
@@ -137,7 +165,7 @@ const HomePage = () => {
     return list;
   }, [searchQuery, selectedCategory, sortBy, tokens]);
 
-  const totalMarketCap = tokens.reduce((sum, _token, index) => sum + fakeMC(index), 0);
+  const totalMarketCap = tokens.reduce((sum, token) => sum + (token.marketCapUsd || 0), 0);
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-[#071012] text-[#E8EEF9]">
@@ -358,7 +386,7 @@ const HomePage = () => {
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
-              {filteredTokens.map((token, index) => (
+              {filteredTokens.map((token) => (
                 <Link
                   key={token.id}
                   to={`/token-preview/${token.symbol}`}
@@ -386,9 +414,19 @@ const HomePage = () => {
                     </div>
                     <div className="mt-2 truncate text-xs text-[#708990]">{shortenAddress(token.creator_address)}</div>
                     <div className="mt-3 flex items-center justify-between">
-                      <span className="text-[11px] font-semibold text-white">MC ${fakeMC(index).toLocaleString()}</span>
+                      <span className="text-[11px] font-semibold text-white">
+                        {token.marketCapUsd && token.marketCapUsd > 0
+                          ? `MC ${formatMarketCap(token.marketCapUsd)}`
+                          : 'Awaiting pool'}
+                      </span>
                       <span className="rounded-full bg-[#14B8A6]/10 px-2 py-1 text-xs text-[#72E0D5]">Trade</span>
                     </div>
+                    {token.lossPoolEth !== undefined && token.lossPoolEth > 0 && (
+                      <div className="mt-1.5 flex items-center justify-between text-[10px] text-[#53B8FF]">
+                        <span>Loss Pool:</span>
+                        <span className="font-semibold">{token.lossPoolEth.toFixed(3)} ETH</span>
+                      </div>
+                    )}
                   </div>
                 </Link>
               ))}

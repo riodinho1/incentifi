@@ -1,6 +1,12 @@
 import { decodeEventLog, encodeFunctionData, parseAbi, getAddress } from 'viem';
 import { getEvmProvider } from './evmNetwork';
-import { UNISWAP_V3_FACTORY, UNISWAP_SWAP_ROUTER, WETH_ADDRESS, POOL_FEE } from './uniswapAddresses';
+import {
+  UNISWAP_V3_FACTORY,
+  INCENTIFI_SWAP_ROUTER,
+  WETH_ADDRESS,
+  POOL_FEE,
+  CREATOR_FEE_BPS,
+} from './uniswapAddresses';
 
 const FACTORY_ABI = parseAbi([
   'function getPool(address tokenA, address tokenB, uint24 fee) view returns (address pool)',
@@ -13,16 +19,20 @@ const POOL_ABI = parseAbi([
 const ERC20_ABI = parseAbi([
   'function approve(address spender, uint256 amount) returns (bool)',
   'function balanceOf(address account) view returns (uint256)',
+  'function allowance(address owner, address spender) view returns (uint256)',
 ]);
 
 const SWAP_EVENT_ABI = parseAbi([
   'event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)',
 ]);
 
-const SWAP_ROUTER_ABI = parseAbi([
-  'function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96) params) payable returns (uint256 amountOut)',
-  'function unwrapWETH9(uint256 amountMinimum, address recipient) payable',
-  'function multicall(bytes[] data) payable returns (bytes[] results)',
+const INCENTIFI_TRADE_EVENT_ABI = parseAbi([
+  'event IncentifiTrade(address indexed token, address indexed trader, bool indexed isBuy, uint256 ethAmount, uint256 tokenAmount, uint256 creatorFee, uint256 lossPoolFee)',
+]);
+
+const INCENTIFI_ROUTER_ABI = parseAbi([
+  'function buyToken(address token, uint256 amountOutMinimum, uint256 deadline) payable returns (uint256 amountOut)',
+  'function sellToken(address token, uint256 tokenAmountIn, uint256 minEthOut, uint256 deadline) returns (uint256 netEthOut)',
 ]);
 
 const toQuantityHex = (value: bigint) => `0x${value.toString(16)}`;
@@ -65,6 +75,32 @@ const readConfirmedPoolSwap = (
   poolAddress: string,
   tokenIsToken0: boolean
 ): ConfirmedPoolSwap => {
+  // 1. Try decoding IncentifiTrade event
+  for (const log of receipt.logs || []) {
+    try {
+      const decoded: any = decodeEventLog({
+        abi: INCENTIFI_TRADE_EVENT_ABI,
+        data: log.data,
+        topics: log.topics,
+      });
+      if (decoded.eventName === 'IncentifiTrade') {
+        const isBuy = Boolean(decoded.args.isBuy);
+        const ethAmount = Number(decoded.args.ethAmount) / 1e18;
+        const tokenAmount = Number(decoded.args.tokenAmount) / 1e18;
+        const priceEth = tokenAmount > 0 ? ethAmount / tokenAmount : 0;
+        return {
+          side: isBuy ? 'buy' : 'sell',
+          amountToken: tokenAmount,
+          amountEth: ethAmount,
+          priceEth,
+        };
+      }
+    } catch {
+      // Continue to next log
+    }
+  }
+
+  // 2. Fallback to Uniswap V3 Swap event
   for (const log of receipt.logs || []) {
     if (String(log.address).toLowerCase() !== poolAddress.toLowerCase()) continue;
     try {
@@ -82,10 +118,10 @@ const readConfirmedPoolSwap = (
         priceEth: priceInEth(sqrtPriceX96, tokenIsToken0),
       };
     } catch {
-      // Skip unrelated pool logs in the transaction receipt.
+      // Skip unrelated pool logs
     }
   }
-  throw new Error('Transaction confirmed, but no Uniswap V3 Swap event was found for this pool.');
+  throw new Error('Transaction confirmed, but no swap event was found.');
 };
 
 const call = async (to: `0x${string}`, data: `0x${string}`) => {
@@ -152,7 +188,6 @@ export const getPoolMarketState = async (tokenAddress: string): Promise<PoolMark
     priceEth,
     wethReserveEth,
     tokenReserve,
-    // At the current price, the token side has approximately the same ETH value.
     liquidityEth: Math.max(0, wethReserveEth * 2),
   };
 };
@@ -190,38 +225,37 @@ export const buyToken = async (
   if (!provider) throw new Error('Connect wallet first.');
 
   const token = getAddress(tokenAddress);
-  const weth = getAddress(WETH_ADDRESS);
   const traderAddr = getAddress(trader);
 
   const ethWei = BigInt(Math.round(Number(ethAmount) * 1e18));
   if (ethWei <= 0n) throw new Error('Enter a valid ETH amount.');
 
   const { poolAddress, sqrtPriceX96, isTokenFirst } = await getPoolQuote(token);
-  // Buying: ETH (WETH) in, token out. WETH is token0 if !isTokenFirst, else token1.
   const wethIsToken0 = !isTokenFirst;
-  const expectedOut = quoteAmountOut(ethWei, sqrtPriceX96, wethIsToken0);
-  const amountOutMinimum = applySlippage(expectedOut, slippagePct * 100);
 
-  const swapData = encodeFunctionData({
-    abi: SWAP_ROUTER_ABI,
-    functionName: 'exactInputSingle',
-    args: [
-      {
-        tokenIn: weth,
-        tokenOut: token,
-        fee: POOL_FEE,
-        recipient: traderAddr,
-        amountIn: ethWei,
-        amountOutMinimum,
-        sqrtPriceLimitX96: 0n,
-      },
-    ],
+  // Deduct 1% creator fee to calculate expected tokens from remaining 99% ETH
+  const feeWei = (ethWei * BigInt(CREATOR_FEE_BPS)) / 10_000n;
+  const swapEthWei = ethWei - feeWei;
+
+  const expectedOut = quoteAmountOut(swapEthWei, sqrtPriceX96, wethIsToken0);
+  const amountOutMinimum = applySlippage(expectedOut, slippagePct * 100);
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 1200); // 20 mins
+
+  const buyData = encodeFunctionData({
+    abi: INCENTIFI_ROUTER_ABI,
+    functionName: 'buyToken',
+    args: [token, amountOutMinimum, deadline],
   });
 
   const txHash = await provider.request({
     method: 'eth_sendTransaction',
     params: [
-      { from: traderAddr, to: UNISWAP_SWAP_ROUTER, data: swapData, value: toQuantityHex(ethWei) },
+      {
+        from: traderAddr,
+        to: INCENTIFI_SWAP_ROUTER,
+        data: buyData,
+        value: toQuantityHex(ethWei),
+      },
     ],
   });
   const receipt = await waitForReceipt(txHash);
@@ -240,20 +274,23 @@ export const sellToken = async (
   if (!provider) throw new Error('Connect wallet first.');
 
   const token = getAddress(tokenAddress);
-  const weth = getAddress(WETH_ADDRESS);
   const traderAddr = getAddress(trader);
 
   const tokenWei = BigInt(Math.round(Number(tokenAmount) * 10 ** tokenDecimals));
   if (tokenWei <= 0n) throw new Error('Enter a valid token amount.');
 
   const { poolAddress, sqrtPriceX96, isTokenFirst } = await getPoolQuote(token);
-  const expectedOut = quoteAmountOut(tokenWei, sqrtPriceX96, isTokenFirst);
-  const amountOutMinimum = applySlippage(expectedOut, slippagePct * 100);
+  const expectedGrossOut = quoteAmountOut(tokenWei, sqrtPriceX96, isTokenFirst);
+  // Net ETH expected after 1% creator fee
+  const expectedNetOut = (expectedGrossOut * (10_000n - BigInt(CREATOR_FEE_BPS))) / 10_000n;
+  const minEthOut = applySlippage(expectedNetOut, slippagePct * 100);
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 1200);
 
+  // 1. Approve IncentifiSwapRouter to spend tokens
   const approveData = encodeFunctionData({
     abi: ERC20_ABI,
     functionName: 'approve',
-    args: [UNISWAP_SWAP_ROUTER, tokenWei],
+    args: [INCENTIFI_SWAP_ROUTER, tokenWei],
   });
   const approveTxHash = await provider.request({
     method: 'eth_sendTransaction',
@@ -261,39 +298,19 @@ export const sellToken = async (
   });
   await waitForReceipt(approveTxHash);
 
-  const swapData = encodeFunctionData({
-    abi: SWAP_ROUTER_ABI,
-    functionName: 'exactInputSingle',
-    args: [
-      {
-        tokenIn: token,
-        tokenOut: weth,
-        fee: POOL_FEE,
-        recipient: UNISWAP_SWAP_ROUTER,
-        amountIn: tokenWei,
-        amountOutMinimum,
-        sqrtPriceLimitX96: 0n,
-      },
-    ],
-  });
-
-  const unwrapData = encodeFunctionData({
-    abi: SWAP_ROUTER_ABI,
-    functionName: 'unwrapWETH9',
-    args: [amountOutMinimum, traderAddr],
-  });
-
-  const multicallData = encodeFunctionData({
-    abi: SWAP_ROUTER_ABI,
-    functionName: 'multicall',
-    args: [[swapData, unwrapData]],
+  // 2. Execute sell through IncentifiSwapRouter
+  const sellData = encodeFunctionData({
+    abi: INCENTIFI_ROUTER_ABI,
+    functionName: 'sellToken',
+    args: [token, tokenWei, minEthOut, deadline],
   });
 
   const txHash = await provider.request({
     method: 'eth_sendTransaction',
-    params: [{ from: traderAddr, to: UNISWAP_SWAP_ROUTER, data: multicallData }],
+    params: [{ from: traderAddr, to: INCENTIFI_SWAP_ROUTER, data: sellData }],
   });
   const receipt = await waitForReceipt(txHash);
 
   return { txHash, trade: readConfirmedPoolSwap(receipt, poolAddress, isTokenFirst) };
 };
+

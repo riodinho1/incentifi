@@ -34,6 +34,16 @@ import { fetchChatMessages, postChatMessage, type ChatMessage } from '../../lib/
 import { getWalletAccount } from '../../lib/walletAccount';
 import { describeError } from '../../lib/errors';
 import { encodeFunctionData, parseAbi, getAddress } from 'viem';
+import {
+  getHolderCostBasis,
+  calculateUnrealizedLossStats,
+  getClaimableRewards,
+  claimBatchRewards,
+  getLossRewardPoolTVL,
+  type HolderCostBasis,
+  type UnrealizedLossStats,
+  type ClaimableRewardsState,
+} from '../../lib/lossReward';
 
 type TokenData = {
   tokenName: string;
@@ -64,6 +74,7 @@ type TradeSide = 'buy' | 'sell';
 type Trade = {
   id: string;
   time: string;
+
   timestamp: number;
   side: TradeSide;
   price: number;
@@ -615,7 +626,7 @@ const TokenPreviewPage = () => {
     loading: false,
   });
   const [onchainMintInfo, setOnchainMintInfo] = useState<OnchainMintInfo>({
-    decimals: 6,
+    decimals: 18,
     symbol: '',
   });
   const [slippage, setSlippage] = useState(1);
@@ -673,6 +684,68 @@ const TokenPreviewPage = () => {
     realizedPnl: 0,
   });
   const seenTradeSignaturesRef = useRef<Set<string>>(new Set());
+
+  // Incentifi Loss-Reward state
+  const [costBasisData, setCostBasisData] = useState<HolderCostBasis | null>(null);
+  const [claimableState, setClaimableState] = useState<ClaimableRewardsState>({ unclaimedEpochs: [], totalClaimableEth: 0 });
+  const [lossPoolTvl, setLossPoolTvl] = useState<number>(0);
+  const [claiming, setClaiming] = useState(false);
+  const [claimSuccessMsg, setClaimSuccessMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadLossRewardData = async () => {
+      const wallet = getWalletAccount();
+      if (!tokenData?.mintAddress) return;
+
+      try {
+        const [tvl, costBasis, claimable] = await Promise.all([
+          getLossRewardPoolTVL(tokenData.mintAddress),
+          wallet ? getHolderCostBasis(tokenData.mintAddress, wallet) : null,
+          wallet ? getClaimableRewards(tokenData.mintAddress, wallet) : { unclaimedEpochs: [], totalClaimableEth: 0 },
+        ]);
+
+        if (!cancelled) {
+          setLossPoolTvl(tvl);
+          if (costBasis) setCostBasisData(costBasis);
+          setClaimableState(claimable);
+        }
+      } catch (err) {
+        console.error('Failed to load loss-reward data:', err);
+      }
+    };
+
+    loadLossRewardData();
+    const interval = setInterval(loadLossRewardData, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [tokenData?.mintAddress, onchainBalances.tokenBalance]);
+
+  const lossStats = useMemo(() => {
+    const currentPrice = livePoolState ? livePoolState.priceEth : 0;
+    return calculateUnrealizedLossStats(costBasisData, currentPrice);
+  }, [costBasisData, livePoolState]);
+
+  const handleClaimRewards = async () => {
+    const wallet = getWalletAccount();
+    if (!wallet || !tokenData?.mintAddress || claimableState.unclaimedEpochs.length === 0) return;
+
+    try {
+      setClaiming(true);
+      setClaimSuccessMsg(null);
+      const txHash = await claimBatchRewards(tokenData.mintAddress, wallet, claimableState.unclaimedEpochs);
+      setClaimSuccessMsg(`Claimed ${claimableState.totalClaimableEth.toFixed(4)} ETH!`);
+      setClaimableState({ unclaimedEpochs: [], totalClaimableEth: 0 });
+      await refreshOnchainBalances();
+    } catch (err: any) {
+      console.error('Claim failed:', err);
+      setStatus(describeError(err));
+    } finally {
+      setClaiming(false);
+    }
+  };
 
   useEffect(() => {
     const loadToken = async () => {
@@ -1825,6 +1898,103 @@ const TokenPreviewPage = () => {
                     <p className="text-[#E8EEF9] font-semibold">
                       {formatTokenAmount(position.tokens, onchainMintInfo.decimals)} {displaySymbol}
                     </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Incentifi Loss-Reward Protection Panel */}
+              <div className="bg-[#0B1120] border border-[#1D2940] rounded-2xl p-4 sm:p-5 relative overflow-hidden">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <h3 className="text-[#E8EEF9] font-semibold text-sm">Loss-Reward Protection</h3>
+                  </div>
+                  <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-[#14B8A6]/10 text-[#53B8FF] border border-[#14B8A6]/20">
+                    10% Hourly
+                  </span>
+                </div>
+
+                <div className="space-y-2.5 text-xs">
+                  {/* Pool TVL */}
+                  <div className="flex items-center justify-between rounded-xl bg-[#091325] px-3 py-2.5 border border-[#1D2940]">
+                    <span className="text-[#7D92BC]">Loss Pool Balance</span>
+                    <span className="text-white font-bold">{lossPoolTvl > 0 ? `${lossPoolTvl.toFixed(4)} ${EVM_NATIVE_SYMBOL}` : '0.0000 ETH'}</span>
+                  </div>
+
+                  {/* Cost Basis vs Market Price */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded-xl bg-[#091325] p-2.5 border border-[#1D2940]">
+                      <span className="text-[#7D92BC] block text-[10px] uppercase">Your Cost Basis</span>
+                      <span className="text-white font-semibold text-xs">
+                        {lossStats.costBasisEth > 0 ? `${lossStats.costBasisEth.toFixed(6)} ETH` : 'No Entry Yet'}
+                      </span>
+                    </div>
+                    <div className="rounded-xl bg-[#091325] p-2.5 border border-[#1D2940]">
+                      <span className="text-[#7D92BC] block text-[10px] uppercase">Current Price</span>
+                      <span className="text-white font-semibold text-xs">
+                        {lossStats.currentPriceEth > 0 ? `${lossStats.currentPriceEth.toFixed(6)} ETH` : '0.000000 ETH'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Unrealized Loss / Profit Status */}
+                  <div className="rounded-xl bg-[#091325] p-3 border border-[#1D2940]">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[#7D92BC]">Position Status</span>
+                      {costBasisData?.isUnderwaterSeller ? (
+                        <span className="px-2 py-0.5 rounded bg-rose-500/10 text-rose-400 font-semibold text-[11px] border border-rose-500/20">
+                          Disqualified (Sold at Loss)
+                        </span>
+                      ) : lossStats.isUnderwater ? (
+                        <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 font-semibold text-[11px] border border-amber-500/20">
+                          Underwater (-{lossStats.unrealizedLossPct.toFixed(1)}%)
+                        </span>
+                      ) : lossStats.tokenBalance > 0 ? (
+                        <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold text-[11px] border border-emerald-500/20">
+                          In Profit / Breakeven
+                        </span>
+                      ) : (
+                        <span className="text-[#7D92BC]">No Active Tokens</span>
+                      )}
+                    </div>
+                    {lossStats.isUnderwater && (
+                      <div className="mt-2 pt-2 border-t border-[#16243F] flex items-center justify-between text-[11px]">
+                        <span className="text-[#8DA3CD]">Unrealized Loss:</span>
+                        <span className="text-rose-400 font-semibold">{lossStats.unrealizedLossEth.toFixed(5)} ETH</span>
+                      </div>
+                    )}
+                    {lossStats.isUnderwater && lossStats.isEligible && (
+                      <div className="mt-1 flex items-center justify-between text-[11px]">
+                        <span className="text-[#8DA3CD]">Est. Hourly Reward:</span>
+                        <span className="text-emerald-400 font-semibold">{lossStats.theoreticalRewardEth.toFixed(5)} ETH (10%)</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Claim Section */}
+                  <div className="rounded-xl bg-gradient-to-br from-[#0C1A30] to-[#0A1424] p-3 border border-[#23385D]">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[#9FB0CF] text-xs">Claimable Rewards:</span>
+                      <span className="text-white font-bold text-sm">
+                        {claimableState.totalClaimableEth > 0 ? `${claimableState.totalClaimableEth.toFixed(5)} ${EVM_NATIVE_SYMBOL}` : '0.0000 ETH'}
+                      </span>
+                    </div>
+
+                    <button
+                      onClick={handleClaimRewards}
+                      disabled={claiming || claimableState.totalClaimableEth <= 0}
+                      className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#00B4D8] to-[#0077B6] hover:from-[#0096C7] hover:to-[#023E8A] text-white font-semibold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
+                    >
+                      {claiming ? (
+                        <span>Verifying Proof & Claiming...</span>
+                      ) : (
+                        <span>Claim Rewards {claimableState.unclaimedEpochs.length > 0 ? `(${claimableState.unclaimedEpochs.length} Epochs)` : ''}</span>
+                      )}
+                    </button>
+
+                    {claimSuccessMsg && (
+                      <p className="mt-2 text-center text-emerald-400 text-[11px]">{claimSuccessMsg}</p>
+                    )}
                   </div>
                 </div>
               </div>
