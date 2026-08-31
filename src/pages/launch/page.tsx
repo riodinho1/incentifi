@@ -3,7 +3,8 @@ import { useState } from 'react';
 import WalletButton from '../../components/WalletButton';
 import { useWalletConnected } from '../../hooks/useWalletConnected';
 import { createRealToken } from '../../lib/createToken';
-import { supabase } from '../../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
+import { normalizeSymbol, verifySymbolAvailability } from '../../lib/symbolRegistry';
 import {
   EVM_CHAIN_NAME,
   getEvmProvider,
@@ -74,20 +75,12 @@ const LaunchPage = () => {
     if (!connected) return alert('Connect wallet first');
 
     try {
-      const symbol = formData.tokenSymbol.trim().toUpperCase();
-      const { data: existingTokens, error: symbolCheckError } = await supabase
-        .from('tokens')
-        .select('id')
-        .eq('symbol', symbol)
-        .limit(1);
-
-      if (symbolCheckError) {
-        throw new Error(`Could not verify symbol availability: ${symbolCheckError.message}`);
-      }
-
-      if (existingTokens && existingTokens.length > 0) {
-        setErrors((prev) => ({ ...prev, tokenSymbol: 'Symbol already exists' }));
-        alert(`$${symbol} already exists. Choose another ticker before launching.`);
+      const symbol = normalizeSymbol(formData.tokenSymbol);
+      
+      const symbolCheck = await verifySymbolAvailability(symbol);
+      if (!symbolCheck.isAvailable) {
+        setErrors((prev) => ({ ...prev, tokenSymbol: symbolCheck.error || 'Symbol unavailable' }));
+        alert(symbolCheck.error || `Could not verify availability for $${symbol}. Deployment stopped.`);
         return;
       }
 
@@ -98,34 +91,39 @@ const LaunchPage = () => {
 
       alert(`Creating your token on ${EVM_CHAIN_NAME}.\n\nYour wallet will prompt you to sign and submit the ERC-20 token deployment transaction.`);
 
-      const result = await createRealToken(provider, formData);
+      const result = await createRealToken(provider, {
+        ...formData,
+        tokenSymbol: symbol,
+      });
       const launchResult = result as any;
 
       alert(
         `Token deployed successfully on ${launchResult.chain || EVM_CHAIN_NAME}!\n$${symbol}\nContract: ${launchResult.mint}`
       );
 
-      // Save token to Supabase
-      try {
-        const { error } = await supabase.from('tokens').insert({
-          name: formData.tokenName,
-          symbol: formData.tokenSymbol.toUpperCase(),
-          description: formData.description || '',
-          image_url: formData.imageUrl || '',
-          website: formData.website || '',
-          twitter: formData.twitter || '',
-          telegram: formData.telegram || '',
-          mint_address: result.mint,
-          creator_address:
-            launchResult.creatorAddress || provider.publicKey?.toString?.() || '',
-          created_at: new Date().toISOString(),
-        });
-        if (error) throw new Error(error.message);
-        alert('Token launched and saved!');
-      } catch (err: unknown) {
-        console.error('Supabase save error:', err);
-        const message = err instanceof Error ? err.message : 'Unknown Supabase error';
-        alert(`Token minted but save failed: ${message}`);
+      // Save token to Supabase registry if configured
+      if (isSupabaseConfigured()) {
+        try {
+          const { error } = await supabase.from('tokens').insert({
+            name: formData.tokenName,
+            symbol: symbol,
+            description: formData.description || '',
+            image_url: formData.imageUrl || '',
+            website: formData.website || '',
+            twitter: formData.twitter || '',
+            telegram: formData.telegram || '',
+            mint_address: result.mint,
+            creator_address:
+              launchResult.creatorAddress || provider.publicKey?.toString?.() || '',
+            created_at: new Date().toISOString(),
+          });
+          if (error) throw new Error(error.message);
+          alert('Token launched and saved to registry!');
+        } catch (err: unknown) {
+          console.error('Supabase save error:', err);
+          const message = err instanceof Error ? err.message : 'Unknown Supabase error';
+          alert(`Token deployed on-chain (${result.mint}), but registry save encountered an issue: ${message}`);
+        }
       }
 
       // Save data for preview

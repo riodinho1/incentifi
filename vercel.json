@@ -1,8 +1,5 @@
 {
-  "env": {
-    "VITE_SOLANA_NETWORK": "mainnet"
-  },
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }
