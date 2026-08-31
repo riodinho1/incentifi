@@ -6,7 +6,6 @@ import { createRealToken } from '../../lib/createToken';
 import { supabase } from '../../lib/supabase';
 import {
   EVM_CHAIN_NAME,
-  EVM_NATIVE_SYMBOL,
   getEvmProvider,
 } from '../../lib/evmNetwork';
 
@@ -22,32 +21,17 @@ const LaunchPage = () => {
     website: '',
     twitter: '',
     telegram: '',
-    initialLiquidity: '0.1',
-    initialMarketCapUsd: '2000',
   });
   const [errors, setErrors] = useState<{
     tokenName?: string;
     tokenSymbol?: string;
     description?: string;
-    initialLiquidity?: string;
-    initialMarketCapUsd?: string;
   }>({});
   const [imageError, setImageError] = useState('');
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
-  };
-
-  const handleMarketCapChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // Keep the value numeric while avoiding inconsistent mobile number-input validation.
-    const value = e.target.value.replace(/[^0-9.]/g, '');
-    setFormData(prev => ({ ...prev, initialMarketCapUsd: value }));
-  };
-
-  const handleLiquidityChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value.replace(/[^0-9.]/g, '');
-    setFormData(prev => ({ ...prev, initialLiquidity: value }));
   };
 
   const handleImageFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -75,19 +59,11 @@ const LaunchPage = () => {
       tokenName?: string;
       tokenSymbol?: string;
       description?: string;
-      initialLiquidity?: string;
-      initialMarketCapUsd?: string;
     } = {};
     if (!formData.tokenName.trim()) newErrors.tokenName = 'Token name is required';
     if (!formData.tokenSymbol.trim()) newErrors.tokenSymbol = 'Token symbol is required';
     if (!formData.description.trim()) newErrors.description = 'A short token description is required';
     if (formData.tokenSymbol.length > 10) newErrors.tokenSymbol = 'Symbol must be 10 characters or less';
-    if (!Number.isFinite(Number(formData.initialLiquidity)) || Number(formData.initialLiquidity) < 0.0001) {
-      newErrors.initialLiquidity = 'Initial liquidity must be at least 0.0001 ETH';
-    }
-    if (!Number.isFinite(Number(formData.initialMarketCapUsd)) || Number(formData.initialMarketCapUsd) <= 0) {
-      newErrors.initialMarketCapUsd = 'Starting market cap must be greater than $0';
-    }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -120,20 +96,14 @@ const LaunchPage = () => {
         throw new Error('EVM wallet not detected. Install MetaMask, Rabby, or Robinhood Wallet.');
       }
 
-      alert(`Creating your token on ${EVM_CHAIN_NAME}. The pool will be initialized at about $${Number(formData.initialMarketCapUsd).toLocaleString()} market cap using real ${EVM_NATIVE_SYMBOL} liquidity.\n\nThis takes a few wallet approvals: deploying the contract, approving the liquidity pool, seeding it, and locking it.`);
+      alert(`Creating your token on ${EVM_CHAIN_NAME}.\n\nYour wallet will prompt you to sign and submit the ERC-20 token deployment transaction.`);
 
       const result = await createRealToken(provider, formData);
       const launchResult = result as any;
 
-      if (launchResult.liquidity) {
-        alert(
-          `Token deployed and liquidity locked on ${launchResult.chain || EVM_CHAIN_NAME}!\n$${symbol}\nContract: ${launchResult.mint}\nLocked position ID: ${launchResult.liquidity.tokenId}`
-        );
-      } else {
-        alert(
-          `Token deployed on ${launchResult.chain || EVM_CHAIN_NAME}, but liquidity setup failed: ${launchResult.liquidityError}\n\n$${symbol}\nContract: ${launchResult.mint}\n\nThe token contract is live - liquidity can be added later.`
-        );
-      }
+      alert(
+        `Token deployed successfully on ${launchResult.chain || EVM_CHAIN_NAME}!\n$${symbol}\nContract: ${launchResult.mint}`
+      );
 
       // Save token to Supabase
       try {
@@ -239,7 +209,7 @@ const LaunchPage = () => {
           <div className="max-w-7xl mx-auto px-4 sm:px-6">
             <p className="text-xs font-medium uppercase tracking-[0.2em] text-[#9AA29C]">{EVM_CHAIN_NAME} launchpad</p>
             <h1 className="mt-3 text-4xl font-medium tracking-tight text-[#F4F2ED] sm:text-5xl">Launch token</h1>
-            <p className="mt-3 max-w-xl text-sm leading-6 text-[#9C9C9F] sm:text-base">Create a fixed-supply token, seed its ETH market, and lock the resulting Uniswap V3 liquidity.</p>
+            <p className="mt-3 max-w-xl text-sm leading-6 text-[#9C9C9F] sm:text-base">Create a fixed-supply ERC-20 token on {EVM_CHAIN_NAME} with built-in Incentifi trading mechanisms.</p>
           </div>
         </section>
 
@@ -365,7 +335,7 @@ const LaunchPage = () => {
                           value={formData.website}
                           onChange={handleInputChange}
                           placeholder="https://mytoken.com"
-                          className="w-full pl-9 sm:pl-11 pr-3 sm:pr-4 py-2.5 sm:py-3 rounded-xl bg[#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border-[#00D9FF] transition-colors text-xs sm:text-sm"
+                          className="w-full pl-9 sm:pl-11 pr-3 sm:pr-4 py-2.5 sm:py-3 rounded-xl bg-[#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border-[#00D9FF] transition-colors text-xs sm:text-sm"
                         />
                       </div>
                     </div>
@@ -373,14 +343,14 @@ const LaunchPage = () => {
                     <div>
                       <label className="block text-xs text-[#5F6A6E] mb-2 uppercase">X (Twitter)</label>
                       <div className="relative">
-                        <i className="ri-twitter-x-line absolute left-3 sm:left-4 top-1/2 -translate-y-1/2 text [#5F6A6E] text-sm"></i>
+                        <i className="ri-twitter-x-line absolute left-3 sm:left-4 top-1/2 -translate-y-1/2 text-[#5F6A6E] text-sm"></i>
                         <input
                           type="url"
                           name="twitter"
                           value={formData.twitter}
                           onChange={handleInputChange}
                           placeholder="https://x.com/mytoken"
-                          className="w-full pl-9 sm:pl-11 pr-3 sm:pr-4 py-2.5 sm:py-3 rounded-xl bg[#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border-[#00D9FF] transition-colors text-xs sm:text-sm"
+                          className="w-full pl-9 sm:pl-11 pr-3 sm:pr-4 py-2.5 sm:py-3 rounded-xl bg-[#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border-[#00D9FF] transition-colors text-xs sm:text-sm"
                         />
                       </div>
                     </div>
@@ -388,14 +358,14 @@ const LaunchPage = () => {
                     <div>
                       <label className="block text-xs text-[#5F6A6E] mb-2 uppercase">Telegram</label>
                       <div className="relative">
-                        <i className="ri-telegram-line absolute left-3 sm:left-4 top-1/2 -translate-y-1/2 text [#5F6A6E] text-sm"></i>
+                        <i className="ri-telegram-line absolute left-3 sm:left-4 top-1/2 -translate-y-1/2 text-[#5F6A6E] text-sm"></i>
                         <input
                           type="url"
                           name="telegram"
                           value={formData.telegram}
                           onChange={handleInputChange}
                           placeholder="https://t.me/mytoken"
-                          className="w-full pl-9 sm:pl-11 pr-3 sm:pr-4 py-2.5 sm:py-3 rounded-xl bg [#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border [#00D9FF] transition-colors text-xs sm:text-sm"
+                          className="w-full pl-9 sm:pl-11 pr-3 sm:pr-4 py-2.5 sm:py-3 rounded-xl bg-[#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border-[#00D9FF] transition-colors text-xs sm:text-sm"
                         />
                       </div>
                     </div>
@@ -403,70 +373,21 @@ const LaunchPage = () => {
                 </div>
 
                 {/* Token Supply Info */}
-                <div className="p-4 sm:p-5 rounded-xl bg [#0F0F1A] border border-[#2A3338]">
+                <div className="p-4 sm:p-5 rounded-xl bg-[#0F0F1A] border border-[#2A3338]">
                   <div className="flex items-center justify-between text-xs sm:text-sm mb-3">
                     <span className="text-[#5F6A6E]">Token Supply</span>
                     <span className="text-[#E9E1D8] font-semibold">1,000,000,000 (1B)</span>
                   </div>
                   <div className="flex items-center justify-between text-xs sm:text-sm">
                     <span className="text-[#5F6A6E]">Decimals</span>
-                    <span className="text [#E9E1D8] font-semibold">18 (EVM Standard)</span>
+                    <span className="text-[#E9E1D8] font-semibold">18 (EVM Standard)</span>
                   </div>
-                </div>
-
-                {/* Initial Liquidity */}
-                <div>
-                  <label className="block text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2 sm:mb-3 uppercase tracking-wide">
-                    Initial Liquidity ({EVM_NATIVE_SYMBOL})
-                  </label>
-                  <div className="relative rounded-2xl border border-[#414146] bg-[#1B1B1D] transition-colors focus-within:border-[#C8FF49] focus-within:ring-4 focus-within:ring-[#C8FF49]/10">
-                    <input
-                      type="text"
-                      name="initialLiquidity"
-                      value={formData.initialLiquidity}
-                      onChange={handleLiquidityChange}
-                      placeholder="0.1"
-                      inputMode="decimal"
-                      autoComplete="off"
-                      className="w-full rounded-2xl bg-transparent px-5 py-4 pr-28 text-xl font-medium text-[#F4F2ED] placeholder-[#77777C] outline-none sm:text-2xl"
-                    />
-                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded-xl border border-[#3B3B40] bg-[#111112] px-3 py-2 text-sm font-semibold text-[#E8E6E1] sm:right-4">
-                      <span className="inline-flex items-center gap-2"><img src="/ethereum.svg" alt="" className="h-4 w-4" />{EVM_NATIVE_SYMBOL}</span>
-                    </span>
-                  </div>
-                  <p className="text-xs text-[#5F6A6E] mt-2">
-                    Real {EVM_NATIVE_SYMBOL} is paired with the calculated portion of supply needed for your selected starting market cap. The resulting liquidity position is permanently locked.
-                  </p>
-                  {errors.initialLiquidity && <p className="text-xs text-red-400 mt-2">{errors.initialLiquidity}</p>}
-                </div>
-
-                <div>
-                  <label className="block text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2 sm:mb-3 uppercase tracking-wide">
-                    Starting Market Cap (USD)
-                  </label>
-                  <div className="relative rounded-2xl border border-[#414146] bg-[#1B1B1D] transition-colors focus-within:border-[#C8FF49] focus-within:ring-4 focus-within:ring-[#C8FF49]/10">
-                    <span className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-xl font-medium text-[#8E8E94] sm:text-2xl">$</span>
-                    <input
-                      type="text"
-                      name="initialMarketCapUsd"
-                      value={formData.initialMarketCapUsd}
-                      onChange={handleMarketCapChange}
-                      placeholder="2000"
-                      inputMode="decimal"
-                      autoComplete="off"
-                      className="w-full rounded-2xl bg-transparent py-4 pl-11 pr-5 text-xl font-medium text-[#F4F2ED] placeholder-[#77777C] outline-none sm:text-2xl"
-                    />
-                  </div>
-                  {errors.initialMarketCapUsd && <p className="text-xs text-red-400 mt-2">{errors.initialMarketCapUsd}</p>}
-                  <p className="text-xs text-[#5F6A6E] mt-2">
-                    The launch price is calculated from this target and the live ETH/USD rate. It is a real pool price, not a display-only number; trading moves it from there.
-                  </p>
                 </div>
 
                 {/* Incentive Mechanism Info */}
                 <div className="p-4 sm:p-6 rounded-xl bg-gradient-to-r from-[#00D9FF]/10 to-[#9D00FF]/10 border border-[#00D9FF]/30">
                   <div className="flex items-start gap-3 sm:gap-4">
-                    <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-r from-[#00D9FF] to [#9D00FF] flex items-center justify-center flex-shrink-0">
+                    <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-r from-[#00D9FF] to-[#9D00FF] flex items-center justify-center flex-shrink-0">
                       <i className="ri-information-line text-white text-sm sm:text-base"></i>
                     </div>
                     <div>
@@ -474,7 +395,7 @@ const LaunchPage = () => {
                         Robinhood Chain EVM Deployment
                       </p>
                       <p className="text-xs text-[#9FA6A3] leading-relaxed">
-                        This deploys an ERC-20 token contract on Robinhood Chain, then seeds and permanently locks a Uniswap V3 liquidity position in the same launch.
+                        This deploys an ERC-20 token contract on Robinhood Chain, with the fixed 1B supply minted directly to your creator wallet.
                       </p>
                     </div>
                   </div>
@@ -486,15 +407,15 @@ const LaunchPage = () => {
                   disabled={!connected}
                   className={`w-full py-4 sm:py-5 rounded-xl text-white text-base sm:text-lg font-bold transition-all whitespace-nowrap ${
                     connected
-                      ? 'bg-gradient-to-r from-[#00D9FF] to [#9D00FF] hover:shadow-2xl hover:shadow-[#00D9FF]/30 hover:scale-[1.02] cursor-pointer'
+                      ? 'bg-gradient-to-r from-[#00D9FF] to-[#9D00FF] hover:shadow-2xl hover:shadow-[#00D9FF]/30 hover:scale-[1.02] cursor-pointer'
                       : 'bg-gray-700 opacity-60 cursor-not-allowed'
                   }`}
                 >
                   {connected ? 'Create Token' : 'Connect Wallet First'}
                 </button>
                 <div className="text-center text-xs text-[#5F6A6E] space-y-1">
-                  <p>Robinhood Chain deployment + locked liquidity</p>
-                  <p>Your wallet pays network gas and the {EVM_NATIVE_SYMBOL} liquidity amount above.</p>
+                  <p>Robinhood Chain ERC-20 token deployment</p>
+                  <p>Your wallet pays standard network gas for the transaction.</p>
                 </div>
               </div>
             </form>
@@ -517,14 +438,14 @@ const LaunchPage = () => {
                   </p>
                 </div>
                 <div className="border-t border-[#37373B] py-2">
-                  <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Paired with</span><span className="inline-flex items-center gap-2 font-semibold text-[#F2F0EB]"><img src="/ethereum.svg" alt="Ethereum" className="h-4 w-4" />{EVM_NATIVE_SYMBOL}</span></div>
-                  <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Pool fee</span><span className="font-semibold text-[#F2F0EB]">1.00%</span></div>
-                  <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Initial liquidity</span><span className="font-semibold text-[#F2F0EB]">{formData.initialLiquidity || '0'} {EVM_NATIVE_SYMBOL}</span></div>
-                  <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Starting market cap</span><span className="font-semibold text-[#F2F0EB]">${Number(formData.initialMarketCapUsd || 0).toLocaleString()}</span></div>
-                  <div className="flex items-center justify-between py-4 text-sm"><span className="text-[#A3A3A6]">Liquidity</span><span className="font-semibold text-[#C8FF49]">Locked after launch</span></div>
+                  <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Network</span><span className="inline-flex items-center gap-2 font-semibold text-[#F2F0EB]">{EVM_CHAIN_NAME}</span></div>
+                  <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Token Standard</span><span className="font-semibold text-[#F2F0EB]">ERC-20</span></div>
+                  <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Total Supply</span><span className="font-semibold text-[#F2F0EB]">1,000,000,000</span></div>
+                  <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Decimals</span><span className="font-semibold text-[#F2F0EB]">18</span></div>
+                  <div className="flex items-center justify-between py-4 text-sm"><span className="text-[#A3A3A6]">Trading Mechanism</span><span className="font-semibold text-[#C8FF49]">Incentifi Router</span></div>
                 </div>
                 <div className="mt-auto rounded-2xl bg-[#101011] p-4 text-xs leading-5 text-[#9D9DA1]">
-                  Your wallet submits every transaction. Launches are irreversible once confirmed on {EVM_CHAIN_NAME}.
+                  Your wallet submits the deployment transaction. Launches are irreversible once confirmed on {EVM_CHAIN_NAME}.
                 </div>
               </div>
             </aside>
@@ -538,7 +459,7 @@ const LaunchPage = () => {
                   {
                     number: '1',
                     title: 'Contract Deployed',
-                    description: 'An ERC-20 token contract is deployed on Robinhood Chain with your selected name and symbol.'
+                    description: `An ERC-20 token contract is deployed on ${EVM_CHAIN_NAME} with your selected name and symbol.`
                   },
                   {
                     number: '2',
@@ -552,12 +473,7 @@ const LaunchPage = () => {
                   },
                   {
                     number: '4',
-                    title: 'Liquidity Locked',
-                    description: 'The calculated portion of supply is paired with your ETH into a Uniswap V3 pool, then the position is permanently locked.'
-                  },
-                  {
-                    number: '5',
-                    title: 'Loss-Reward Protection Active',
+                    title: 'Incentifi Router & Holder Protection',
                     description: 'All trades route through the Incentifi Router with a 1.0% creator fee (0.5% to creator, 0.5% to the Loss Reward Pool). Eligible underwater holders receive hourly 10% loss-reward distributions in native ETH.'
                   }
                 ].map((step, index) => (
@@ -586,9 +502,9 @@ const LaunchPage = () => {
               <span className="w-px h-3 bg-[#2A3338]"></span>
               <span>{EVM_CHAIN_NAME}</span>
               <span className="w-px h-3 bg-[#2A3338]"></span>
-              <a href="#" className="hover:text-[#9FA6A3] transition-colors">Docs</a>
+              <Link to="/docs" className="hover:text-[#9FA6A3] transition-colors">Docs</Link>
               <span className="w-px h-3 bg-[#2A3338]"></span>
-              <a href="#" className="hover:text-[#9FA6A3] transition-colors">GitHub</a>
+              <a href="https://github.com/riodinho1/incentifi" target="_blank" rel="noreferrer" className="hover:text-[#9FA6A3] transition-colors">GitHub</a>
             </div>
             <p className="text-xs text-[#5F6A6E] text-center">
               © 2025 incentifi. Not financial advice. DYOR.

@@ -303,7 +303,7 @@ const HomePage = () => {
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 {[
                   ['Coins', tokens.length.toString()],
-                  ['Liquidity', '$0'],
+                  ['Network', EVM_CHAIN_NAME],
                   ['MCap', `$${totalMarketCap.toLocaleString()}`],
                 ].map(([label, value]) => (
                   <div key={label} className="rounded-xl border border-[#183033] bg-[#071012] p-3">
@@ -440,7 +440,7 @@ const HomePage = () => {
               {
                 icon: Rocket,
                 title: 'Create',
-                body: 'Set coin name, symbol, image, socials, and initial liquidity from one guided launch form.',
+                body: 'Set coin name, symbol, image, and socials from one guided launch form.',
               },
               {
                 icon: ShieldCheck,
@@ -477,7 +477,7 @@ const HomePage = () => {
             <div className="grid gap-4 sm:grid-cols-2">
               {[
                 ['Creator signal', 'Show who launched the coin and where holders can verify project links.'],
-                ['Market context', 'Keep market cap, liquidity, volume, and 24h movement close to the token identity.'],
+                ['Market context', 'Keep market cap, volume, and 24h movement close to the token identity.'],
                 ['Trading surface', 'Give buyers and sellers a focused place to review the rule before acting.'],
                 ['Documentation path', 'Send confused users straight into the docs without leaving the product flow.'],
               ].map(([title, body]) => (

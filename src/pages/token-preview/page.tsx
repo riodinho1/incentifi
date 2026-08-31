@@ -1542,7 +1542,7 @@ const TokenPreviewPage = () => {
                   <div className="mt-3">
                     <p className="text-xs text-[#8DA3CD] uppercase tracking-wide">Live Market Cap</p>
                     <p className="text-3xl sm:text-4xl font-bold text-white">
-                      {livePoolState ? formatCurrencyCompact(marketCapUsd) : 'Awaiting liquidity'}
+                      {livePoolState ? formatCurrencyCompact(marketCapUsd) : 'Awaiting pool'}
                     </p>
                     <div className="flex items-center gap-3 mt-2">
                       <p className={`text-sm ${mcap24hDeltaPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>

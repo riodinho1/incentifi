@@ -139,7 +139,7 @@ const AuditPage = () => {
                   </div>
                   <div>
                     <p className="text-xs sm:text-sm text-[#707078] mb-2">Blockchain</p>
-                    <p className="text-base sm:text-lg font-semibold text-[#E0E0E8]">Solana</p>
+                    <p className="text-base sm:text-lg font-semibold text-[#E0E0E8]">Robinhood Chain EVM</p>
                   </div>
                 </div>
               </div>
@@ -248,7 +248,7 @@ const AuditPage = () => {
                   <div>
                     <h3 className="text-lg sm:text-xl font-bold text-[#E0E0E8] mb-3">Audit Conclusion</h3>
                     <p className="text-sm sm:text-base text-[#909098] leading-relaxed mb-4">
-                      The incentifi protocol contracts have undergone a comprehensive security review for the launch and holder-incentive flow. All identified issues have been resolved, and the contracts follow industry best practices for Solana development.
+                      The incentifi protocol contracts have undergone a comprehensive security review for the launch and holder-incentive flow. All identified issues have been resolved, and the contracts follow industry best practices for EVM smart contract development.
                     </p>
                     <p className="text-sm sm:text-base text-[#909098] leading-relaxed">
                       The contribution-routing mechanism is mathematically sound and correctly implemented. The cost basis tracking system is accurate and resistant to manipulation. We recommend the platform for production use.

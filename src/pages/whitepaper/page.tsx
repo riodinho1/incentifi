@@ -103,7 +103,7 @@ const WhitepaperPage = () => {
                 <h2 className="text-2xl sm:text-3xl font-bold text-[#C0C0C8] mb-4 sm:mb-6">Abstract</h2>
                 <div className="bg-[#0F0F15] border border-[#1A1A20] rounded-2xl p-6 sm:p-8">
                   <p className="text-sm sm:text-base text-[#909098] leading-relaxed">
-                    incentifi introduces a Solana launch platform for tokens with clear holder incentives. By making contribution routing visible from launch and directing below-entry contributions toward project treasury, incentifi gives creators a cleaner way to build markets around transparency, sustainability, and community alignment.
+                    incentifi introduces a Robinhood Chain EVM launch platform for tokens with clear holder incentives. By implementing on-chain router fee splitting (0.5% creator / 0.5% Loss Reward Pool) and hourly loss-reward distributions for eligible underwater holders, incentifi gives creators a cleaner way to build markets around transparency, sustainability, and community alignment.
                   </p>
                 </div>
               </div>
@@ -128,11 +128,11 @@ const WhitepaperPage = () => {
                       </li>
                       <li className="flex items-start gap-3">
                         <i className="ri-arrow-right-s-line text-[#14B8A6] mt-1 flex-shrink-0"></i>
-                        <span>Below-entry exits creating early treasury and market questions</span>
+                        <span>Uncompensated volatility hurting early token believers</span>
                       </li>
                       <li className="flex items-start gap-3">
                         <i className="ri-arrow-right-s-line text-[#14B8A6] mt-1 flex-shrink-0"></i>
-                        <span>No clear route for supporting project sustainability</span>
+                        <span>No sustainable recurring revenue mechanism for legitimate creators</span>
                       </li>
                     </ul>
                   </div>
@@ -140,7 +140,7 @@ const WhitepaperPage = () => {
                   <div className="bg-[#0F0F15] border border-[#1A1A20] rounded-2xl p-6 sm:p-8">
                     <h3 className="text-lg sm:text-xl font-semibold text-[#E0E0E8] mb-3 sm:mb-4">1.2 Our Solution</h3>
                     <p className="text-sm sm:text-base text-[#909098] leading-relaxed">
-                      incentifi implements a cost-basis-aware routing model that can direct 50% of SOL proceeds to treasury when tokens are sold below average entry. That contribution creates a visible treasury mechanism while keeping the flow clear before users trade.
+                      incentifi implements an on-chain router fee split: 0.5% is forwarded directly to the creator in native ETH, and 0.5% is deposited into the Loss Reward Pool. Eligible underwater holders receive hourly 10% pool distributions verified via cryptographic Merkle proofs.
                     </p>
                   </div>
                 </div>
@@ -153,7 +153,7 @@ const WhitepaperPage = () => {
                   <div className="bg-[#0F0F15] border border-[#1A1A20] rounded-2xl p-6 sm:p-8">
                     <h3 className="text-lg sm:text-xl font-semibold text-[#E0E0E8] mb-3 sm:mb-4">2.1 Smart Contract Design</h3>
                     <p className="text-sm sm:text-base text-[#909098] leading-relaxed mb-4">
-                      Built on Solana blockchain for high-speed, low-cost transactions. Key components include:
+                      Built on Robinhood Chain EVM for low-latency, gas-efficient execution. Key components include:
                     </p>
                     <div className="space-y-3">
                       <div className="flex items-start gap-3">
@@ -161,8 +161,8 @@ const WhitepaperPage = () => {
                           <i className="ri-code-s-slash-line text-[#14B8A6]"></i>
                         </div>
                         <div>
-                          <p className="text-sm sm:text-base font-semibold text-[#E0E0E8] mb-1">Cost Basis Tracker</p>
-                          <p className="text-xs sm:text-sm text-[#707078]">Automatically records purchase price for each holder</p>
+                          <p className="text-sm sm:text-base font-semibold text-[#E0E0E8] mb-1">IncentifiSwapRouter</p>
+                          <p className="text-xs sm:text-sm text-[#707078]">Executes trades, applies 1.0% fee split between creator and loss pool, and records cost basis</p>
                         </div>
                       </div>
                       <div className="flex items-start gap-3">
@@ -170,8 +170,8 @@ const WhitepaperPage = () => {
                           <i className="ri-shield-check-line text-[#14B8A6]"></i>
                         </div>
                         <div>
-                          <p className="text-sm sm:text-base font-semibold text-[#E0E0E8] mb-1">Route Calculator</p>
-                          <p className="text-xs sm:text-sm text-[#707078]">Determines whether a sale is below entry and calculates the contribution route</p>
+                          <p className="text-sm sm:text-base font-semibold text-[#E0E0E8] mb-1">LossRewardPool</p>
+                          <p className="text-xs sm:text-sm text-[#707078]">Holds reward assets securely in isolated vaults and verifies Merkle claim proofs</p>
                         </div>
                       </div>
                       <div className="flex items-start gap-3">
@@ -179,28 +179,25 @@ const WhitepaperPage = () => {
                           <i className="ri-safe-line text-[#14B8A6]"></i>
                         </div>
                         <div>
-                          <p className="text-sm sm:text-base font-semibold text-[#E0E0E8] mb-1">Treasury Manager</p>
-                          <p className="text-xs sm:text-sm text-[#707078]">Collects and manages routed contribution funds</p>
+                          <p className="text-sm sm:text-base font-semibold text-[#E0E0E8] mb-1">EVM Indexer & Worker</p>
+                          <p className="text-xs sm:text-sm text-[#707078]">Tracks cost basis, detects direct DEX bypasses, and publishes hourly distribution roots</p>
                         </div>
                       </div>
                     </div>
                   </div>
 
                   <div className="bg-[#0F0F15] border border-[#1A1A20] rounded-2xl p-6 sm:p-8">
-                    <h3 className="text-lg sm:text-xl font-semibold text-[#E0E0E8] mb-3 sm:mb-4">2.2 Contribution Routing</h3>
+                    <h3 className="text-lg sm:text-xl font-semibold text-[#E0E0E8] mb-3 sm:mb-4">2.2 Fee Routing & Invariants</h3>
                     <div className="bg-[#08080D] border border-[#1A1A20] rounded-xl p-4 sm:p-6 mb-4">
                       <code className="text-xs sm:text-sm text-[#14B8A6] font-mono">
-                        if (sellPrice &lt; costBasis) &#123;<br />
-                        &nbsp;&nbsp;contribution = proceeds * 0.5;<br />
-                        &nbsp;&nbsp;toSeller = proceeds - contribution;<br />
-                        &nbsp;&nbsp;toTreasury = contribution;<br />
-                        &#125; else &#123;<br />
-                        &nbsp;&nbsp;toSeller = proceeds;<br />
-                        &#125;
+                        fee = swapAmount * 0.01;<br />
+                        creatorFee = fee * 0.5; // 0.50% to Creator (ETH)<br />
+                        lossPoolFee = fee * 0.5; // 0.50% to Loss Pool (ETH)<br />
+                        netSwap = swapAmount - fee;<br />
                       </code>
                     </div>
                     <p className="text-sm sm:text-base text-[#909098] leading-relaxed">
-                      The contribution route only applies when tokens are sold below the holder's average purchase price, keeping upside trades and long-term holders in the standard flow.
+                      Every router trade directly funds the Loss Reward Pool and compensates the creator. All reward claims are validated cryptographically against on-chain Merkle roots.
                     </p>
                   </div>
                 </div>
@@ -220,13 +217,13 @@ const WhitepaperPage = () => {
                         </div>
                         <div className="h-px bg-[#1A1A20]"></div>
                         <div className="flex items-center justify-between">
-                          <span className="text-sm sm:text-base text-[#707078]">Platform Pool</span>
-                          <span className="text-sm sm:text-base font-semibold text-[#14B8A6]">80%</span>
+                          <span className="text-sm sm:text-base text-[#707078]">Standard</span>
+                          <span className="text-sm sm:text-base font-semibold text-[#14B8A6]">ERC-20</span>
                         </div>
                         <div className="h-px bg-[#1A1A20]"></div>
                         <div className="flex items-center justify-between">
-                          <span className="text-sm sm:text-base text-[#707078]">Creator Allocation</span>
-                          <span className="text-sm sm:text-base font-semibold text-[#14B8A6]">20%</span>
+                          <span className="text-sm sm:text-base text-[#707078]">Decimals</span>
+                          <span className="text-sm sm:text-base font-semibold text-[#14B8A6]">18</span>
                         </div>
                       </div>
                     </div>
@@ -234,18 +231,18 @@ const WhitepaperPage = () => {
                       <h3 className="text-lg sm:text-xl font-semibold text-[#E0E0E8] mb-4">Fee Structure</h3>
                       <div className="space-y-3">
                         <div className="flex items-center justify-between">
-                          <span className="text-sm sm:text-base text-[#707078]">Upside Exits</span>
-                          <span className="text-sm sm:text-base font-semibold text-[#14B8A6]">0%</span>
+                          <span className="text-sm sm:text-base text-[#707078]">Router Swap Fee</span>
+                          <span className="text-sm sm:text-base font-semibold text-[#14B8A6]">1.00%</span>
                         </div>
                         <div className="h-px bg-[#1A1A20]"></div>
                         <div className="flex items-center justify-between">
-                          <span className="text-sm sm:text-base text-[#707078]">Below-Entry Contributions</span>
-                          <span className="text-sm sm:text-base font-semibold text-[#EF4444]">50%</span>
+                          <span className="text-sm sm:text-base text-[#707078]">Creator Fee Split</span>
+                          <span className="text-sm sm:text-base font-semibold text-[#14B8A6]">0.50% (ETH)</span>
                         </div>
                         <div className="h-px bg-[#1A1A20]"></div>
                         <div className="flex items-center justify-between">
-                          <span className="text-sm sm:text-base text-[#707078]">Platform Fee</span>
-                          <span className="text-sm sm:text-base font-semibold text-[#14B8A6]">1 SOL</span>
+                          <span className="text-sm sm:text-base text-[#707078]">Loss Reward Pool Split</span>
+                          <span className="text-sm sm:text-base font-semibold text-[#14B8A6]">0.50% (ETH)</span>
                         </div>
                       </div>
                     </div>
@@ -261,7 +258,7 @@ const WhitepaperPage = () => {
                     {
                       icon: 'ri-community-line',
                       title: 'Community Tokens',
-                      description: 'Build loyal communities with aligned incentives'
+                      description: 'Build loyal communities with holder loss-reward protection'
                     },
                     {
                       icon: 'ri-game-line',
@@ -270,13 +267,13 @@ const WhitepaperPage = () => {
                     },
                     {
                       icon: 'ri-palette-line',
-                      title: 'NFT Collections',
-                      description: 'Create sustainable economies for digital art'
+                      title: 'Creator Tokens',
+                      description: 'Earn ongoing ETH revenue from trading activity'
                     },
                     {
                       icon: 'ri-funds-line',
-                      title: 'DeFi Protocols',
-                      description: 'Incentivize liquidity providers and stakers'
+                      title: 'DeFi Projects',
+                      description: 'Incentivize long-term holders with verified loss rewards'
                     }
                   ].map((useCase, index) => (
                     <div key={index} className="bg-[#0F0F15] border border-[#1A1A20] rounded-2xl p-6 hover:border-[#14B8A6]/30 transition-all">
@@ -329,7 +326,7 @@ const WhitepaperPage = () => {
                 <h2 className="text-2xl sm:text-3xl font-bold text-[#C0C0C8] mb-4 sm:mb-6">6. Conclusion</h2>
                 <div className="bg-gradient-to-r from-[#14B8A6]/10 to-[#0D9488]/10 border border-[#14B8A6]/30 rounded-2xl p-6 sm:p-8">
                   <p className="text-sm sm:text-base text-[#909098] leading-relaxed">
-                    incentifi aligns creators, holders, and communities around routes that are visible before launch. By turning below-entry exits into transparent treasury support and keeping upside exits simple, the platform helps creators launch tokens with a stronger incentive story from day one.
+                    incentifi aligns creators, holders, and communities around routes that are visible before launch. By turning trading fee revenue into creator income and holder loss rewards, the platform helps creators launch tokens with a stronger incentive story from day one.
                   </p>
                 </div>
               </div>
