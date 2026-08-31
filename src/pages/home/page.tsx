@@ -67,7 +67,7 @@ const shortenAddress = (addr?: string) => {
 };
 
 const formatMarketCap = (val?: number) => {
-  if (!val || val <= 0) return 'Awaiting pool';
+  if (!val || val <= 0) return '$5.0k';
   if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(2)}M`;
   if (val >= 1_000) return `$${(val / 1_000).toFixed(1)}k`;
   return `$${val.toFixed(0)}`;
@@ -103,13 +103,13 @@ const HomePage = () => {
           const mint = String(row.mint_address || '').toLowerCase();
           const snap = snapshotsByMint.get(mint);
 
-          // Calculate real Pump.fun market cap: 1,000,000,000 tokens * price
+          // Calculate real Pump.fun market cap: 1,000,000,000 tokens * price (or initial $5,000)
           const priceEth = snap ? Number(snap.price_eth || 0) : 0;
-          const marketCapUsd = snap?.market_cap_usd
+          const marketCapUsd = snap?.market_cap_usd && Number(snap.market_cap_usd) > 0
             ? Number(snap.market_cap_usd)
             : priceEth > 0
               ? 1_000_000_000 * priceEth * 2500
-              : 0;
+              : 5000;
 
           return {
             id: String(row.id || ''),

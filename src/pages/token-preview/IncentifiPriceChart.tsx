@@ -666,12 +666,12 @@ export const IncentifiPriceChart = ({
         </div>
 
         {/* Right: Controls (Chart Type & Timeframe Switcher) */}
-        <div className="flex flex-wrap items-center gap-2 self-start md:self-center">
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 self-start md:self-center">
           {/* Chart Type Toggle */}
           <div className="flex items-center bg-[#070A12] p-0.5 rounded-lg border border-[#1D2940]">
             <button
               onClick={() => setChartType('candles')}
-              className={`px-2.5 py-1 text-xs font-medium rounded-md transition ${
+              className={`px-2 sm:px-2.5 py-1 text-[11px] sm:text-xs font-medium rounded-md transition ${
                 chartType === 'candles'
                   ? 'bg-[#1D2940] text-white'
                   : 'text-[#7D92BC] hover:text-white'
@@ -682,7 +682,7 @@ export const IncentifiPriceChart = ({
             </button>
             <button
               onClick={() => setChartType('area')}
-              className={`px-2.5 py-1 text-xs font-medium rounded-md transition ${
+              className={`px-2 sm:px-2.5 py-1 text-[11px] sm:text-xs font-medium rounded-md transition ${
                 chartType === 'area'
                   ? 'bg-[#1D2940] text-white'
                   : 'text-[#7D92BC] hover:text-white'
@@ -699,7 +699,7 @@ export const IncentifiPriceChart = ({
               <button
                 key={tf}
                 onClick={() => setTimeframe(tf)}
-                className={`px-2.5 py-1 text-xs font-medium rounded-md transition ${
+                className={`px-1.5 sm:px-2.5 py-1 text-[11px] sm:text-xs font-medium rounded-md transition ${
                   timeframe === tf
                     ? 'bg-[#36BCFF]/20 text-[#36BCFF] font-semibold'
                     : 'text-[#7D92BC] hover:text-white'
@@ -713,7 +713,7 @@ export const IncentifiPriceChart = ({
       </div>
 
       {/* Chart Canvas */}
-      <div ref={containerRef} className="h-[480px] w-full rounded-xl overflow-hidden bg-[#070A12]" />
+      <div ref={containerRef} className="h-[340px] sm:h-[420px] lg:h-[480px] w-full rounded-xl overflow-hidden bg-[#070A12]" />
     </div>
   );
 };
