@@ -143,3 +143,79 @@ export const fetchIndexerHeartbeat = async (
     updatedAt: Date.parse((data as any).updated_at) || 0,
   };
 };
+
+export type EvmIndexedSnapshot = {
+  tokenAddress: string;
+  symbol: string;
+  priceEth: number;
+  priceUsd: number;
+  liquidityEth: number;
+  volume24hEth: number;
+  marketCapUsd: number;
+  lossPoolTvlEth: number;
+  priceChange24hPct: number;
+  updatedAt: number;
+};
+
+export type EvmIndexedTrade = {
+  txHash: string;
+  tokenAddress: string;
+  traderAddress: string;
+  side: 'buy' | 'sell';
+  amountToken: number;
+  amountEth: number;
+  priceEth: number;
+  creatorFeeEth: number;
+  lossPoolFeeEth: number;
+  isUnderwaterSale: boolean;
+  blockTime: number;
+};
+
+export const fetchEvmSnapshot = async (tokenAddress: string): Promise<EvmIndexedSnapshot | null> => {
+  if (!tokenAddress) return null;
+  const { data, error } = await supabase
+    .from('token_market_snapshots_evm')
+    .select('*')
+    .eq('token_address', tokenAddress.toLowerCase())
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return {
+    tokenAddress: data.token_address,
+    symbol: data.symbol,
+    priceEth: toNumber(data.price_eth),
+    priceUsd: toNumber(data.price_usd),
+    liquidityEth: toNumber(data.liquidity_eth),
+    volume24hEth: toNumber(data.volume_24h_eth),
+    marketCapUsd: toNumber(data.market_cap_usd),
+    lossPoolTvlEth: toNumber(data.loss_pool_tvl_eth),
+    priceChange24hPct: toNumber(data.price_change_24h_pct),
+    updatedAt: Date.parse(data.updated_at) || Date.now(),
+  };
+};
+
+export const fetchEvmTrades = async (tokenAddress: string, limit = 80): Promise<EvmIndexedTrade[]> => {
+  if (!tokenAddress) return [];
+  const { data, error } = await supabase
+    .from('token_trades_evm')
+    .select('*')
+    .eq('token_address', tokenAddress.toLowerCase())
+    .order('block_time', { ascending: false })
+    .limit(limit);
+
+  if (error || !data) return [];
+  return (data as any[]).map((row) => ({
+    txHash: row.tx_hash,
+    tokenAddress: row.token_address,
+    traderAddress: row.trader_address,
+    side: row.side === 'sell' ? 'sell' : 'buy',
+    amountToken: toNumber(row.amount_token),
+    amountEth: toNumber(row.amount_eth),
+    priceEth: toNumber(row.price_eth),
+    creatorFeeEth: toNumber(row.creator_fee_eth),
+    lossPoolFeeEth: toNumber(row.loss_pool_fee_eth),
+    isUnderwaterSale: Boolean(row.is_underwater_sale),
+    blockTime: Date.parse(row.block_time) || Date.now(),
+  }));
+};
+

@@ -29,6 +29,7 @@ const LaunchPage = () => {
     description?: string;
   }>({});
   const [imageError, setImageError] = useState('');
+  const [isDeploying, setIsDeploying] = useState(false);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -75,12 +76,14 @@ const LaunchPage = () => {
     if (!connected) return alert('Connect wallet first');
 
     try {
+      setIsDeploying(true);
       const symbol = normalizeSymbol(formData.tokenSymbol);
       
       const symbolCheck = await verifySymbolAvailability(symbol);
       if (!symbolCheck.isAvailable) {
         setErrors((prev) => ({ ...prev, tokenSymbol: symbolCheck.error || 'Symbol unavailable' }));
         alert(symbolCheck.error || `Could not verify availability for $${symbol}. Deployment stopped.`);
+        setIsDeploying(false);
         return;
       }
 
@@ -118,7 +121,6 @@ const LaunchPage = () => {
             created_at: new Date().toISOString(),
           });
           if (error) throw new Error(error.message);
-          alert('Token launched and saved to registry!');
         } catch (err: unknown) {
           console.error('Supabase save error:', err);
           const message = err instanceof Error ? err.message : 'Unknown Supabase error';
@@ -139,373 +141,473 @@ const LaunchPage = () => {
     } catch (err: any) {
       console.error('Token creation error:', err);
       alert('Failed to create token: ' + (err.message || 'Unknown error. Check console for details.'));
+    } finally {
+      setIsDeploying(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-[#0B0B0C] text-[#F3F1ED]">
+    <div className="min-h-screen bg-[#070A12] text-slate-100 font-sans selection:bg-[#10B981]/30 selection:text-white">
       {/* Header */}
-      <header className="fixed top-0 left-0 right-0 z-50 border-b border-[#29292C] bg-[#101011]/95 backdrop-blur-xl">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6">
+      <header className="fixed top-0 left-0 right-0 z-50 border-b border-[#1E293B] bg-[#070A12]/90 backdrop-blur-xl">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16 sm:h-20">
-            <Link to="/" className="flex items-center gap-2 sm:gap-3 hover:opacity-80 transition-opacity">
+            <Link to="/" className="flex items-center gap-3 hover:opacity-90 transition-opacity">
               <img 
                 src="/incentifi-logo.jpeg" 
                 alt="incentifi"
-                className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg"
+                className="w-9 h-9 rounded-xl border border-[#1E293B] shadow-md shadow-emerald-950/20"
               />
-              <span className="brand-type text-lg sm:text-xl font-semibold text-[#E9E1D8] tracking-normal">incentifi</span>
+              <div className="flex flex-col">
+                <span className="text-xl font-bold tracking-tight text-white flex items-center gap-1.5">
+                  incentifi
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#10B981]"></span>
+                </span>
+                <span className="text-[10px] text-slate-400 font-medium tracking-wide uppercase">{EVM_CHAIN_NAME}</span>
+              </div>
             </Link>
             
             <nav className="hidden md:flex items-center gap-8">
-              <Link to="/" className="text-[#9FA6A3] hover:text-[#E9E1D8] transition-colors text-sm font-medium">
+              <Link to="/" className="text-slate-400 hover:text-white transition-colors text-sm font-medium">
                 Home
               </Link>
-              <Link to="/launch" className="text-[#E9E1D8] font-medium text-sm">
-                Launch
+              <Link to="/launch" className="text-[#10B981] font-semibold text-sm flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] animate-pulse"></span>
+                Launch Token
               </Link>
+              <Link to="/docs" className="text-slate-400 hover:text-white transition-colors text-sm font-medium">
+                Docs
+              </Link>
+              <div className="h-4 w-px bg-[#1E293B]" />
               <WalletButton />
             </nav>
 
             {/* Mobile menu button */}
             <button 
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="md:hidden w-10 h-10 flex items-center justify-center text-[#E9E1D8] hover:text-[#00D9FF] transition-colors"
+              className="md:hidden w-10 h-10 flex items-center justify-center rounded-xl bg-[#0D1322] border border-[#1E293B] text-slate-300 hover:text-white transition-colors"
             >
-              <i className={`${mobileMenuOpen ? 'ri-close-line' : 'ri-menu-line'} text-2xl`}></i>
+              <i className={`${mobileMenuOpen ? 'ri-close-line' : 'ri-menu-line'} text-xl`}></i>
             </button>
           </div>
 
           {/* Mobile menu */}
           {mobileMenuOpen && (
-            <div className="md:hidden py-4 border-t border-[#2A3338]">
-              <nav className="flex flex-col gap-4">
+            <div className="md:hidden py-4 border-t border-[#1E293B] bg-[#070A12]/95 backdrop-blur-xl">
+              <nav className="flex flex-col gap-3">
                 <Link 
                   to="/" 
                   onClick={() => setMobileMenuOpen(false)}
-                  className="text-[#9FA6A3] hover:text-[#E9E1D8] transition-colors text-sm font-medium px-2"
+                  className="text-slate-400 hover:text-white transition-colors text-sm font-medium px-3 py-2 rounded-lg hover:bg-[#0D1322]"
                 >
                   Home
                 </Link>
                 <Link 
                   to="/launch" 
                   onClick={() => setMobileMenuOpen(false)}
-                  className="text-[#E9E1D8] font-medium text-sm px-2"
+                  className="text-[#10B981] font-semibold text-sm px-3 py-2 rounded-lg bg-[#10B981]/10 border border-[#10B981]/20"
                 >
-                  Launch
+                  Launch Token
                 </Link>
-                <WalletButton />
+                <Link 
+                  to="/docs" 
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="text-slate-400 hover:text-white transition-colors text-sm font-medium px-3 py-2 rounded-lg hover:bg-[#0D1322]"
+                >
+                  Docs
+                </Link>
+                <div className="pt-2">
+                  <WalletButton />
+                </div>
               </nav>
             </div>
           )}
         </div>
       </header>
 
-      <main className="pt-16 sm:pt-20">
-        {/* Hero */}
-        <section className="border-b border-[#202023] bg-[radial-gradient(circle_at_15%_0%,rgba(114,170,116,.09),transparent_34%),#0B0B0C] py-12 sm:py-16">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6">
-            <p className="text-xs font-medium uppercase tracking-[0.2em] text-[#9AA29C]">{EVM_CHAIN_NAME} launchpad</p>
-            <h1 className="mt-3 text-4xl font-medium tracking-tight text-[#F4F2ED] sm:text-5xl">Launch token</h1>
-            <p className="mt-3 max-w-xl text-sm leading-6 text-[#9C9C9F] sm:text-base">Create a fixed-supply ERC-20 token on {EVM_CHAIN_NAME} with built-in Incentifi trading mechanisms.</p>
+      <main className="pt-20 sm:pt-24 pb-16 sm:pb-24">
+        {/* Hero Section */}
+        <section className="relative border-b border-[#1E293B]/80 bg-gradient-to-b from-[#0D1322]/80 via-[#070A12] to-[#070A12] py-10 sm:py-14">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-[#10B981]/10 text-[#10B981] border border-[#10B981]/20">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] animate-pulse"></span>
+                {EVM_CHAIN_NAME} Launchpad
+              </span>
+              <span className="text-xs text-slate-500 font-mono">1B Fixed Supply · Loss Protection</span>
+            </div>
+            <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight text-white">
+              Launch Your Token
+            </h1>
+            <p className="mt-2.5 max-w-2xl text-sm sm:text-base text-slate-400 leading-relaxed">
+              Deploy a standard ERC-20 token contract with built-in Incentifi Router trading and automated 10% hourly loss-reward protection.
+            </p>
           </div>
         </section>
 
-        {/* Form */}
-        <section className="py-8 sm:py-12 md:py-16">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6">
-            <div className="mb-6 sm:mb-8">
+        {/* Launch Workspace */}
+        <section className="py-8 sm:py-12">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="mb-6 flex items-center justify-between">
               <Link 
                 to="/"
-                className="inline-flex items-center gap-2 text-sm text-[#9FA6A3] hover:text-[#E9E1D8] transition-colors"
+                className="inline-flex items-center gap-2 text-xs sm:text-sm font-medium text-slate-400 hover:text-white transition-colors"
               >
                 <i className="ri-arrow-left-line"></i>
-                Back to Home
+                Back to Markets
               </Link>
+
+              <div className="hidden sm:flex items-center gap-2 text-xs text-slate-400">
+                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                Network: <span className="text-slate-200 font-medium">{EVM_CHAIN_NAME}</span>
+              </div>
             </div>
 
-            <div className="grid gap-0 overflow-hidden rounded-[28px] border border-[#303034] bg-[#151516] shadow-[0_30px_80px_rgba(0,0,0,.32)] lg:grid-cols-[minmax(0,1.38fr)_minmax(340px,.82fr)] lg:items-stretch">
-            <form noValidate onSubmit={handleSubmit} className="min-w-0 border-b border-[#303034] p-6 sm:p-8 lg:border-b-0 lg:border-r lg:border-[#303034] lg:p-12">
-              {/* Wallet Notice */}
-              <div className="mb-7 flex items-center justify-between rounded-xl border border-[#313136] bg-[#1B1B1D] p-4">
-                <p className="text-sm text-[#B7B6B2]">Connect your wallet to launch.</p>
-                <WalletButton />
-              </div>
-
-              <div className="space-y-6">
-                <div className="grid gap-5 sm:grid-cols-2">
-                {/* Token Name */}
-                <div>
-                  <label className="block text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2 sm:mb-3 uppercase tracking-wide">
-                    Token Name *
-                  </label>
-                  <input
-                    type="text"
-                    name="tokenName"
-                    value={formData.tokenName}
-                    onChange={handleInputChange}
-                    placeholder="e.g., Treasury Club"
-                    maxLength={32}
-                    className="w-full px-4 sm:px-5 py-3 sm:py-4 rounded-xl bg-[#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border-[#00D9FF] transition-colors text-sm sm:text-base"
-                  />
-                  <p className="text-xs text-[#5F6A6E] mt-2">{formData.tokenName.length}/32 characters</p>
-                  {errors.tokenName && <p className="text-red-400 text-xs mt-1">{errors.tokenName}</p>}
-                </div>
-
-                {/* Token Symbol */}
-                <div>
-                  <label className="block text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2 sm:mb-3 uppercase tracking-wide">
-                    Symbol (Ticker) *
-                  </label>
-                  <input
-                    type="text"
-                    name="tokenSymbol"
-                    value={formData.tokenSymbol}
-                    onChange={handleInputChange}
-                    placeholder="e.g., DHT"
-                    maxLength={10}
-                    className="w-full px-4 sm:px-5 py-3 sm:py-4 rounded-xl bg-[#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border-[#00D9FF] transition-colors uppercase text-sm sm:text-base"
-                  />
-                  <p className="text-xs text-[#5F6A6E] mt-2">{formData.tokenSymbol.length}/10 characters · Duplicates not allowed</p>
-                  {errors.tokenSymbol && <p className="text-red-400 text-xs mt-1">{errors.tokenSymbol}</p>}
-                </div>
-
-                </div>
-
-                {/* Description */}
-                <div>
-                  <label className="block text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2 sm:mb-3 uppercase tracking-wide">
-                    Description *
-                  </label>
-                  <textarea
-                    name="description"
-                    value={formData.description}
-                    onChange={handleInputChange}
-                    placeholder="A short description of your token"
-                    rows={4}
-                    maxLength={500}
-                    className="w-full px-4 sm:px-5 py-3 sm:py-4 rounded-xl bg-[#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border-[#00D9FF] transition-colors resize-none text-sm sm:text-base"
-                  />
-                  <p className="text-xs text-[#5F6A6E] mt-2">{formData.description.length}/500 characters</p>
-                  {errors.description && <p className="text-red-400 text-xs mt-1">{errors.description}</p>}
-                </div>
-
-                {/* Token image */}
-                <div>
-                  <label className="block text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2 sm:mb-3 uppercase tracking-wide">
-                    Token Image
-                  </label>
-                  <div className="grid grid-cols-1 gap-3">
-                    <label className="group flex min-h-28 cursor-pointer items-center gap-4 rounded-2xl border border-dashed border-[#4A4A4F] bg-[#1B1B1D] px-5 text-sm text-[#E8E6E1] hover:border-[#C8FF49] hover:bg-[#202022] transition-colors">
-                      <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#101011] text-xl text-[#B6B6B9] group-hover:text-[#C8FF49]">
-                        <i className="ri-image-add-line"></i>
-                      </span>
-                      <span><span className="block font-semibold">Choose image</span><span className="text-xs text-[#99999E]">PNG, JPG, WEBP or GIF, max 1 MB</span></span>
-                      <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={handleImageFile} className="sr-only" />
-                    </label>
-                    <input
-                      type="url"
-                      name="imageUrl"
-                      value={formData.imageUrl.startsWith('data:') ? '' : formData.imageUrl}
-                      onChange={handleInputChange}
-                      placeholder="or paste an image URL"
-                      className="w-full px-4 py-3 rounded-xl bg-[#1B1B1D] border border-[#3A3A3E] text-[#E9E1D8] placeholder-[#77777C] focus:outline-none focus:border-[#C8FF49] transition-colors text-sm"
-                    />
+            {/* Main Form & Preview Grid */}
+            <div className="grid gap-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.85fr)] items-start">
+              
+              {/* Form Column */}
+              <form noValidate onSubmit={handleSubmit} className="bg-[#0D1322]/90 border border-[#1E293B] rounded-2xl sm:rounded-3xl p-6 sm:p-8 lg:p-10 shadow-xl shadow-black/40 backdrop-blur-xl space-y-6 sm:space-y-8">
+                
+                {/* Wallet Status Banner */}
+                {!connected && (
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-300">
+                    <div className="flex items-center gap-3 text-xs sm:text-sm font-medium">
+                      <i className="ri-wallet-3-line text-lg flex-shrink-0"></i>
+                      <span>Connect your wallet to deploy on {EVM_CHAIN_NAME}.</span>
+                    </div>
+                    <WalletButton />
                   </div>
-                  {imageError && <p className="text-xs text-red-400 mt-2">{imageError}</p>}
-                  <p className="text-xs text-[#5F6A6E] mt-2">Your selected image is shown in the launch preview. If left empty, token initials are used.</p>
+                )}
+
+                {/* Section 1: Token Identity */}
+                <div className="space-y-5">
+                  <div className="flex items-center gap-2 border-b border-[#1E293B] pb-3">
+                    <span className="w-6 h-6 rounded-lg bg-[#10B981]/10 text-[#10B981] flex items-center justify-center text-xs font-bold font-mono">1</span>
+                    <h2 className="text-sm sm:text-base font-bold text-white uppercase tracking-wider">Token Identity</h2>
+                  </div>
+
+                  <div className="grid gap-5 sm:grid-cols-2">
+                    {/* Token Name */}
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">
+                        Token Name *
+                      </label>
+                      <input
+                        type="text"
+                        name="tokenName"
+                        value={formData.tokenName}
+                        onChange={handleInputChange}
+                        placeholder="e.g., Treasury Club"
+                        maxLength={32}
+                        className="w-full px-4 py-3 rounded-xl bg-[#0A0F1D] border border-[#1E293B] text-white placeholder-slate-600 focus:outline-none focus:border-[#10B981] transition-colors text-sm font-medium"
+                      />
+                      <div className="flex justify-between items-center mt-1.5 text-[11px] text-slate-500">
+                        <span>{formData.tokenName.length}/32 chars</span>
+                        {errors.tokenName && <span className="text-rose-400 font-medium">{errors.tokenName}</span>}
+                      </div>
+                    </div>
+
+                    {/* Token Symbol */}
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">
+                        Ticker Symbol *
+                      </label>
+                      <input
+                        type="text"
+                        name="tokenSymbol"
+                        value={formData.tokenSymbol}
+                        onChange={handleInputChange}
+                        placeholder="e.g., DHT"
+                        maxLength={10}
+                        className="w-full px-4 py-3 rounded-xl bg-[#0A0F1D] border border-[#1E293B] text-white placeholder-slate-600 focus:outline-none focus:border-[#10B981] transition-colors uppercase font-mono text-sm font-bold tracking-wide"
+                      />
+                      <div className="flex justify-between items-center mt-1.5 text-[11px] text-slate-500">
+                        <span>{formData.tokenSymbol.length}/10 chars</span>
+                        {errors.tokenSymbol && <span className="text-rose-400 font-medium">{errors.tokenSymbol}</span>}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Description */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">
+                      Description *
+                    </label>
+                    <textarea
+                      name="description"
+                      value={formData.description}
+                      onChange={handleInputChange}
+                      placeholder="Explain your token's utility, thesis, or community roadmap..."
+                      rows={3}
+                      maxLength={500}
+                      className="w-full px-4 py-3 rounded-xl bg-[#0A0F1D] border border-[#1E293B] text-white placeholder-slate-600 focus:outline-none focus:border-[#10B981] transition-colors resize-none text-sm font-medium leading-relaxed"
+                    />
+                    <div className="flex justify-between items-center mt-1.5 text-[11px] text-slate-500">
+                      <span>{formData.description.length}/500 chars</span>
+                      {errors.description && <span className="text-rose-400 font-medium">{errors.description}</span>}
+                    </div>
+                  </div>
                 </div>
 
-                {/* Social Links */}
-                <div className="space-y-4">
-                  <label className="block text-xs sm:text-sm font-semibold text-[#E9E1D8] uppercase tracking-wide">
-                    Social Links (Optional)
-                  </label>
-                  
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {/* Section 2: Branding & Media */}
+                <div className="space-y-5">
+                  <div className="flex items-center gap-2 border-b border-[#1E293B] pb-3">
+                    <span className="w-6 h-6 rounded-lg bg-[#10B981]/10 text-[#10B981] flex items-center justify-center text-xs font-bold font-mono">2</span>
+                    <h2 className="text-sm sm:text-base font-bold text-white uppercase tracking-wider">Token Icon & Links</h2>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">
+                      Token Logo (Optional)
+                    </label>
+                    <div className="grid grid-cols-1 gap-3">
+                      <label className="group flex items-center gap-4 p-4 rounded-xl border border-dashed border-[#1E293B] bg-[#0A0F1D] hover:border-[#10B981] hover:bg-[#10B981]/5 transition-all cursor-pointer">
+                        <div className="w-12 h-12 rounded-xl bg-[#070A12] border border-[#1E293B] flex items-center justify-center text-slate-400 group-hover:text-[#10B981] transition-colors flex-shrink-0">
+                          <i className="ri-image-add-line text-xl"></i>
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <span className="block text-xs font-semibold text-white">Upload image from device</span>
+                          <span className="text-[11px] text-slate-500">PNG, JPG, WEBP or GIF (Max 1 MB)</span>
+                        </div>
+                        <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={handleImageFile} className="sr-only" />
+                      </label>
+                      <input
+                        type="url"
+                        name="imageUrl"
+                        value={formData.imageUrl.startsWith('data:') ? '' : formData.imageUrl}
+                        onChange={handleInputChange}
+                        placeholder="or paste external image URL (https://...)"
+                        className="w-full px-4 py-2.5 rounded-xl bg-[#0A0F1D] border border-[#1E293B] text-white placeholder-slate-600 focus:outline-none focus:border-[#10B981] transition-colors text-xs font-medium"
+                      />
+                    </div>
+                    {imageError && <p className="text-xs text-rose-400 mt-1.5 font-medium">{imageError}</p>}
+                  </div>
+
+                  {/* Social Links */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
-                      <label className="block text-xs text-[#5F6A6E] mb-2 uppercase">Website</label>
+                      <label className="block text-[11px] font-semibold text-slate-400 mb-1.5 uppercase">Website</label>
                       <div className="relative">
-                        <i className="ri-global-line absolute left-3 sm:left-4 top-1/2 -translate-y-1/2 text-[#5F6A6E] text-sm"></i>
+                        <i className="ri-global-line absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs"></i>
                         <input
                           type="url"
                           name="website"
                           value={formData.website}
                           onChange={handleInputChange}
-                          placeholder="https://mytoken.com"
-                          className="w-full pl-9 sm:pl-11 pr-3 sm:pr-4 py-2.5 sm:py-3 rounded-xl bg-[#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border-[#00D9FF] transition-colors text-xs sm:text-sm"
+                          placeholder="https://..."
+                          className="w-full pl-8 pr-3 py-2 rounded-xl bg-[#0A0F1D] border border-[#1E293B] text-white placeholder-slate-600 focus:outline-none focus:border-[#10B981] transition-colors text-xs font-medium"
                         />
                       </div>
                     </div>
 
                     <div>
-                      <label className="block text-xs text-[#5F6A6E] mb-2 uppercase">X (Twitter)</label>
+                      <label className="block text-[11px] font-semibold text-slate-400 mb-1.5 uppercase">X / Twitter</label>
                       <div className="relative">
-                        <i className="ri-twitter-x-line absolute left-3 sm:left-4 top-1/2 -translate-y-1/2 text-[#5F6A6E] text-sm"></i>
+                        <i className="ri-twitter-x-line absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs"></i>
                         <input
                           type="url"
                           name="twitter"
                           value={formData.twitter}
                           onChange={handleInputChange}
-                          placeholder="https://x.com/mytoken"
-                          className="w-full pl-9 sm:pl-11 pr-3 sm:pr-4 py-2.5 sm:py-3 rounded-xl bg-[#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border-[#00D9FF] transition-colors text-xs sm:text-sm"
+                          placeholder="https://x.com/..."
+                          className="w-full pl-8 pr-3 py-2 rounded-xl bg-[#0A0F1D] border border-[#1E293B] text-white placeholder-slate-600 focus:outline-none focus:border-[#10B981] transition-colors text-xs font-medium"
                         />
                       </div>
                     </div>
 
                     <div>
-                      <label className="block text-xs text-[#5F6A6E] mb-2 uppercase">Telegram</label>
+                      <label className="block text-[11px] font-semibold text-slate-400 mb-1.5 uppercase">Telegram</label>
                       <div className="relative">
-                        <i className="ri-telegram-line absolute left-3 sm:left-4 top-1/2 -translate-y-1/2 text-[#5F6A6E] text-sm"></i>
+                        <i className="ri-telegram-line absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs"></i>
                         <input
                           type="url"
                           name="telegram"
                           value={formData.telegram}
                           onChange={handleInputChange}
-                          placeholder="https://t.me/mytoken"
-                          className="w-full pl-9 sm:pl-11 pr-3 sm:pr-4 py-2.5 sm:py-3 rounded-xl bg-[#0F0F1A] border border-[#2A3338] text-[#E9E1D8] placeholder-[#5F6A6E] focus:outline-none focus:border-[#00D9FF] transition-colors text-xs sm:text-sm"
+                          placeholder="https://t.me/..."
+                          className="w-full pl-8 pr-3 py-2 rounded-xl bg-[#0A0F1D] border border-[#1E293B] text-white placeholder-slate-600 focus:outline-none focus:border-[#10B981] transition-colors text-xs font-medium"
                         />
                       </div>
                     </div>
                   </div>
                 </div>
 
-                {/* Token Supply Info */}
-                <div className="p-4 sm:p-5 rounded-xl bg-[#0F0F1A] border border-[#2A3338]">
-                  <div className="flex items-center justify-between text-xs sm:text-sm mb-3">
-                    <span className="text-[#5F6A6E]">Token Supply</span>
-                    <span className="text-[#E9E1D8] font-semibold">1,000,000,000 (1B)</span>
+                {/* Section 3: Economics & Incentives Notice */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 border-b border-[#1E293B] pb-3">
+                    <span className="w-6 h-6 rounded-lg bg-[#10B981]/10 text-[#10B981] flex items-center justify-center text-xs font-bold font-mono">3</span>
+                    <h2 className="text-sm sm:text-base font-bold text-white uppercase tracking-wider">Economics & Incentives</h2>
                   </div>
-                  <div className="flex items-center justify-between text-xs sm:text-sm">
-                    <span className="text-[#5F6A6E]">Decimals</span>
-                    <span className="text-[#E9E1D8] font-semibold">18 (EVM Standard)</span>
-                  </div>
-                </div>
 
-                {/* Incentive Mechanism Info */}
-                <div className="p-4 sm:p-6 rounded-xl bg-gradient-to-r from-[#00D9FF]/10 to-[#9D00FF]/10 border border-[#00D9FF]/30">
-                  <div className="flex items-start gap-3 sm:gap-4">
-                    <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-r from-[#00D9FF] to-[#9D00FF] flex items-center justify-center flex-shrink-0">
-                      <i className="ri-information-line text-white text-sm sm:text-base"></i>
+                  <div className="grid grid-cols-2 gap-3 p-4 rounded-xl bg-[#0A0F1D] border border-[#1E293B]">
+                    <div>
+                      <span className="block text-[11px] text-slate-400 uppercase">Total Supply</span>
+                      <span className="text-sm font-bold text-white font-mono">1,000,000,000</span>
                     </div>
                     <div>
-                      <p className="text-xs sm:text-sm font-semibold text-[#E9E1D8] mb-2">
-                        Robinhood Chain EVM Deployment
-                      </p>
-                      <p className="text-xs text-[#9FA6A3] leading-relaxed">
-                        This deploys an ERC-20 token contract on Robinhood Chain, with the fixed 1B supply minted directly to your creator wallet.
-                      </p>
+                      <span className="block text-[11px] text-slate-400 uppercase">Token Standard</span>
+                      <span className="text-sm font-bold text-white font-mono">ERC-20 (18 Dec)</span>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-gradient-to-br from-[#10B981]/10 via-[#0D1322] to-[#070A12] border border-[#10B981]/30">
+                    <div className="flex items-start gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-[#10B981]/20 border border-[#10B981]/40 flex items-center justify-center flex-shrink-0 text-[#10B981]">
+                        <i className="ri-shield-check-line text-base"></i>
+                      </div>
+                      <div className="space-y-1">
+                        <h3 className="text-xs font-bold text-white flex items-center gap-2">
+                          10% Hourly Loss-Reward Protection & 1% Trading Fee
+                        </h3>
+                        <p className="text-[11px] text-slate-300 leading-relaxed">
+                          All trades route through the Incentifi Router with a 1.0% fee (0.5% directly to creator wallet, 0.5% deposited into the token's Loss Reward Pool). Eligible underwater holders receive hourly 10% loss-reward distributions in native ETH.
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                {/* Submit Button */}
-                <button
-                  type="submit"
-                  disabled={!connected}
-                  className={`w-full py-4 sm:py-5 rounded-xl text-white text-base sm:text-lg font-bold transition-all whitespace-nowrap ${
-                    connected
-                      ? 'bg-gradient-to-r from-[#00D9FF] to-[#9D00FF] hover:shadow-2xl hover:shadow-[#00D9FF]/30 hover:scale-[1.02] cursor-pointer'
-                      : 'bg-gray-700 opacity-60 cursor-not-allowed'
-                  }`}
-                >
-                  {connected ? 'Create Token' : 'Connect Wallet First'}
-                </button>
-                <div className="text-center text-xs text-[#5F6A6E] space-y-1">
-                  <p>Robinhood Chain ERC-20 token deployment</p>
-                  <p>Your wallet pays standard network gas for the transaction.</p>
-                </div>
-              </div>
-            </form>
+                {/* Submit Action */}
+                <div className="space-y-3 pt-2">
+                  <button
+                    type="submit"
+                    disabled={!connected || isDeploying}
+                    className={`w-full py-4 rounded-xl text-white text-base font-bold transition-all shadow-lg flex items-center justify-center gap-2 ${
+                      connected && !isDeploying
+                        ? 'bg-gradient-to-r from-[#10B981] to-[#059669] hover:from-[#059669] hover:to-[#047857] shadow-[#10B981]/25 hover:shadow-xl hover:shadow-[#10B981]/30 cursor-pointer active:scale-[0.99]'
+                        : 'bg-slate-800 text-slate-400 opacity-60 cursor-not-allowed border border-slate-700'
+                    }`}
+                  >
+                    {isDeploying ? (
+                      <>
+                        <i className="ri-loader-4-line animate-spin text-lg"></i>
+                        <span>Deploying Contract on {EVM_CHAIN_NAME}...</span>
+                      </>
+                    ) : connected ? (
+                      <>
+                        <i className="ri-rocket-line text-lg"></i>
+                        <span>Deploy Token Contract</span>
+                      </>
+                    ) : (
+                      <>
+                        <i className="ri-wallet-3-line text-lg"></i>
+                        <span>Connect Wallet First</span>
+                      </>
+                    )}
+                  </button>
 
-            <aside className="bg-[#19191B] p-6 sm:p-8 lg:p-10">
-              <div className="flex min-h-full flex-col rounded-[26px] border border-[#3A3A3E] bg-[#171718] p-6 shadow-[0_20px_45px_rgba(0,0,0,.22)]">
-                <div className="px-0 pb-6">
-                  {formData.imageUrl ? (
-                    <img src={formData.imageUrl} alt="Token preview" className="h-20 w-20 rounded-2xl object-cover bg-[#0A0A0B]" />
-                  ) : (
-                    <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-[#09090A] text-2xl font-bold text-[#C8FF49]">
-                      {(formData.tokenSymbol || 'IF').slice(0, 3).toUpperCase()}
-                    </div>
-                  )}
-                  <p className="mt-5 text-xs font-semibold uppercase tracking-[0.18em] text-[#9D9D9F]">Your token</p>
-                  <h2 className="mt-1 text-3xl font-medium tracking-tight text-[#F4F2ED]">{formData.tokenName || 'Your token'}</h2>
-                  <p className="mt-1 text-base text-[#A6A6AA]">{formData.tokenSymbol.toUpperCase() || 'ticker'}</p>
-                  <p className="mt-5 min-h-12 text-sm leading-6 text-[#B3B3B6]">
-                    {formData.description || 'Add a clear description so traders understand what this token is about.'}
+                  <p className="text-center text-[11px] text-slate-500">
+                    Your wallet will prompt for signature and standard network gas on {EVM_CHAIN_NAME}.
                   </p>
                 </div>
-                <div className="border-t border-[#37373B] py-2">
-                  <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Network</span><span className="inline-flex items-center gap-2 font-semibold text-[#F2F0EB]">{EVM_CHAIN_NAME}</span></div>
-                  <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Token Standard</span><span className="font-semibold text-[#F2F0EB]">ERC-20</span></div>
-                  <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Total Supply</span><span className="font-semibold text-[#F2F0EB]">1,000,000,000</span></div>
-                  <div className="flex items-center justify-between border-b border-[#37373B] py-4 text-sm"><span className="text-[#A3A3A6]">Decimals</span><span className="font-semibold text-[#F2F0EB]">18</span></div>
-                  <div className="flex items-center justify-between py-4 text-sm"><span className="text-[#A3A3A6]">Trading Mechanism</span><span className="font-semibold text-[#C8FF49]">Incentifi Router</span></div>
-                </div>
-                <div className="mt-auto rounded-2xl bg-[#101011] p-4 text-xs leading-5 text-[#9D9DA1]">
-                  Your wallet submits the deployment transaction. Launches are irreversible once confirmed on {EVM_CHAIN_NAME}.
-                </div>
-              </div>
-            </aside>
-            </div>
+              </form>
 
-            {/* How It Works Panel */}
-            <div className="mt-12 sm:mt-16 p-6 sm:p-8 md:p-10 rounded-2xl sm:rounded-3xl bg-[#1A1A2E]/50 border-2 border-dashed border-[#00D9FF]/30">
-              <h2 className="text-xl sm:text-2xl font-bold text-[#E9E1D8] mb-4 sm:mb-6">How Token Creation Works</h2>
-              <div className="space-y-4 sm:space-y-5">
-                {[
-                  {
-                    number: '1',
-                    title: 'Contract Deployed',
-                    description: `An ERC-20 token contract is deployed on ${EVM_CHAIN_NAME} with your selected name and symbol.`
-                  },
-                  {
-                    number: '2',
-                    title: 'Creator Receives Supply',
-                    description: 'The connected creator wallet receives the fixed one billion token supply.'
-                  },
-                  {
-                    number: '3',
-                    title: 'Contract Address Saved',
-                    description: 'The created contract address is saved so wallets, explorers, and token pages can reference it.'
-                  },
-                  {
-                    number: '4',
-                    title: 'Incentifi Router & Holder Protection',
-                    description: 'All trades route through the Incentifi Router with a 1.0% creator fee (0.5% to creator, 0.5% to the Loss Reward Pool). Eligible underwater holders receive hourly 10% loss-reward distributions in native ETH.'
-                  }
-                ].map((step, index) => (
-                  <div key={index} className="flex items-start gap-3 sm:gap-4">
-                    <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-gradient-to-r from-[#00D9FF] to-[#9D00FF] flex items-center justify-center flex-shrink-0 font-bold text-white text-sm sm:text-base">
-                      {step.number}
-                    </div>
-                    <div>
-                      <h3 className="text-[#E9E1D8] font-semibold mb-1 text-sm sm:text-base">{step.title}</h3>
-                      <p className="text-[#9FA6A3] text-xs sm:text-sm leading-relaxed">{step.description}</p>
+              {/* Live Preview Card Column */}
+              <aside className="lg:sticky lg:top-28 space-y-6">
+                <div className="bg-[#0D1322]/90 border border-[#1E293B] rounded-2xl sm:rounded-3xl p-6 shadow-xl shadow-black/30 backdrop-blur-xl">
+                  <div className="flex items-center justify-between border-b border-[#1E293B] pb-4 mb-5">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                      <i className="ri-eye-line text-[#10B981]"></i>
+                      Live Token Preview
+                    </span>
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[#10B981]/10 text-[#10B981] border border-[#10B981]/20">
+                      Draft
+                    </span>
+                  </div>
+
+                  <div className="flex items-start gap-4 mb-5">
+                    {formData.imageUrl ? (
+                      <img 
+                        src={formData.imageUrl} 
+                        alt="Token avatar" 
+                        className="w-16 h-16 rounded-2xl object-cover bg-[#070A12] border border-[#1E293B]" 
+                      />
+                    ) : (
+                      <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#10B981]/20 via-[#0D1322] to-[#070A12] border border-[#10B981]/30 flex items-center justify-center text-xl font-black text-[#10B981] font-mono shadow-inner">
+                        {(formData.tokenSymbol || 'DHT').slice(0, 3).toUpperCase()}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-xl font-bold text-white truncate">
+                        {formData.tokenName || 'Your Token Name'}
+                      </h3>
+                      <span className="inline-block mt-0.5 text-xs font-bold font-mono text-[#10B981] uppercase tracking-wide">
+                        ${(formData.tokenSymbol || 'DHT').toUpperCase()}
+                      </span>
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="text-[10px] text-slate-400 font-medium px-2 py-0.5 rounded bg-[#070A12] border border-[#1E293B]">
+                          {EVM_CHAIN_NAME}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                ))}
-              </div>
+
+                  <p className="text-xs text-slate-400 line-clamp-3 leading-relaxed mb-5 bg-[#070A12] p-3 rounded-xl border border-[#1E293B]">
+                    {formData.description || 'Token description will appear here on your token preview and trading terminal.'}
+                  </p>
+
+                  <div className="space-y-2.5 border-t border-[#1E293B] pt-4 text-xs">
+                    <div className="flex items-center justify-between text-slate-400">
+                      <span>Network</span>
+                      <span className="text-white font-medium">{EVM_CHAIN_NAME}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-slate-400">
+                      <span>Supply</span>
+                      <span className="text-white font-mono font-medium">1,000,000,000</span>
+                    </div>
+                    <div className="flex items-center justify-between text-slate-400">
+                      <span>Decimals</span>
+                      <span className="text-white font-mono font-medium">18 (Standard)</span>
+                    </div>
+                    <div className="flex items-center justify-between text-slate-400">
+                      <span>Router Fee</span>
+                      <span className="text-[#10B981] font-medium">1.0% (50/50 Split)</span>
+                    </div>
+                    <div className="flex items-center justify-between text-slate-400">
+                      <span>Protection</span>
+                      <span className="text-emerald-400 font-medium">10% Hourly Loss Pool</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Quick Process Steps */}
+                <div className="bg-[#0D1322]/60 border border-[#1E293B]/70 rounded-2xl p-5 space-y-3">
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider">Launch Sequence</h4>
+                  <div className="space-y-2.5 text-xs text-slate-400">
+                    <div className="flex items-start gap-2.5">
+                      <span className="w-5 h-5 rounded-full bg-[#10B981]/10 text-[#10B981] flex items-center justify-center font-bold font-mono text-[10px] flex-shrink-0 mt-0.5">1</span>
+                      <span>Deploy ERC-20 contract with fixed 1B supply.</span>
+                    </div>
+                    <div className="flex items-start gap-2.5">
+                      <span className="w-5 h-5 rounded-full bg-[#10B981]/10 text-[#10B981] flex items-center justify-center font-bold font-mono text-[10px] flex-shrink-0 mt-0.5">2</span>
+                      <span>Seed Uniswap V3 liquidity pool and lock LP.</span>
+                    </div>
+                    <div className="flex items-start gap-2.5">
+                      <span className="w-5 h-5 rounded-full bg-[#10B981]/10 text-[#10B981] flex items-center justify-center font-bold font-mono text-[10px] flex-shrink-0 mt-0.5">3</span>
+                      <span>Trade on Incentifi with Loss-Reward protection.</span>
+                    </div>
+                  </div>
+                </div>
+              </aside>
             </div>
           </div>
         </section>
       </main>
 
       {/* Footer */}
-      <footer className="bg-[#05050A] border-t border-[#1A1A2E] mt-12 sm:mt-16 md:mt-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-10 md:py-12">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4 sm:gap-6">
-            <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-6 text-xs text-[#5F6A6E]">
-              <span className="font-medium text-[#9FA6A3]">incentifi</span>
-              <span className="w-px h-3 bg-[#2A3338]"></span>
+      <footer className="bg-[#05070D] border-t border-[#1E293B] py-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-3 text-xs text-slate-500">
+              <span className="font-semibold text-slate-300">incentifi</span>
+              <span>·</span>
               <span>{EVM_CHAIN_NAME}</span>
-              <span className="w-px h-3 bg-[#2A3338]"></span>
-              <Link to="/docs" className="hover:text-[#9FA6A3] transition-colors">Docs</Link>
-              <span className="w-px h-3 bg-[#2A3338]"></span>
-              <a href="https://github.com/riodinho1/incentifi" target="_blank" rel="noreferrer" className="hover:text-[#9FA6A3] transition-colors">GitHub</a>
+              <span>·</span>
+              <Link to="/docs" className="hover:text-slate-300 transition-colors">Documentation</Link>
             </div>
-            <p className="text-xs text-[#5F6A6E] text-center">
-              © 2025 incentifi. Not financial advice. DYOR.
+            <p className="text-xs text-slate-500">
+              © {new Date().getFullYear()} Incentifi. Verified on Robinhood Chain.
             </p>
           </div>
         </div>
@@ -515,3 +617,4 @@ const LaunchPage = () => {
 };
 
 export default LaunchPage;
+
