@@ -1,7 +1,8 @@
 import { encodeFunctionData, parseAbi, getAddress } from 'viem';
 import { supabase } from './supabase';
-import { getEvmProvider } from './evmNetwork';
+import { getEvmProvider, publicClient } from './evmNetwork';
 import { LOSS_REWARD_POOL } from './uniswapAddresses';
+import { getStoredSession, fetchLossRewardData } from './lossRewardAuth';
 
 const LOSS_POOL_ABI = parseAbi([
   'function getUnallocatedBalance(address token) view returns (uint256)',
@@ -16,6 +17,21 @@ const LOSS_POOL_ABI = parseAbi([
 /** Snapshot interval: 5 minutes (300 seconds) */
 export const SNAPSHOT_INTERVAL_SECONDS = 300;
 export const SNAPSHOT_INTERVAL_MINUTES = 5;
+
+/**
+ * Accurately formats ETH prices including sub-microETH values (e.g. 2e-9 on bonding curve).
+ */
+export const formatLossRewardEthPrice = (priceEth: number): string => {
+  if (!Number.isFinite(priceEth) || priceEth <= 0) return '0.000000 ETH';
+  if (priceEth < 0.00001) {
+    const formatted = priceEth.toFixed(18).replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1');
+    return `${formatted} ETH`;
+  }
+  if (priceEth < 1) {
+    return `${priceEth.toFixed(6)} ETH`;
+  }
+  return `${priceEth.toFixed(4)} ETH`;
+};
 
 export type HolderCostBasis = {
   tokenAddress: string;
@@ -52,7 +68,7 @@ export type ClaimableRewardsState = {
 };
 
 /**
- * Fetch a holder's cost basis and eligibility status from Supabase.
+ * Fetch a holder's cost basis and eligibility status via the secure authenticated gateway.
  */
 export const getHolderCostBasis = async (
   tokenAddress: string,
@@ -62,33 +78,25 @@ export const getHolderCostBasis = async (
   const token = tokenAddress.toLowerCase();
   const wallet = walletAddress.toLowerCase();
 
-  const { data, error } = await supabase
-    .from('holder_cost_basis')
-    .select('*')
-    .eq('token_address', token)
-    .eq('wallet_address', wallet)
-    .maybeSingle();
-
-  if (error || !data) {
-    return {
-      tokenAddress: token,
-      walletAddress: wallet,
-      tokenBalance: 0,
-      totalInvestedEth: 0,
-      avgCostBasisEth: 0,
-      isEligible: true,
-      isUnderwaterSeller: false,
-    };
+  try {
+    // If a session exists, use authenticated gateway query
+    if (getStoredSession(wallet)) {
+      const data = await fetchLossRewardData(token, wallet);
+      return data.costBasis;
+    }
+  } catch (err) {
+    console.warn('Authenticated cost basis query skipped/failed:', err);
   }
 
+  // Default unauthenticated baseline state
   return {
-    tokenAddress: data.token_address,
-    walletAddress: data.wallet_address,
-    tokenBalance: Number(data.token_balance || 0),
-    totalInvestedEth: Number(data.total_invested_eth || 0),
-    avgCostBasisEth: Number(data.avg_cost_basis_eth || 0),
-    isEligible: data.is_eligible ?? true,
-    isUnderwaterSeller: data.is_underwater_seller ?? false,
+    tokenAddress: token,
+    walletAddress: wallet,
+    tokenBalance: 0,
+    totalInvestedEth: 0,
+    avgCostBasisEth: 0,
+    isEligible: true,
+    isUnderwaterSeller: false,
   };
 };
 
@@ -133,7 +141,7 @@ export const calculateUnrealizedLossStats = (
 };
 
 /**
- * Fetch all uncollected Merkle reward proofs for the connected wallet.
+ * Fetch all uncollected Merkle reward proofs for the connected wallet via the secure authenticated gateway.
  */
 export const getClaimableRewards = async (
   tokenAddress: string,
@@ -146,37 +154,16 @@ export const getClaimableRewards = async (
   const token = tokenAddress.toLowerCase();
   const wallet = walletAddress.toLowerCase();
 
-  const { data, error } = await supabase
-    .from('epoch_holder_rewards')
-    .select(`
-      id,
-      epoch_id,
-      final_reward_eth,
-      merkle_proof,
-      claimed,
-      reward_epochs!inner (
-        epoch_number
-      )
-    `)
-    .eq('token_address', token)
-    .eq('wallet_address', wallet)
-    .eq('claimed', false);
-
-  if (error || !data || data.length === 0) {
-    return { unclaimedEpochs: [], totalClaimableEth: 0 };
+  try {
+    if (getStoredSession(wallet)) {
+      const data = await fetchLossRewardData(token, wallet);
+      return data.claimable;
+    }
+  } catch (err) {
+    console.warn('Authenticated claimable rewards query skipped/failed:', err);
   }
 
-  const unclaimedEpochs: UnclaimedEpoch[] = data.map((d: any) => ({
-    id: d.id,
-    epochId: Number(d.epoch_id),
-    epochNumber: Number(d.reward_epochs?.epoch_number || d.epoch_id),
-    finalRewardEth: Number(d.final_reward_eth || 0),
-    merkleProof: Array.isArray(d.merkle_proof) ? d.merkle_proof : [],
-  }));
-
-  const totalClaimableEth = unclaimedEpochs.reduce((sum, item) => sum + item.finalRewardEth, 0);
-
-  return { unclaimedEpochs, totalClaimableEth };
+  return { unclaimedEpochs: [], totalClaimableEth: 0 };
 };
 
 /**
@@ -275,29 +262,20 @@ export const getLossRewardPoolTVL = async (tokenAddress: string): Promise<number
       .eq('token_address', token)
       .maybeSingle();
 
-    if (data?.loss_pool_tvl_eth) {
+    if (data?.loss_pool_tvl_eth && Number(data.loss_pool_tvl_eth) > 0) {
       return Number(data.loss_pool_tvl_eth);
     }
 
-    const provider = getEvmProvider();
-    if (provider) {
-      const tokenAddr = getAddress(tokenAddress);
-      const pool = getAddress(LOSS_REWARD_POOL);
-      const callData = encodeFunctionData({
-        abi: LOSS_POOL_ABI,
-        functionName: 'getUnallocatedBalance',
-        args: [tokenAddr],
-      });
-      const result = await provider.request({
-        method: 'eth_call',
-        params: [{ to: pool, data: callData }, 'latest'],
-      });
-      if (result && result !== '0x') {
-        return Number(BigInt(result)) / 1e18;
-      }
-    }
+    const tokenAddr = getAddress(tokenAddress);
+    const pool = getAddress(LOSS_REWARD_POOL);
+    const result = await publicClient.readContract({
+      address: pool,
+      abi: LOSS_POOL_ABI,
+      functionName: 'getUnallocatedBalance',
+      args: [tokenAddr],
+    } as any);
+    return Number(result) / 1e18;
   } catch {
-    // Fail silently and return 0
+    return 0;
   }
-  return 0;
 };

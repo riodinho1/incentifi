@@ -1,5 +1,5 @@
 import { decodeEventLog, encodeFunctionData, parseAbi, getAddress } from 'viem';
-import { getEvmProvider } from './evmNetwork';
+import { getEvmProvider, publicClient } from './evmNetwork';
 import {
   UNISWAP_V3_FACTORY,
   INCENTIFI_SWAP_ROUTER,
@@ -82,31 +82,27 @@ export type ConfirmedPoolSwap = {
   priceEth: number;
 };
 
-const call = async (to: `0x${string}`, data: `0x${string}`) => {
-  const provider = getEvmProvider();
-  if (!provider) throw new Error('Wallet provider not available.');
-  return provider.request({ method: 'eth_call', params: [{ to, data }, 'latest'] });
-};
-
 export const getPoolQuote = async (tokenAddress: string) => {
   const token = getAddress(tokenAddress);
   const weth = getAddress(WETH_ADDRESS);
 
-  const getPoolData = encodeFunctionData({
+  const poolAddress = await publicClient.readContract({
+    address: getAddress(UNISWAP_V3_FACTORY),
     abi: FACTORY_ABI,
     functionName: 'getPool',
     args: [token, weth, POOL_FEE],
-  });
-  const poolResult = await call(UNISWAP_V3_FACTORY, getPoolData);
-  const poolAddress = `0x${String(poolResult).slice(-40)}` as `0x${string}`;
+  } as any);
 
-  if (BigInt(poolAddress) === 0n) {
+  if (!poolAddress || poolAddress === '0x0000000000000000000000000000000000000000') {
     throw new Error('No liquidity pool found for this token yet.');
   }
 
-  const slot0Data = encodeFunctionData({ abi: POOL_ABI, functionName: 'slot0' });
-  const slot0Result = await call(poolAddress, slot0Data);
-  const sqrtPriceX96 = BigInt(`0x${String(slot0Result).slice(2, 2 + 64)}`);
+  const slot0 = await publicClient.readContract({
+    address: poolAddress as `0x${string}`,
+    abi: POOL_ABI,
+    functionName: 'slot0',
+  } as any);
+  const sqrtPriceX96 = BigInt(slot0[0]);
 
   if (sqrtPriceX96 <= 0n) {
     throw new Error('Pool exists but has no price yet.');
@@ -114,7 +110,7 @@ export const getPoolQuote = async (tokenAddress: string) => {
 
   const isTokenFirst = BigInt(token) < BigInt(weth);
 
-  return { poolAddress, sqrtPriceX96, isTokenFirst };
+  return { poolAddress: poolAddress as `0x${string}`, sqrtPriceX96, isTokenFirst };
 };
 
 export type UnifiedMarketState = {

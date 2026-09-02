@@ -1,3 +1,5 @@
+import { createPublicClient, http, defineChain } from 'viem';
+
 export const LAUNCH_CHAIN_MODE = 'robinhood';
 
 export const IS_ROBINHOOD_CHAIN_MODE = true;
@@ -20,7 +22,41 @@ export const EVM_EXPLORER_URL = String(
 export const EVM_NATIVE_SYMBOL = String(import.meta.env.VITE_EVM_NATIVE_SYMBOL || 'ETH');
 
 export const EVM_ADDRESS_URL = (address: string) => `${EVM_EXPLORER_URL}/address/${address}`;
-export const EVM_TX_URL = (txHash: string) => `${EVM_EXPLORER_URL}/tx/${txHash}`;
+export const EVM_TX_URL = (txHash: string) =>
+  `${EVM_EXPLORER_URL}/tx/${(txHash || '').split(/[:_#-]/)[0]}`;
+
+export const robinhoodChain = defineChain({
+  id: EVM_CHAIN_ID_DECIMAL,
+  name: EVM_CHAIN_NAME,
+  nativeCurrency: {
+    name: EVM_NATIVE_SYMBOL,
+    symbol: EVM_NATIVE_SYMBOL,
+    decimals: 18,
+  },
+  rpcUrls: {
+    default: {
+      http: [EVM_RPC_URL],
+    },
+    public: {
+      http: [EVM_RPC_URL],
+    },
+  },
+  blockExplorers: {
+    default: {
+      name: 'Blockscout',
+      url: EVM_EXPLORER_URL,
+    },
+  },
+});
+
+export const publicClient = createPublicClient({
+  chain: robinhoodChain,
+  transport: http(EVM_RPC_URL, {
+    batch: true,
+    retryCount: 3,
+    retryDelay: 1000,
+  }),
+});
 
 export const getEvmProvider = () =>
   typeof window !== 'undefined' ? (window as any).ethereum : undefined;
