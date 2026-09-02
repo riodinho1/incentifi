@@ -589,7 +589,7 @@ const TokenPreviewPage = () => {
             abi: parseAbi(['function balanceOf(address account) view returns (uint256)']),
             functionName: 'balanceOf',
             args: [walletAddr],
-          }),
+          } as any),
           publicClient.getBalance({ address: walletAddr }),
         ]);
 
@@ -973,7 +973,7 @@ const TokenPreviewPage = () => {
           abi: parseAbi(['function balanceOf(address account) view returns (uint256)']),
           functionName: 'balanceOf',
           args: [walletAddr],
-        }),
+        } as any),
         publicClient.getBalance({ address: walletAddr }),
       ]);
 
