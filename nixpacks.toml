@@ -1,4 +1,7 @@
 providers = ["node"]
 
+[phases.build]
+cmds = []
+
 [start]
 cmd = "npm run daemon"
