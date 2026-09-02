@@ -1,5 +1,5 @@
 import { decodeEventLog, encodeFunctionData, parseAbi, getAddress } from 'viem';
-import { getEvmProvider } from './evmNetwork';
+import { getEvmProvider, publicClient } from './evmNetwork';
 import {
   INCENTIFI_BONDING_CURVE_FACTORY,
   WETH_ADDRESS,
@@ -206,51 +206,42 @@ export function calculateSpotPriceAndMarketCap(
 }
 
 /**
- * Fetches the on-chain bonding curve state for a token.
+ * Resolves the on-chain bonding curve address for a token directly via Robinhood Chain RPC.
+ */
+export async function getBondingCurveAddress(tokenAddress: string): Promise<`0x${string}` | null> {
+  if (!INCENTIFI_BONDING_CURVE_FACTORY || INCENTIFI_BONDING_CURVE_FACTORY === '0x') {
+    return null;
+  }
+  try {
+    const normalizedToken = getAddress(tokenAddress);
+    const curve = await publicClient.readContract({
+      address: getAddress(INCENTIFI_BONDING_CURVE_FACTORY),
+      abi: BONDING_CURVE_FACTORY_ABI,
+      functionName: 'getBondingCurve',
+      args: [normalizedToken],
+    } as any);
+
+    if (!curve || curve === '0x0000000000000000000000000000000000000000') {
+      return null;
+    }
+    return curve as `0x${string}`;
+  } catch (err) {
+    console.warn('Failed to resolve bonding curve address from factory:', err);
+    return null;
+  }
+}
+
+/**
+ * Fetches the on-chain bonding curve state for a token directly via Robinhood Chain RPC.
  */
 export async function fetchBondingCurveState(
   tokenAddress: string,
   ethPriceUsd: number = REFERENCE_ETH_USD
 ): Promise<BondingCurveState> {
-  const provider = getEvmProvider();
   const normalizedToken = getAddress(tokenAddress);
 
-  if (!provider) {
-    // Return default initial state
-    const { priceEth, marketCapUsd, progressBps } = calculateSpotPriceAndMarketCap(0n, TOTAL_TOKEN_SUPPLY, ethPriceUsd);
-    return {
-      curveAddress: null,
-      initialized: true,
-      graduated: false,
-      realEthReserve: 0n,
-      realTokenReserve: TOTAL_TOKEN_SUPPLY,
-      progressBps,
-      currentPriceEth: priceEth,
-      marketCapUsd,
-      circulatingTokens: 0,
-      uniswapPoolAddress: null,
-    };
-  }
-
   try {
-    let curveAddress: `0x${string}` | null = null;
-    if (INCENTIFI_BONDING_CURVE_FACTORY && INCENTIFI_BONDING_CURVE_FACTORY !== '0x') {
-      const data = encodeFunctionData({
-        abi: BONDING_CURVE_FACTORY_ABI,
-        functionName: 'getBondingCurve',
-        args: [normalizedToken],
-      });
-      const res = await provider.request({
-        method: 'eth_call',
-        params: [{ to: INCENTIFI_BONDING_CURVE_FACTORY, data }, 'latest'],
-      });
-      if (res && res !== '0x' && res.length >= 66) {
-        const parsed = `0x${res.slice(26)}` as `0x${string}`;
-        if (parsed !== '0x0000000000000000000000000000000000000000') {
-          curveAddress = parsed;
-        }
-      }
-    }
+    const curveAddress = await getBondingCurveAddress(normalizedToken);
 
     if (!curveAddress) {
       // Return default deterministic initial state
@@ -269,25 +260,28 @@ export async function fetchBondingCurveState(
       };
     }
 
-    // Read curve state on-chain
-    const [realEthRes, realTokenRes, gradRes] = await Promise.all([
-      provider.request({
-        method: 'eth_call',
-        params: [{ to: curveAddress, data: encodeFunctionData({ abi: BONDING_CURVE_ABI, functionName: 'realEthReserve' }) }, 'latest'],
-      }),
-      provider.request({
-        method: 'eth_call',
-        params: [{ to: curveAddress, data: encodeFunctionData({ abi: BONDING_CURVE_ABI, functionName: 'realTokenReserve' }) }, 'latest'],
-      }),
-      provider.request({
-        method: 'eth_call',
-        params: [{ to: curveAddress, data: encodeFunctionData({ abi: BONDING_CURVE_ABI, functionName: 'graduated' }) }, 'latest'],
-      }),
+    // Read curve state on-chain via dedicated Robinhood Chain publicClient
+    const [realEthReserveRaw, realTokenReserveRaw, graduatedRaw] = await Promise.all([
+      publicClient.readContract({
+        address: curveAddress,
+        abi: BONDING_CURVE_ABI,
+        functionName: 'realEthReserve',
+      } as any),
+      publicClient.readContract({
+        address: curveAddress,
+        abi: BONDING_CURVE_ABI,
+        functionName: 'realTokenReserve',
+      } as any),
+      publicClient.readContract({
+        address: curveAddress,
+        abi: BONDING_CURVE_ABI,
+        functionName: 'graduated',
+      } as any),
     ]);
 
-    const realEthReserve = BigInt(realEthRes || '0x0');
-    const realTokenReserve = BigInt(realTokenRes || toQuantityHex(TOTAL_TOKEN_SUPPLY));
-    const graduated = Boolean(BigInt(gradRes || '0x0'));
+    const realEthReserve = BigInt((realEthReserveRaw as any) ?? 0n);
+    const realTokenReserve = BigInt((realTokenReserveRaw as any) ?? TOTAL_TOKEN_SUPPLY);
+    const graduated = Boolean(graduatedRaw);
 
     const { priceEth, marketCapUsd, progressBps } = calculateSpotPriceAndMarketCap(
       realEthReserve,

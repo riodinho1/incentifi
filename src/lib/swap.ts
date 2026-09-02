@@ -1,5 +1,5 @@
 import { decodeEventLog, encodeFunctionData, parseAbi, getAddress } from 'viem';
-import { getEvmProvider, publicClient } from './evmNetwork';
+import { getEvmProvider, publicClient, ensureEvmChain } from './evmNetwork';
 import {
   UNISWAP_V3_FACTORY,
   INCENTIFI_SWAP_ROUTER,
@@ -207,6 +207,7 @@ export const buyToken = async (
 ): Promise<SwapResult> => {
   const provider = getEvmProvider();
   if (!provider) throw new Error('Connect wallet first.');
+  await ensureEvmChain();
 
   const token = getAddress(tokenAddress);
   const traderAddr = getAddress(trader);
@@ -309,6 +310,7 @@ export const sellToken = async (
 ): Promise<SwapResult> => {
   const provider = getEvmProvider();
   if (!provider) throw new Error('Connect wallet first.');
+  await ensureEvmChain();
 
   const token = getAddress(tokenAddress);
   const traderAddr = getAddress(trader);
