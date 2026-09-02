@@ -1,5 +1,5 @@
 // src/lib/createToken.ts
-import { createEvmToken } from './createEvmToken';
+import { createEvmToken, type CreateEvmTokenProgressCallback } from './createEvmToken';
 
 type CreateTokenInput = {
   tokenName: string;
@@ -9,6 +9,7 @@ type CreateTokenInput = {
   website?: string;
   twitter?: string;
   telegram?: string;
+  onProgress?: CreateEvmTokenProgressCallback;
 };
 
 export const createRealToken = async (
@@ -18,4 +19,3 @@ export const createRealToken = async (
   const deployment = await createEvmToken(provider, input);
   return deployment;
 };
-

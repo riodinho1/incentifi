@@ -221,7 +221,13 @@ export const buyToken = async (
   const curveState = await fetchBondingCurveState(token, ethPriceUsd);
 
   // 1. Pre-Graduation: Route to Bonding Curve
-  if (curveState.curveAddress && !curveState.graduated) {
+  if (!curveState.graduated) {
+    if (!curveState.curveAddress) {
+      throw new Error(
+        'Bonding curve has not been activated for this token yet. Please wait for the token creator to initialize the bonding curve.'
+      );
+    }
+
     const { tokensOut } = calculateTokensOut(ethWei, curveState.realEthReserve, curveState.realTokenReserve);
     const minTokensOut = applySlippage(tokensOut, slippagePct * 100);
 
@@ -317,7 +323,13 @@ export const sellToken = async (
   const curveState = await fetchBondingCurveState(token, ethPriceUsd);
 
   // 1. Pre-Graduation: Route to Bonding Curve
-  if (curveState.curveAddress && !curveState.graduated) {
+  if (!curveState.graduated) {
+    if (!curveState.curveAddress) {
+      throw new Error(
+        'Bonding curve has not been activated for this token yet. Please wait for the token creator to initialize the bonding curve.'
+      );
+    }
+
     const { netEthOut } = calculateEthOut(tokenWei, curveState.realEthReserve, curveState.realTokenReserve);
     const minEthOut = applySlippage(netEthOut, slippagePct * 100);
 

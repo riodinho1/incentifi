@@ -70,6 +70,13 @@ const LaunchPage = () => {
     return Object.keys(newErrors).length === 0;
   };
 
+  const [deployStep, setDeployStep] = useState<{
+    step: number;
+    total: number;
+    title: string;
+    desc: string;
+  } | null>(null);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
@@ -77,6 +84,12 @@ const LaunchPage = () => {
 
     try {
       setIsDeploying(true);
+      setDeployStep({
+        step: 1,
+        total: 3,
+        title: 'Deploying ERC-20 Token Contract',
+        desc: 'Sign the token creation transaction in your wallet...',
+      });
       const symbol = normalizeSymbol(formData.tokenSymbol);
       
       const symbolCheck = await verifySymbolAvailability(symbol);
@@ -84,6 +97,7 @@ const LaunchPage = () => {
         setErrors((prev) => ({ ...prev, tokenSymbol: symbolCheck.error || 'Symbol unavailable' }));
         alert(symbolCheck.error || `Could not verify availability for $${symbol}. Deployment stopped.`);
         setIsDeploying(false);
+        setDeployStep(null);
         return;
       }
 
@@ -92,16 +106,17 @@ const LaunchPage = () => {
         throw new Error('EVM wallet not detected. Install MetaMask, Rabby, or Robinhood Wallet.');
       }
 
-      alert(`Creating your token on ${EVM_CHAIN_NAME}.\n\nYour wallet will prompt you to sign and submit the ERC-20 token deployment transaction.`);
-
       const result = await createRealToken(provider, {
         ...formData,
         tokenSymbol: symbol,
+        onProgress: (step, total, title, desc) => {
+          setDeployStep({ step, total, title, desc });
+        },
       });
       const launchResult = result as any;
 
       alert(
-        `Token deployed successfully on ${launchResult.chain || EVM_CHAIN_NAME}!\n$${symbol}\nContract: ${launchResult.mint}`
+        `Token and Incentifi Bonding Curve deployed successfully on ${launchResult.chain || EVM_CHAIN_NAME}!\n\n$${symbol}\nToken Contract: ${launchResult.mint}\nBonding Curve: ${launchResult.curveAddress || 'Active'}`
       );
 
       // Save token to Supabase registry if configured
@@ -133,6 +148,7 @@ const LaunchPage = () => {
         ...formData,
         tokenSymbol: symbol,
         mintAddress: result.mint,
+        curveAddress: launchResult.curveAddress || undefined,
         chain: 'evm',
       };
       localStorage.setItem('previewToken', JSON.stringify(tokenData));
@@ -143,6 +159,7 @@ const LaunchPage = () => {
       alert('Failed to create token: ' + (err.message || 'Unknown error. Check console for details.'));
     } finally {
       setIsDeploying(false);
+      setDeployStep(null);
     }
   };
 
@@ -470,6 +487,21 @@ const LaunchPage = () => {
 
                 {/* Submit Action */}
                 <div className="space-y-3 pt-2">
+                  {isDeploying && deployStep && (
+                    <div className="p-4 rounded-xl bg-[#081524] border border-[#10B981]/40 shadow-lg space-y-2">
+                      <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-[#10B981]">
+                        <span className="flex items-center gap-1.5">
+                          <i className="ri-loader-4-line animate-spin"></i>
+                          Step {deployStep.step} of {deployStep.total}
+                        </span>
+                        <span>{deployStep.title}</span>
+                      </div>
+                      <p className="text-xs text-slate-300 leading-relaxed">
+                        {deployStep.desc}
+                      </p>
+                    </div>
+                  )}
+
                   <button
                     type="submit"
                     disabled={!connected || isDeploying}
@@ -482,12 +514,14 @@ const LaunchPage = () => {
                     {isDeploying ? (
                       <>
                         <i className="ri-loader-4-line animate-spin text-lg"></i>
-                        <span>Deploying Contract on {EVM_CHAIN_NAME}...</span>
+                        <span>
+                          {deployStep ? `Step ${deployStep.step}/${deployStep.total}: ${deployStep.title}` : `Deploying on ${EVM_CHAIN_NAME}...`}
+                        </span>
                       </>
                     ) : connected ? (
                       <>
                         <i className="ri-rocket-line text-lg"></i>
-                        <span>Deploy Token Contract</span>
+                        <span>Deploy Token & Bonding Curve</span>
                       </>
                     ) : (
                       <>

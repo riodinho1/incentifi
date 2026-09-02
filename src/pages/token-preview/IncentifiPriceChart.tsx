@@ -568,9 +568,9 @@ export const IncentifiPriceChart = ({
                 </span>
               </div>
               <div>
-                <span className="text-[#64799E] block mb-0.5">Pool Status</span>
+                <span className="text-[#64799E] block mb-0.5">Market Status</span>
                 <span className={isPoolActive ? 'text-emerald-400 font-medium' : 'text-amber-400 font-medium'}>
-                  {isPoolActive ? 'Uniswap V3 Ready' : 'Awaiting First Trade'}
+                  {isPoolActive ? 'Bonding Curve Active' : 'Awaiting First Trade'}
                 </span>
               </div>
             </div>

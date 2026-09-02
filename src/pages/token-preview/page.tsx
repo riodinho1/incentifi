@@ -1590,11 +1590,11 @@ const TokenPreviewPage = () => {
                     {liquidityEth > 0 ? (
                       <span>{formatEth(liquidityEth)} <span className="text-[10px] sm:text-xs font-normal text-[#8DA3CD]">{EVM_NATIVE_SYMBOL}</span></span>
                     ) : (
-                      <span className="text-[#8DA3CD] font-medium text-xs sm:text-sm">Awaiting pool</span>
+                      <span className="text-emerald-400 font-medium text-xs sm:text-sm">Incentifi Curve</span>
                     )}
                   </p>
                   <p className="text-[10px] sm:text-[11px] text-[#64799E] mt-0.5 truncate">
-                    {liquidityUsd > 0 ? formatCurrencyCompact(liquidityUsd) : 'Awaiting liquidity'}
+                    {liquidityUsd > 0 ? formatCurrencyCompact(liquidityUsd) : 'Active AMM'}
                   </p>
                 </div>
 
