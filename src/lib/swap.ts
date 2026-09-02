@@ -25,7 +25,7 @@ const FACTORY_ABI = parseAbi([
 ]);
 
 const POOL_ABI = parseAbi([
-  'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, boolean unlocked)',
+  'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)',
 ]);
 
 const ERC20_ABI = parseAbi([
