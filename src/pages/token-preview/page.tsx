@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   ArrowLeft,
   Copy,
@@ -26,6 +26,7 @@ import {
   EVM_NATIVE_SYMBOL,
   EVM_TX_URL,
   getEvmProvider,
+  publicClient,
 } from '../../lib/evmNetwork';
 import {
   fetchIndexedCandles,
@@ -38,7 +39,7 @@ import {
 import { buyToken, sellToken, getUnifiedMarketState, type UnifiedMarketState } from '../../lib/swap';
 import { fetchPoolHistory } from '../../lib/poolHistory';
 import { fetchChatMessages, postChatMessage, type ChatMessage } from '../../lib/chat';
-import { getWalletAccount } from '../../lib/walletAccount';
+import { getWalletAccount, subscribeWalletAccount } from '../../lib/walletAccount';
 import { describeError } from '../../lib/errors';
 import { encodeFunctionData, parseAbi, getAddress } from 'viem';
 import {
@@ -47,9 +48,20 @@ import {
   getClaimableRewards,
   claimBatchRewards,
   getLossRewardPoolTVL,
+  formatLossRewardEthPrice,
   type HolderCostBasis,
   type ClaimableRewardsState,
 } from '../../lib/lossReward';
+import {
+  getStoredSession,
+  clearStoredSession,
+  authenticateWallet,
+  fetchLossRewardData,
+} from '../../lib/lossRewardAuth';
+import {
+  GRADUATION_ETH_TARGET,
+  GRADUATION_MARKET_CAP_USD,
+} from '../../lib/bondingCurve';
 import IncentifiPriceChart, { type ChartPoint, type Trade, type TradeSide } from './IncentifiPriceChart';
 
 type TokenData = {
@@ -106,6 +118,7 @@ const TOTAL_SUPPLY = 1_000_000_000;
 const INITIAL_MARKET_CAP_USD = 5000;
 const INITIAL_TOKEN_PRICE_USD = INITIAL_MARKET_CAP_USD / TOTAL_SUPPLY; // $0.000005
 const FALLBACK_ETH_USD = 2500;
+const GRADUATION_ETH_NUM = Number(GRADUATION_ETH_TARGET) / 1e18; // 5.853863234375
 
 const formatNumber = (value: number, maxDecimals = 4): string => {
   if (!Number.isFinite(value)) return '0';
@@ -158,13 +171,19 @@ const formatPercent = (value: number, digits = 2): string => {
 
 const shortSig = (sig: string) => {
   if (!sig) return '';
-  if (sig.length <= 12) return sig;
-  return `${sig.slice(0, 6)}...${sig.slice(-6)}`;
+  const clean = sig.split(/[:_#-]/)[0];
+  if (clean.length <= 12) return clean;
+  return `${clean.slice(0, 6)}...${clean.slice(-4)}`;
 };
 
 const TokenPreviewPage = () => {
   const location = useLocation();
   const navigate = useNavigate();
+
+  const connectedWallet = useSyncExternalStore(
+    subscribeWalletAccount,
+    getWalletAccount
+  );
 
   const [loading, setLoading] = useState(true);
   const [tokenData, setTokenData] = useState<TokenData | null>(null);
@@ -210,6 +229,8 @@ const TokenPreviewPage = () => {
   const [lossPoolTvl, setLossPoolTvl] = useState<number>(0);
   const [claiming, setClaiming] = useState(false);
   const [claimSuccessMsg, setClaimSuccessMsg] = useState<string | null>(null);
+  const [unlocking, setUnlocking] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // Fetch live ETH/USD price from Coinbase
   useEffect(() => {
@@ -232,37 +253,73 @@ const TokenPreviewPage = () => {
     };
   }, []);
 
-  // Fetch Loss-Reward Data
+  // Clear transient wallet-specific UI state on wallet switch or disconnect
   useEffect(() => {
-    let cancelled = false;
-    const loadLossRewardData = async () => {
-      const wallet = getWalletAccount();
-      if (!tokenData?.mintAddress) return;
+    setClaimSuccessMsg(null);
+    setSellAmountToken('');
+    setAuthError(null);
+    if (!connectedWallet) {
+      clearStoredSession();
+    }
+  }, [connectedWallet]);
 
-      try {
-        const [tvl, costBasis, claimable] = await Promise.all([
-          getLossRewardPoolTVL(tokenData.mintAddress),
-          wallet ? getHolderCostBasis(tokenData.mintAddress, wallet) : null,
-          wallet ? getClaimableRewards(tokenData.mintAddress, wallet) : { unclaimedEpochs: [], totalClaimableEth: 0 },
-        ]);
+  const loadLossRewardData = async () => {
+    if (!tokenData?.mintAddress) return;
+    try {
+      const tvl = await getLossRewardPoolTVL(tokenData.mintAddress);
+      setLossPoolTvl(tvl);
 
-        if (!cancelled) {
-          setLossPoolTvl(tvl);
-          if (costBasis) setCostBasisData(costBasis);
-          setClaimableState(claimable);
-        }
-      } catch (err) {
-        console.error('Failed to load loss-reward data:', err);
+      if (!connectedWallet) {
+        setCostBasisData(null);
+        setClaimableState({ unclaimedEpochs: [], totalClaimableEth: 0 });
+        return;
       }
-    };
+
+      // If active session exists in sessionStorage, fetch data via gateway
+      if (getStoredSession(connectedWallet)) {
+        const { costBasis, claimable } = await fetchLossRewardData(tokenData.mintAddress, connectedWallet);
+        setCostBasisData(costBasis);
+        setClaimableState(claimable);
+      }
+    } catch (err: any) {
+      console.warn('Loss reward data load issue:', err);
+    }
+  };
+
+  const handleUnlockProtection = async () => {
+    if (!connectedWallet || !tokenData?.mintAddress) return;
+    try {
+      setUnlocking(true);
+      setAuthError(null);
+      await authenticateWallet(connectedWallet);
+      const { costBasis, claimable } = await fetchLossRewardData(tokenData.mintAddress, connectedWallet);
+      setCostBasisData(costBasis);
+      setClaimableState(claimable);
+    } catch (err: any) {
+      console.error('Wallet authentication failed:', err);
+      setAuthError(err.message || 'Signature rejected or authentication failed.');
+    } finally {
+      setUnlocking(false);
+    }
+  };
+
+  // Fetch Loss-Reward Data (reactively reloaded per connected wallet & token)
+  useEffect(() => {
+    if (!tokenData?.mintAddress) return;
+
+    // Immediately clear previous wallet state to prevent stale data cross-contamination
+    setCostBasisData(null);
+    setClaimableState({
+      unclaimedEpochs: [],
+      totalClaimableEth: 0,
+    });
 
     loadLossRewardData();
     const interval = setInterval(loadLossRewardData, 15_000);
     return () => {
-      cancelled = true;
       clearInterval(interval);
     };
-  }, [tokenData?.mintAddress, onchainBalances.tokenBalance]);
+  }, [tokenData?.mintAddress, connectedWallet, onchainBalances.tokenBalance]);
 
   const lossStats = useMemo(() => {
     const currentPrice = livePoolState ? livePoolState.priceEth : 0;
@@ -270,7 +327,7 @@ const TokenPreviewPage = () => {
   }, [costBasisData, livePoolState]);
 
   const handleClaimRewards = async () => {
-    const wallet = getWalletAccount();
+    const wallet = connectedWallet || getWalletAccount();
     if (!wallet || !tokenData?.mintAddress || claimableState.unclaimedEpochs.length === 0) return;
 
     try {
@@ -295,13 +352,12 @@ const TokenPreviewPage = () => {
       const symbolFromUrl = pathParts[pathParts.length - 1].toUpperCase();
 
       const saved = localStorage.getItem('previewToken');
+      let localData: TokenData | null = null;
       if (saved) {
         try {
           const parsed = JSON.parse(saved) as TokenData;
           if (parsed.tokenSymbol?.toUpperCase() === symbolFromUrl) {
-            setTokenData(parsed);
-            setLoading(false);
-            return;
+            localData = parsed;
           }
         } catch {
           // Ignore parse error and proceed to DB query
@@ -328,22 +384,32 @@ const TokenPreviewPage = () => {
             telegram?: string;
             mint_address?: string;
           };
-          setTokenData({
-            tokenName: first.name || symbolFromUrl,
-            tokenSymbol: first.symbol || symbolFromUrl,
-            description: first.description || '',
-            imageUrl: first.image_url || '',
-            website: first.website || '',
-            twitter: first.twitter || '',
-            telegram: first.telegram || '',
-            mintAddress: first.mint_address || '',
+          const authoritative: TokenData = {
+            tokenName: first.name || localData?.tokenName || symbolFromUrl,
+            tokenSymbol: first.symbol || localData?.tokenSymbol || symbolFromUrl,
+            description: first.description || localData?.description || '',
+            imageUrl: first.image_url || localData?.imageUrl || '',
+            website: first.website || localData?.website || '',
+            twitter: first.twitter || localData?.twitter || '',
+            telegram: first.telegram || localData?.telegram || '',
+            mintAddress: first.mint_address || localData?.mintAddress || '',
             chain: 'evm',
-          });
+          };
+          setTokenData(authoritative);
+          setLoading(false);
+          return;
+        } else if (localData) {
+          setTokenData(localData);
           setLoading(false);
           return;
         }
       } catch (err) {
-        console.error('Failed to load token data:', err);
+        console.error('Failed to load token data from Supabase:', err);
+        if (localData) {
+          setTokenData(localData);
+          setLoading(false);
+          return;
+        }
       }
 
       navigate('/launch');
@@ -352,9 +418,15 @@ const TokenPreviewPage = () => {
     loadToken();
   }, [location.pathname, navigate]);
 
-  // Reset state when token changes
+  // Reset state when token contract address changes (keyed strictly to contract address identity)
+  const normalizedMint = tokenData?.mintAddress?.toLowerCase();
+  const prevMintRef = useRef<string | undefined>(undefined);
+
   useEffect(() => {
-    if (!tokenData) return;
+    if (!normalizedMint) return;
+    if (prevMintRef.current === normalizedMint) return;
+    prevMintRef.current = normalizedMint;
+
     setMarketSnapshot(null);
     setLivePoolState(null);
     setPrimaryPoolAddress('');
@@ -367,7 +439,7 @@ const TokenPreviewPage = () => {
       avgEntry: 0,
       realizedPnl: 0,
     });
-  }, [tokenData]);
+  }, [normalizedMint]);
 
   // Track unified bonding curve & pool state
   const [unifiedMarket, setUnifiedMarket] = useState<UnifiedMarketState | null>(null);
@@ -471,7 +543,7 @@ const TokenPreviewPage = () => {
   }, [tokenData?.tokenSymbol]);
 
   const submitChatMessage = async () => {
-    const trader = getWalletAccount();
+    const trader = connectedWallet || getWalletAccount();
     if (!trader) {
       setChatError('Connect wallet to chat.');
       return;
@@ -494,35 +566,43 @@ const TokenPreviewPage = () => {
     }
   };
 
-  // Load Onchain Token and ETH Balances
+  // Load Onchain Token and ETH Balances (reactively reloaded per connected wallet)
   useEffect(() => {
-    if (!tokenData?.mintAddress) return;
-    const trader = getWalletAccount();
-    const provider = getEvmProvider();
-    if (!trader || !provider) return;
+    // Immediately clear previous wallet balance & position to prevent displaying Wallet A data
+    setOnchainBalances({ walletSol: 0, tokenBalance: 0, loading: Boolean(connectedWallet) });
+    setPosition((prev) => ({ ...prev, tokens: 0 }));
+
+    if (!tokenData?.mintAddress || !connectedWallet) {
+      setOnchainBalances({ walletSol: 0, tokenBalance: 0, loading: false });
+      return;
+    }
 
     let cancelled = false;
     const loadBalances = async () => {
       try {
-        const balanceData = encodeFunctionData({
-          abi: parseAbi(['function balanceOf(address account) view returns (uint256)']),
-          functionName: 'balanceOf',
-          args: [getAddress(trader)],
-        });
-        const [tokenBalanceHex, weiBalanceHex] = await Promise.all([
-          provider.request({
-            method: 'eth_call',
-            params: [{ to: tokenData.mintAddress, data: balanceData }, 'latest'],
+        const tokenAddr = getAddress(tokenData.mintAddress!);
+        const walletAddr = getAddress(connectedWallet);
+
+        const [tokenBalanceRaw, weiBalanceRaw] = await Promise.all([
+          publicClient.readContract({
+            address: tokenAddr,
+            abi: parseAbi(['function balanceOf(address account) view returns (uint256)']),
+            functionName: 'balanceOf',
+            args: [walletAddr],
           }),
-          provider.request({ method: 'eth_getBalance', params: [trader, 'latest'] }),
+          publicClient.getBalance({ address: walletAddr }),
         ]);
+
         if (cancelled) return;
-        const tokenBalance = Number(BigInt(tokenBalanceHex)) / 1e18;
-        const walletSol = Number(BigInt(weiBalanceHex)) / 1e18;
+        const tokenBalance = Number(tokenBalanceRaw) / 10 ** (onchainMintInfo.decimals || 18);
+        const walletSol = Number(weiBalanceRaw) / 1e18;
         setOnchainBalances({ walletSol, tokenBalance, loading: false });
         setPosition((prev) => ({ ...prev, tokens: tokenBalance }));
       } catch (err) {
         console.error('Failed to load initial on-chain balances:', err);
+        if (!cancelled) {
+          setOnchainBalances((prev) => ({ ...prev, loading: false }));
+        }
       }
     };
 
@@ -530,7 +610,7 @@ const TokenPreviewPage = () => {
     return () => {
       cancelled = true;
     };
-  }, [tokenData?.mintAddress]);
+  }, [tokenData?.mintAddress, connectedWallet, onchainMintInfo.decimals]);
 
   useEffect(() => {
     if (!tokenData) return;
@@ -584,7 +664,7 @@ const TokenPreviewPage = () => {
 
   // Load Indexed Supabase Data
   useEffect(() => {
-    if (!tokenData) return;
+    if (!tokenData?.mintAddress) return;
     let cancelled = false;
 
     const loadIndexedState = async () => {
@@ -691,17 +771,17 @@ const TokenPreviewPage = () => {
           });
         }
       } catch (err) {
-        console.error('Failed to load indexed market state:', err);
+        console.error('Failed to load indexed market data:', err);
       }
     };
 
     loadIndexedState();
-    const timer = setInterval(loadIndexedState, 20_000);
+    const timer = setInterval(loadIndexedState, 10_000);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [tokenData]);
+  }, [tokenData?.mintAddress, tokenData?.tokenSymbol]);
 
   // Load Onchain Uniswap V3 Pool Swap Event History
   useEffect(() => {
@@ -767,161 +847,8 @@ const TokenPreviewPage = () => {
     };
   }, [primaryPoolAddress, tokenData?.mintAddress, onchainMintInfo.decimals]);
 
-  if (loading || !tokenData) {
-    return (
-      <div className="min-h-screen bg-[#070A12] flex items-center justify-center p-4">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-10 h-10 rounded-full border-2 border-[#1D2940] border-t-[#10B981] animate-spin" />
-          <p className="text-[#8DA3CD] text-sm font-medium">Loading token details...</p>
-        </div>
-      </div>
-    );
-  }
-
-  const submitBuy = async () => {
-    const trader = getWalletAccount();
-    if (!trader) {
-      setStatus('Connect wallet first.');
-      return;
-    }
-    const ethIn = Number(buyAmountEth);
-    if (!Number.isFinite(ethIn) || ethIn <= 0) {
-      setStatus('Enter a valid ETH amount.');
-      return;
-    }
-    if (!tokenData?.mintAddress) {
-      setStatus('No contract address found for this token.');
-      return;
-    }
-    try {
-      setOnchainBusy(true);
-      setTxPhase('signing');
-      const result = await buyToken(tokenData.mintAddress, trader, ethIn, slippage, ethUsdPrice);
-      const timestamp = Date.now();
-      if (result.trade.side !== 'buy') {
-        throw new Error('Transaction confirmed, but reported sell instead of buy.');
-      }
-      pushTrade({
-        id: result.txHash,
-        signature: result.txHash,
-        time: new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        timestamp,
-        side: result.trade.side,
-        price: result.trade.priceEth,
-        amountToken: result.trade.amountToken,
-        amountSol: result.trade.amountEth,
-        feeSol: 0,
-      });
-      appendConfirmedTradePoint(result.trade.priceEth, result.trade.amountEth, timestamp);
-      const market = await getUnifiedMarketState(tokenData.mintAddress, ethUsdPrice);
-      setUnifiedMarket(market);
-      if (market.poolAddress) setPrimaryPoolAddress(market.poolAddress);
-      setLivePoolState({ priceEth: market.priceEth, liquidityEth: market.realEthReserveEth * 2, updatedAt: Date.now() });
-      setTxPhase('success');
-      setStatus(`Buy confirmed (${shortSig(result.txHash)}).`);
-      await refreshOnchainBalances();
-    } catch (err) {
-      console.error('Buy failed:', err);
-      setTxPhase('error');
-      setStatus(describeError(err));
-    } finally {
-      setOnchainBusy(false);
-    }
-  };
-
-  const submitSell = async () => {
-    const trader = getWalletAccount();
-    if (!trader) {
-      setStatus('Connect wallet first.');
-      return;
-    }
-    const amount = Number(sellAmountToken);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setStatus('Enter a valid token amount.');
-      return;
-    }
-    if (!tokenData?.mintAddress) {
-      setStatus('No contract address found for this token.');
-      return;
-    }
-    try {
-      setOnchainBusy(true);
-      setTxPhase('signing');
-      const result = await sellToken(
-        tokenData.mintAddress,
-        trader,
-        amount,
-        slippage,
-        ethUsdPrice
-      );
-      const timestamp = Date.now();
-      if (result.trade.side !== 'sell') {
-        throw new Error('Transaction confirmed, but reported buy instead of sell.');
-      }
-      pushTrade({
-        id: result.txHash,
-        signature: result.txHash,
-        time: new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        timestamp,
-        side: result.trade.side,
-        price: result.trade.priceEth,
-        amountToken: result.trade.amountToken,
-        amountSol: result.trade.amountEth,
-        feeSol: 0,
-      });
-      appendConfirmedTradePoint(result.trade.priceEth, result.trade.amountEth, timestamp);
-      const market = await getUnifiedMarketState(tokenData.mintAddress, ethUsdPrice);
-      setUnifiedMarket(market);
-      if (market.poolAddress) setPrimaryPoolAddress(market.poolAddress);
-      setLivePoolState({ priceEth: market.priceEth, liquidityEth: market.realEthReserveEth * 2, updatedAt: Date.now() });
-      setTxPhase('success');
-      setStatus(`Sell confirmed (${shortSig(result.txHash)}).`);
-      setSellAmountToken('');
-      await refreshOnchainBalances();
-    } catch (err) {
-      console.error('Sell failed:', err);
-      setTxPhase('error');
-      setStatus(describeError(err));
-    } finally {
-      setOnchainBusy(false);
-    }
-  };
-
   const quickBuy = (amount: number) => setBuyAmountEth(String(amount));
-
-  const refreshOnchainBalances = async () => {
-    const trader = getWalletAccount();
-    const provider = getEvmProvider();
-    if (!trader || !provider || !tokenData?.mintAddress) return;
-
-    try {
-      setOnchainBalances((prev) => ({ ...prev, loading: true }));
-
-      const balanceData = encodeFunctionData({
-        abi: parseAbi(['function balanceOf(address account) view returns (uint256)']),
-        functionName: 'balanceOf',
-        args: [getAddress(trader)],
-      });
-
-      const [tokenBalanceHex, weiBalanceHex] = await Promise.all([
-        provider.request({
-          method: 'eth_call',
-          params: [{ to: tokenData.mintAddress, data: balanceData }, 'latest'],
-        }),
-        provider.request({ method: 'eth_getBalance', params: [trader, 'latest'] }),
-      ]);
-
-      const tokenBalance = Number(BigInt(tokenBalanceHex)) / 10 ** onchainMintInfo.decimals;
-      const walletSol = Number(BigInt(weiBalanceHex)) / 1e18;
-
-      setOnchainBalances({ walletSol, tokenBalance, loading: false });
-      setPosition((prev) => ({ ...prev, tokens: tokenBalance }));
-    } catch (err) {
-      console.error('Failed to refresh on-chain balances:', err);
-      setOnchainBalances((prev) => ({ ...prev, loading: false }));
-    }
-  };
-
+  const quickSellPct = (pct: number) => setPercentSell(pct);
   const normalizeTokenInput = (raw: string) => {
     if (!raw) return '';
     const num = Number(raw);
@@ -931,13 +858,143 @@ const TokenPreviewPage = () => {
     return decimals > 0 ? fixed.replace(/\.?0+$/, '') : String(Math.floor(num));
   };
 
-  const formatInputAmount = (value: number) => {
-    if (!Number.isFinite(value) || value <= 0) return '';
-    const decimals = Math.max(0, Math.min(9, onchainMintInfo.decimals));
-    return normalizeTokenInput(value.toFixed(decimals));
+  const handleBuy = async () => {
+    if (!tokenData?.mintAddress) return;
+    const trader = connectedWallet || getWalletAccount();
+    if (!trader) {
+      setStatus('Connect wallet first.');
+      return;
+    }
+
+    try {
+      setOnchainBusy(true);
+      setTxPhase('signing');
+      setStatus('Initiating transaction...');
+
+      const result = await buyToken(
+        tokenData.mintAddress,
+        trader,
+        buyAmountEth,
+        slippage,
+        ethUsdPrice
+      );
+
+      setTxPhase('success');
+      setStatus(`Bought ${formatTokenAmount(result.trade.amountToken)} ${displaySymbol}!`);
+
+      pushTrade({
+        id: result.txHash,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: Date.now(),
+        side: 'buy',
+        price: result.trade.priceEth,
+        amountToken: result.trade.amountToken,
+        amountSol: result.trade.amountEth,
+        feeSol: result.trade.amountEth * 0.02,
+        signature: result.txHash,
+      });
+
+      appendConfirmedTradePoint(result.trade.priceEth, result.trade.amountEth, Date.now());
+
+      await Promise.all([
+        refreshOnchainBalances(),
+        loadLossRewardData(),
+      ]);
+    } catch (err: any) {
+      console.error('Buy error:', err);
+      setTxPhase('error');
+      setStatus(describeError(err));
+    } finally {
+      setOnchainBusy(false);
+    }
   };
 
-  const quickSellPct = (pct: number) => {
+  const handleSell = async () => {
+    if (!tokenData?.mintAddress) return;
+    const trader = connectedWallet || getWalletAccount();
+    if (!trader) {
+      setStatus('Connect wallet first.');
+      return;
+    }
+
+    try {
+      setOnchainBusy(true);
+      setTxPhase('signing');
+      setStatus('Initiating sell transaction...');
+
+      const result = await sellToken(
+        tokenData.mintAddress,
+        trader,
+        sellAmountToken,
+        slippage,
+        ethUsdPrice
+      );
+
+      setTxPhase('success');
+      setStatus(`Sold ${formatTokenAmount(result.trade.amountToken)} ${displaySymbol}!`);
+
+      pushTrade({
+        id: result.txHash,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: Date.now(),
+        side: 'sell',
+        price: result.trade.priceEth,
+        amountToken: result.trade.amountToken,
+        amountSol: result.trade.amountEth,
+        feeSol: result.trade.amountEth * 0.02,
+        signature: result.txHash,
+      });
+
+      appendConfirmedTradePoint(result.trade.priceEth, result.trade.amountEth, Date.now());
+
+      setSellAmountToken('');
+      await Promise.all([
+        refreshOnchainBalances(),
+        loadLossRewardData(),
+      ]);
+    } catch (err: any) {
+      console.error('Sell error:', err);
+      setTxPhase('error');
+      setStatus(describeError(err));
+    } finally {
+      setOnchainBusy(false);
+    }
+  };
+
+  const refreshOnchainBalances = async () => {
+    if (!tokenData?.mintAddress || !connectedWallet) return;
+    try {
+      const tokenAddr = getAddress(tokenData.mintAddress);
+      const walletAddr = getAddress(connectedWallet);
+
+      const [tokenBalanceRaw, weiBalanceRaw] = await Promise.all([
+        publicClient.readContract({
+          address: tokenAddr,
+          abi: parseAbi(['function balanceOf(address account) view returns (uint256)']),
+          functionName: 'balanceOf',
+          args: [walletAddr],
+        }),
+        publicClient.getBalance({ address: walletAddr }),
+      ]);
+
+      const tokenBalance = Number(tokenBalanceRaw) / 10 ** (onchainMintInfo.decimals || 18);
+      const walletSol = Number(weiBalanceRaw) / 1e18;
+      setOnchainBalances({ walletSol, tokenBalance, loading: false });
+      setPosition((prev) => ({ ...prev, tokens: tokenBalance }));
+    } catch (err) {
+      console.error('Failed to refresh on-chain balances:', err);
+    }
+  };
+
+  const formatInputAmount = (value: number) => {
+    if (!Number.isFinite(value) || value <= 0) return '';
+    return value.toLocaleString('en-US', {
+      useGrouping: false,
+      maximumFractionDigits: Math.min(6, Math.max(2, onchainMintInfo.decimals || 6)),
+    });
+  };
+
+  const setPercentSell = (pct: number) => {
     if (position.tokens <= 0) return;
     setSellAmountToken(formatInputAmount(position.tokens * (pct / 100)));
   };
@@ -956,8 +1013,21 @@ const TokenPreviewPage = () => {
 
   const renderGraduationProgressCard = () => {
     const isGrad = Boolean(unifiedMarket?.isGraduated);
-    const progressPct = unifiedMarket?.progressBps ? (unifiedMarket.progressBps / 100).toFixed(1) : '0.0';
-    const ethAccumulated = unifiedMarket?.realEthReserveEth ? unifiedMarket.realEthReserveEth.toFixed(4) : '0.0000';
+
+    // Prefer live on-chain reserve, fallback to public database snapshot liquidity/2
+    const currentEthReserve = (unifiedMarket?.realEthReserveEth && unifiedMarket.realEthReserveEth > 0)
+      ? unifiedMarket.realEthReserveEth
+      : (marketSnapshot?.liquiditySol && marketSnapshot.liquiditySol > 0
+          ? marketSnapshot.liquiditySol / 2
+          : 0);
+
+    // Prefer on-chain getProgressBps(), fallback to computed progress against authoritative target
+    const progressBps = (unifiedMarket?.progressBps !== undefined && unifiedMarket.progressBps !== null && unifiedMarket.progressBps > 0)
+      ? unifiedMarket.progressBps
+      : (currentEthReserve > 0 ? (currentEthReserve / GRADUATION_ETH_NUM) * 10000 : 0);
+
+    const progressPct = (progressBps / 100).toFixed(1);
+    const ethAccumulated = currentEthReserve > 0 ? currentEthReserve.toFixed(4) : '0.0000';
     
     return (
       <div className="bg-[#0B1120] border border-[#1D2940] rounded-2xl p-4 sm:p-5 shadow-xl shadow-black/20">
@@ -987,13 +1057,13 @@ const TokenPreviewPage = () => {
           <div className="bg-[#070A12] border border-[#1D2940] rounded-xl p-2.5">
             <span className="text-[#64799E] block text-[10px] uppercase font-medium">Curve Reserve</span>
             <span className="text-white font-bold text-xs mt-0.5 block truncate">
-              {ethAccumulated} / 5.8539 ETH
+              {ethAccumulated} / {GRADUATION_ETH_NUM.toFixed(4)} ETH
             </span>
           </div>
           <div className="bg-[#070A12] border border-[#1D2940] rounded-xl p-2.5">
             <span className="text-[#64799E] block text-[10px] uppercase font-medium">Target Cap</span>
             <span className="text-[#10B981] font-bold text-xs mt-0.5 block truncate">
-              $69,000 USD
+              ${GRADUATION_MARKET_CAP_USD.toLocaleString()} USD
             </span>
           </div>
         </div>
@@ -1001,7 +1071,7 @@ const TokenPreviewPage = () => {
         <p className="text-[11px] text-[#8DA3CD] leading-relaxed">
           {isGrad
             ? 'Liquidity permanently seeded into Uniswap V3. Position NFT permanently burned to 0xdead.'
-            : 'When bonding curve hits 5.85 ETH ($69K MC), accumulated ETH & remaining tokens are automatically deposited to Uniswap V3 and LP burned forever.'}
+            : `When bonding curve hits ${GRADUATION_ETH_NUM.toFixed(2)} ETH ($${(GRADUATION_MARKET_CAP_USD / 1000).toFixed(0)}K MC), accumulated ETH & remaining tokens are automatically deposited to Uniswap V3 and LP burned forever.`}
         </p>
       </div>
     );
@@ -1101,7 +1171,7 @@ const TokenPreviewPage = () => {
           </div>
 
           <button
-            onClick={submitBuy}
+            onClick={handleBuy}
             disabled={onchainBusy || !tokenData?.mintAddress}
             className="w-full py-3.5 sm:py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-white font-bold text-sm sm:text-base shadow-lg shadow-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition"
           >
@@ -1176,7 +1246,7 @@ const TokenPreviewPage = () => {
           </div>
 
           <button
-            onClick={submitSell}
+            onClick={handleSell}
             disabled={
               onchainBusy ||
               !tokenData?.mintAddress ||
@@ -1285,85 +1355,105 @@ const TokenPreviewPage = () => {
           </span>
         </div>
 
-        {/* Cost Basis vs Current Price */}
-        <div className="grid grid-cols-2 gap-2">
-          <div className="rounded-xl bg-[#070A12] p-2.5 border border-[#1D2940]">
-            <span className="text-[#64799E] block text-[10px] uppercase font-medium">Your Cost Basis</span>
-            <span className="text-white font-semibold text-xs mt-0.5 block truncate">
-              {lossStats.costBasisEth > 0 ? `${lossStats.costBasisEth.toFixed(6)} ETH` : 'No Entry Yet'}
-            </span>
+        {/* If wallet is connected but session is not authenticated yet, show gas-free Unlock CTA */}
+        {connectedWallet && !getStoredSession(connectedWallet) && !costBasisData ? (
+          <div className="rounded-xl bg-gradient-to-br from-[#0C1A30] to-[#0A1424] p-3.5 border border-[#23385D] space-y-2.5 text-center">
+            <p className="text-[#8DA3CD] text-[11px] leading-relaxed">
+              Verify wallet ownership with a gas-free signature to view your real-time cost basis, protection eligibility, and claimable rewards.
+            </p>
+            <button
+              onClick={handleUnlockProtection}
+              disabled={unlocking}
+              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#10B981] to-[#059669] hover:from-[#059669] hover:to-[#047857] text-white font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2 shadow-md shadow-emerald-500/20"
+            >
+              <ShieldCheck className="w-4 h-4" />
+              <span>{unlocking ? 'Awaiting Signature...' : 'Unlock Protection (Gas-Free)'}</span>
+            </button>
+            {authError && <p className="text-rose-400 text-[11px]">{authError}</p>}
           </div>
-          <div className="rounded-xl bg-[#070A12] p-2.5 border border-[#1D2940]">
-            <span className="text-[#64799E] block text-[10px] uppercase font-medium">Current Price</span>
-            <span className="text-white font-semibold text-xs mt-0.5 block truncate">
-              {lossStats.currentPriceEth > 0 ? `${lossStats.currentPriceEth.toFixed(6)} ETH` : '0.000000 ETH'}
-            </span>
-          </div>
-        </div>
-
-        {/* Position Eligibility & Status */}
-        <div className="rounded-xl bg-[#070A12] p-3 border border-[#1D2940] space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[#8DA3CD]">Protection Status</span>
-            {costBasisData?.isUnderwaterSeller ? (
-              <span className="px-2 py-0.5 rounded bg-rose-500/10 text-rose-400 font-semibold text-[10px] border border-rose-500/20">
-                Disqualified (Sold at Loss)
-              </span>
-            ) : lossStats.isUnderwater ? (
-              <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 font-semibold text-[10px] border border-amber-500/20">
-                Underwater (-{lossStats.unrealizedLossPct.toFixed(1)}%)
-              </span>
-            ) : lossStats.tokenBalance > 0 ? (
-              <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold text-[10px] border border-emerald-500/20">
-                In Profit / Breakeven
-              </span>
-            ) : (
-              <span className="text-[#64799E] text-[11px]">No Active Tokens</span>
-            )}
-          </div>
-
-          {lossStats.isUnderwater && (
-            <div className="pt-2 border-t border-[#16243F] flex items-center justify-between text-[11px]">
-              <span className="text-[#8DA3CD]">Unrealized Loss:</span>
-              <span className="text-rose-400 font-semibold">{lossStats.unrealizedLossEth.toFixed(5)} ETH</span>
+        ) : (
+          <>
+            {/* Cost Basis vs Current Price */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-xl bg-[#070A12] p-2.5 border border-[#1D2940]">
+                <span className="text-[#64799E] block text-[10px] uppercase font-medium">Your Cost Basis</span>
+                <span className="text-white font-semibold text-xs mt-0.5 block truncate">
+                  {lossStats.costBasisEth > 0 ? formatLossRewardEthPrice(lossStats.costBasisEth) : 'No Entry Yet'}
+                </span>
+              </div>
+              <div className="rounded-xl bg-[#070A12] p-2.5 border border-[#1D2940]">
+                <span className="text-[#64799E] block text-[10px] uppercase font-medium">Current Price</span>
+                <span className="text-white font-semibold text-xs mt-0.5 block truncate">
+                  {lossStats.currentPriceEth > 0 ? formatLossRewardEthPrice(lossStats.currentPriceEth) : '0.000000 ETH'}
+                </span>
+              </div>
             </div>
-          )}
 
-          {lossStats.isUnderwater && lossStats.isEligible && (
-            <div className="flex items-center justify-between text-[11px]">
-              <span className="text-[#8DA3CD]">Est. 5-Min Reward:</span>
-              <span className="text-emerald-400 font-semibold">
-                {lossStats.theoreticalRewardEth.toFixed(5)} ETH (10%)
-              </span>
+            {/* Position Eligibility & Status */}
+            <div className="rounded-xl bg-[#070A12] p-3 border border-[#1D2940] space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[#8DA3CD]">Protection Status</span>
+                {costBasisData?.isUnderwaterSeller ? (
+                  <span className="px-2 py-0.5 rounded bg-rose-500/10 text-rose-400 font-semibold text-[10px] border border-rose-500/20">
+                    Disqualified (Sold at Loss)
+                  </span>
+                ) : lossStats.isUnderwater ? (
+                  <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 font-semibold text-[10px] border border-amber-500/20">
+                    Underwater (-{lossStats.unrealizedLossPct.toFixed(1)}%)
+                  </span>
+                ) : lossStats.tokenBalance > 0 ? (
+                  <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold text-[10px] border border-emerald-500/20">
+                    In Profit / Breakeven
+                  </span>
+                ) : (
+                  <span className="text-[#64799E] text-[11px]">No Active Tokens</span>
+                )}
+              </div>
+
+              {lossStats.isUnderwater && (
+                <div className="pt-2 border-t border-[#16243F] flex items-center justify-between text-[11px]">
+                  <span className="text-[#8DA3CD]">Unrealized Loss:</span>
+                  <span className="text-rose-400 font-semibold">{lossStats.unrealizedLossEth.toFixed(5)} ETH</span>
+                </div>
+              )}
+
+              {lossStats.isUnderwater && lossStats.isEligible && (
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-[#8DA3CD]">Est. 5-Min Reward:</span>
+                  <span className="text-emerald-400 font-semibold">
+                    {lossStats.theoreticalRewardEth.toFixed(5)} ETH (10%)
+                  </span>
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* Claim Reward Action */}
-        <div className="rounded-xl bg-gradient-to-br from-[#0C1A30] to-[#0A1424] p-3.5 border border-[#23385D] space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-[#9FB0CF] text-xs">Claimable Rewards:</span>
-            <span className="text-white font-bold text-xs sm:text-sm">
-              {claimableState.totalClaimableEth > 0 ? `${claimableState.totalClaimableEth.toFixed(5)} ${EVM_NATIVE_SYMBOL}` : '0.0000 ETH'}
-            </span>
-          </div>
+            {/* Claim Reward Action */}
+            <div className="rounded-xl bg-gradient-to-br from-[#0C1A30] to-[#0A1424] p-3.5 border border-[#23385D] space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[#9FB0CF] text-xs">Claimable Rewards:</span>
+                <span className="text-white font-bold text-xs sm:text-sm">
+                  {claimableState.totalClaimableEth > 0 ? `${claimableState.totalClaimableEth.toFixed(5)} ${EVM_NATIVE_SYMBOL}` : '0.0000 ETH'}
+                </span>
+              </div>
 
-          <button
-            onClick={handleClaimRewards}
-            disabled={claiming || claimableState.totalClaimableEth <= 0}
-            className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#10B981] to-[#059669] hover:from-[#059669] hover:to-[#047857] text-white font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2 shadow-md shadow-emerald-500/20"
-          >
-            {claiming ? (
-              <span>Verifying Proof & Claiming...</span>
-            ) : (
-              <span>Claim Rewards {claimableState.unclaimedEpochs.length > 0 ? `(${claimableState.unclaimedEpochs.length} Epochs)` : ''}</span>
-            )}
-          </button>
+              <button
+                onClick={handleClaimRewards}
+                disabled={claiming || claimableState.totalClaimableEth <= 0}
+                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#10B981] to-[#059669] hover:from-[#059669] hover:to-[#047857] text-white font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2 shadow-md shadow-emerald-500/20"
+              >
+                {claiming ? (
+                  <span>Verifying Proof & Claiming...</span>
+                ) : (
+                  <span>Claim Rewards {claimableState.unclaimedEpochs.length > 0 ? `(${claimableState.unclaimedEpochs.length} Epochs)` : ''}</span>
+                )}
+              </button>
 
-          {claimSuccessMsg && (
-            <p className="text-center text-emerald-400 text-[11px] font-medium">{claimSuccessMsg}</p>
-          )}
-        </div>
+              {claimSuccessMsg && (
+                <p className="text-center text-emerald-400 text-[11px] font-medium">{claimSuccessMsg}</p>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1421,6 +1511,17 @@ const TokenPreviewPage = () => {
       </div>
     </div>
   );
+
+  if (loading || !tokenData) {
+    return (
+      <div className="min-h-screen bg-[#070A12] flex items-center justify-center text-[#8DA3CD]">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs">Loading market workspace...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#070A12] text-[#E8EEF9] overflow-x-hidden font-sans selection:bg-[#10B981]/30 selection:text-white">
