@@ -184,6 +184,75 @@ export function calculateEthOut(
 }
 
 /**
+ * Pure offline calculation of required gross ETH to buy an exact desired token output.
+ * Fully accounts for the 1.0% creator fee and 1.0% loss pool fee.
+ */
+export function calculateGrossEthForTokens(
+  desiredTokensOutWei: bigint,
+  realEthReserveWei: bigint = 0n,
+  realTokenReserveWei: bigint = TOTAL_TOKEN_SUPPLY
+): {
+  grossEthRequiredWei: bigint;
+  creatorFeeWei: bigint;
+  lossPoolFeeWei: bigint;
+  netEthInWei: bigint;
+  tokensOut: bigint;
+} {
+  if (desiredTokensOutWei <= 0n) {
+    return {
+      grossEthRequiredWei: 0n,
+      creatorFeeWei: 0n,
+      lossPoolFeeWei: 0n,
+      netEthInWei: 0n,
+      tokensOut: 0n,
+    };
+  }
+
+  if (desiredTokensOutWei > realTokenReserveWei) {
+    throw new Error('Desired amount exceeds remaining bonding curve inventory.');
+  }
+
+  const currentEth = VIRTUAL_ETH + realEthReserveWei;
+  const currentToken = VIRTUAL_TOKEN + realTokenReserveWei;
+
+  if (desiredTokensOutWei >= currentToken) {
+    throw new Error('Desired amount exceeds total virtual token reserve.');
+  }
+
+  const targetNewToken = currentToken - desiredTokensOutWei;
+  const targetNewEth = (INVARIANT_K + targetNewToken - 1n) / targetNewToken;
+  const netEthNeeded = targetNewEth > currentEth ? targetNewEth - currentEth : 0n;
+
+  // Since netEth = grossEth - 2 * (grossEth / 100) = grossEth * 98 / 100
+  let grossEth = (netEthNeeded * 100n + 97n) / 98n;
+
+  // Fine-tune with calculateTokensOut to ensure tokensOut >= desiredTokensOutWei
+  let quote = calculateTokensOut(grossEth, realEthReserveWei, realTokenReserveWei);
+  while (quote.tokensOut < desiredTokensOutWei && grossEth < 10_000n * 10n ** 18n) {
+    grossEth += 1n;
+    quote = calculateTokensOut(grossEth, realEthReserveWei, realTokenReserveWei);
+  }
+
+  while (grossEth > 0n) {
+    const lowerQuote = calculateTokensOut(grossEth - 1n, realEthReserveWei, realTokenReserveWei);
+    if (lowerQuote.tokensOut >= desiredTokensOutWei) {
+      grossEth -= 1n;
+      quote = lowerQuote;
+    } else {
+      break;
+    }
+  }
+
+  return {
+    grossEthRequiredWei: grossEth,
+    creatorFeeWei: quote.creatorFeeWei,
+    lossPoolFeeWei: quote.lossPoolFeeWei,
+    netEthInWei: quote.netEthInWei,
+    tokensOut: quote.tokensOut,
+  };
+}
+
+/**
  * Calculates spot price and market cap.
  */
 export function calculateSpotPriceAndMarketCap(

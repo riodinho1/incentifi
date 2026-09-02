@@ -1,4 +1,4 @@
-import { decodeEventLog, encodeFunctionData, parseAbi, getAddress } from 'viem';
+import { decodeEventLog, encodeFunctionData, parseAbi, getAddress, parseEther, parseUnits } from 'viem';
 import { getEvmProvider, publicClient, ensureEvmChain } from './evmNetwork';
 import {
   UNISWAP_V3_FACTORY,
@@ -25,7 +25,7 @@ const FACTORY_ABI = parseAbi([
 ]);
 
 const POOL_ABI = parseAbi([
-  'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)',
+  'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, boolean unlocked)',
 ]);
 
 const ERC20_ABI = parseAbi([
@@ -34,17 +34,11 @@ const ERC20_ABI = parseAbi([
   'function allowance(address owner, address spender) view returns (uint256)',
 ]);
 
-const SWAP_EVENT_ABI = parseAbi([
-  'event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)',
-]);
-
-const INCENTIFI_TRADE_EVENT_ABI = parseAbi([
-  'event IncentifiTrade(address indexed token, address indexed trader, bool indexed isBuy, uint256 ethAmount, uint256 tokenAmount, uint256 creatorFee, uint256 lossPoolFee)',
-]);
-
 const INCENTIFI_ROUTER_ABI = parseAbi([
   'function buyToken(address token, uint256 amountOutMinimum, uint256 deadline) payable returns (uint256 amountOut)',
-  'function sellToken(address token, uint256 tokenAmountIn, uint256 minEthOut, uint256 deadline) returns (uint256 netEthOut)',
+  'function sellToken(address token, uint256 amountIn, uint256 amountOutMinimum, uint256 deadline) returns (uint256 amountOut)',
+  'event Bought(address indexed buyer, address indexed token, uint256 ethIn, uint256 tokensOut, uint256 creatorFee, uint256 lossRewardFee)',
+  'event Sold(address indexed seller, address indexed token, uint256 tokensIn, uint256 ethOut, uint256 creatorFee, uint256 lossRewardFee)',
 ]);
 
 const toQuantityHex = (value: bigint) => `0x${value.toString(16)}`;
@@ -69,10 +63,11 @@ const waitForReceipt = async (txHash: string) => {
   throw new Error('Transaction was submitted, but confirmation timed out.');
 };
 
-const priceInEth = (sqrtPriceX96: bigint, tokenIsToken0: boolean): number => {
-  const ratio = Number(sqrtPriceX96) / 2 ** 96;
-  const token1PerToken0 = ratio * ratio;
-  return tokenIsToken0 ? token1PerToken0 : 1 / token1PerToken0;
+const priceInEth = (sqrtPriceX96: bigint, isTokenFirst: boolean) => {
+  const Q96 = 1n << 96n;
+  const sqrtPrice = Number(sqrtPriceX96) / Number(Q96);
+  const rawPrice = sqrtPrice * sqrtPrice;
+  return isTokenFirst ? 1 / rawPrice : rawPrice;
 };
 
 export type ConfirmedPoolSwap = {
@@ -201,7 +196,7 @@ export type SwapResult = {
 export const buyToken = async (
   tokenAddress: string,
   trader: string,
-  ethAmount: string | number,
+  ethAmount: string | number | bigint,
   slippagePct: number,
   ethPriceUsd: number = REFERENCE_ETH_USD
 ): Promise<SwapResult> => {
@@ -212,7 +207,12 @@ export const buyToken = async (
   const token = getAddress(tokenAddress);
   const traderAddr = getAddress(trader);
 
-  const ethWei = BigInt(Math.round(Number(ethAmount) * 1e18));
+  const ethWei = typeof ethAmount === 'bigint'
+    ? ethAmount
+    : typeof ethAmount === 'number'
+      ? parseEther(ethAmount.toFixed(18))
+      : parseEther(String(ethAmount).trim());
+
   if (ethWei <= 0n) throw new Error('Enter a valid ETH amount.');
 
   const curveState = await fetchBondingCurveState(token, ethPriceUsd);
@@ -304,7 +304,7 @@ export const buyToken = async (
 export const sellToken = async (
   tokenAddress: string,
   trader: string,
-  tokenAmount: string | number,
+  tokenAmount: string | number | bigint,
   slippagePct: number,
   ethPriceUsd: number = REFERENCE_ETH_USD
 ): Promise<SwapResult> => {
@@ -315,7 +315,12 @@ export const sellToken = async (
   const token = getAddress(tokenAddress);
   const traderAddr = getAddress(trader);
 
-  const tokenWei = BigInt(Math.round(Number(tokenAmount) * 1e18));
+  const tokenWei = typeof tokenAmount === 'bigint'
+    ? tokenAmount
+    : typeof tokenAmount === 'number'
+      ? parseUnits(tokenAmount.toFixed(18), 18)
+      : parseUnits(String(tokenAmount).trim(), 18);
+
   if (tokenWei <= 0n) throw new Error('Enter a valid token amount.');
 
   const curveState = await fetchBondingCurveState(token, ethPriceUsd);

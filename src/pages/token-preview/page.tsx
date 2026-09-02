@@ -41,7 +41,7 @@ import { fetchPoolHistory } from '../../lib/poolHistory';
 import { fetchChatMessages, postChatMessage, type ChatMessage } from '../../lib/chat';
 import { getWalletAccount, subscribeWalletAccount } from '../../lib/walletAccount';
 import { describeError } from '../../lib/errors';
-import { encodeFunctionData, parseAbi, getAddress } from 'viem';
+import { encodeFunctionData, parseAbi, getAddress, parseEther, parseUnits, formatUnits, formatEther } from 'viem';
 import {
   getHolderCostBasis,
   calculateUnrealizedLossStats,
@@ -61,6 +61,10 @@ import {
 import {
   GRADUATION_ETH_TARGET,
   GRADUATION_MARKET_CAP_USD,
+  calculateTokensOut,
+  calculateEthOut,
+  calculateGrossEthForTokens,
+  TOTAL_TOKEN_SUPPLY,
 } from '../../lib/bondingCurve';
 import IncentifiPriceChart, { type ChartPoint, type Trade, type TradeSide } from './IncentifiPriceChart';
 
@@ -142,6 +146,22 @@ const formatEth = (value: number): string => {
   return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
 };
 
+const formatEthDetailed = (value: number): string => {
+  if (!Number.isFinite(value) || value <= 0) return '0.000000';
+  if (value < 0.000001) {
+    return value.toFixed(8).replace(/0+$/, '').replace(/\.$/, '.0');
+  }
+  if (value < 0.01) {
+    return value.toFixed(6);
+  }
+  return value.toFixed(4);
+};
+
+const formatTokenDetailed = (value: number): string => {
+  if (!Number.isFinite(value) || value <= 0) return '0';
+  return value.toLocaleString('en-US', { maximumFractionDigits: 2 });
+};
+
 const formatTokenAmount = (value: number, decimals = 6): string => {
   if (!Number.isFinite(value)) return '0';
   const abs = Math.abs(value);
@@ -188,7 +208,9 @@ const TokenPreviewPage = () => {
   const [loading, setLoading] = useState(true);
   const [tokenData, setTokenData] = useState<TokenData | null>(null);
   const [activeTab, setActiveTab] = useState<TradeSide>('buy');
+  const [buyMode, setBuyMode] = useState<'payEth' | 'receiveTokens'>('payEth');
   const [buyAmountEth, setBuyAmountEth] = useState('0.1');
+  const [buyAmountToken, setBuyAmountToken] = useState('1000000');
   const [sellAmountToken, setSellAmountToken] = useState('');
   const [onchainBusy, setOnchainBusy] = useState(false);
   const [onchainBalances, setOnchainBalances] = useState<OnchainBalances>({
@@ -488,6 +510,226 @@ const TokenPreviewPage = () => {
   }, [marketSnapshot, chartData]);
 
   const displaySymbol = onchainMintInfo.symbol || tokenData?.tokenSymbol || '';
+
+  // Derived Live Quotes for Buy & Sell
+  const buyQuote = useMemo(() => {
+    if (unifiedMarket?.isGraduated) {
+      if (buyMode === 'payEth') {
+        const ethNum = Number(buyAmountEth) || 0;
+        const priceEth = unifiedMarket.priceEth || 0;
+        const tokensOut = priceEth > 0 ? ethNum / priceEth : 0;
+        const minTokensOut = tokensOut * (1 - slippage / 100);
+        return {
+          grossEthWei: parseEther(Number.isFinite(ethNum) && ethNum > 0 ? buyAmountEth.trim() : '0'),
+          grossEthNum: ethNum,
+          tokensOutNum: tokensOut,
+          minTokensOutNum: minTokensOut,
+          creatorFeeEth: ethNum * 0.01,
+          lossPoolFeeEth: ethNum * 0.01,
+          totalFeeEth: ethNum * 0.02,
+          isValid: ethNum > 0,
+          error: null as string | null,
+        };
+      } else {
+        const tokensNum = Number(buyAmountToken) || 0;
+        const priceEth = unifiedMarket.priceEth || 0;
+        const ethNeeded = tokensNum * priceEth * 1.02;
+        const minTokensOut = tokensNum * (1 - slippage / 100);
+        return {
+          grossEthWei: parseEther(Number.isFinite(ethNeeded) && ethNeeded > 0 ? ethNeeded.toFixed(18) : '0'),
+          grossEthNum: ethNeeded,
+          tokensOutNum: tokensNum,
+          minTokensOutNum: minTokensOut,
+          creatorFeeEth: ethNeeded * 0.01,
+          lossPoolFeeEth: ethNeeded * 0.01,
+          totalFeeEth: ethNeeded * 0.02,
+          isValid: tokensNum > 0,
+          error: null as string | null,
+        };
+      }
+    }
+
+    // Pre-Graduation (Incentifi Bonding Curve)
+    const realEthReserve = BigInt(Math.round((unifiedMarket?.realEthReserveEth || 0) * 1e18));
+    const realTokenReserve = unifiedMarket?.realTokenReserveTokens !== undefined
+      ? BigInt(Math.round(unifiedMarket.realTokenReserveTokens * 1e18))
+      : TOTAL_TOKEN_SUPPLY;
+
+    if (buyMode === 'payEth') {
+      try {
+        const ethNum = Number(buyAmountEth);
+        if (!Number.isFinite(ethNum) || ethNum <= 0) {
+          return {
+            grossEthWei: 0n,
+            grossEthNum: 0,
+            tokensOutNum: 0,
+            minTokensOutNum: 0,
+            creatorFeeEth: 0,
+            lossPoolFeeEth: 0,
+            totalFeeEth: 0,
+            isValid: false,
+            error: null as string | null,
+          };
+        }
+        const grossEthWei = parseEther(buyAmountEth.trim());
+        const res = calculateTokensOut(grossEthWei, realEthReserve, realTokenReserve);
+        const tokensOutNum = Number(res.tokensOut) / 1e18;
+        const minTokensOut = (res.tokensOut * BigInt(Math.round((100 - slippage) * 100))) / 10000n;
+        const minTokensOutNum = Number(minTokensOut) / 1e18;
+        const creatorFeeEth = Number(res.creatorFeeWei) / 1e18;
+        const lossPoolFeeEth = Number(res.lossPoolFeeWei) / 1e18;
+        return {
+          grossEthWei,
+          grossEthNum: ethNum,
+          tokensOutNum,
+          minTokensOutNum,
+          creatorFeeEth,
+          lossPoolFeeEth,
+          totalFeeEth: creatorFeeEth + lossPoolFeeEth,
+          isValid: tokensOutNum > 0,
+          error: null as string | null,
+        };
+      } catch (err: any) {
+        return {
+          grossEthWei: 0n,
+          grossEthNum: 0,
+          tokensOutNum: 0,
+          minTokensOutNum: 0,
+          creatorFeeEth: 0,
+          lossPoolFeeEth: 0,
+          totalFeeEth: 0,
+          isValid: false,
+          error: err.message || 'Invalid quote',
+        };
+      }
+    } else {
+      // Mode B: Receive Tokens
+      try {
+        const tokensNum = Number(buyAmountToken);
+        if (!Number.isFinite(tokensNum) || tokensNum <= 0) {
+          return {
+            grossEthWei: 0n,
+            grossEthNum: 0,
+            tokensOutNum: 0,
+            minTokensOutNum: 0,
+            creatorFeeEth: 0,
+            lossPoolFeeEth: 0,
+            totalFeeEth: 0,
+            isValid: false,
+            error: null as string | null,
+          };
+        }
+        const desiredTokensWei = parseUnits(buyAmountToken.trim(), 18);
+        const res = calculateGrossEthForTokens(desiredTokensWei, realEthReserve, realTokenReserve);
+        const grossEthNum = Number(res.grossEthRequiredWei) / 1e18;
+        const tokensOutNum = Number(res.tokensOut) / 1e18;
+        const minTokensOut = (desiredTokensWei * BigInt(Math.round((100 - slippage) * 100))) / 10000n;
+        const minTokensOutNum = Number(minTokensOut) / 1e18;
+        const creatorFeeEth = Number(res.creatorFeeWei) / 1e18;
+        const lossPoolFeeEth = Number(res.lossPoolFeeWei) / 1e18;
+        return {
+          grossEthWei: res.grossEthRequiredWei,
+          grossEthNum,
+          tokensOutNum,
+          minTokensOutNum,
+          creatorFeeEth,
+          lossPoolFeeEth,
+          totalFeeEth: creatorFeeEth + lossPoolFeeEth,
+          isValid: grossEthNum > 0,
+          error: null as string | null,
+        };
+      } catch (err: any) {
+        return {
+          grossEthWei: 0n,
+          grossEthNum: 0,
+          tokensOutNum: 0,
+          minTokensOutNum: 0,
+          creatorFeeEth: 0,
+          lossPoolFeeEth: 0,
+          totalFeeEth: 0,
+          isValid: false,
+          error: err.message || 'Exceeds available curve inventory.',
+        };
+      }
+    }
+  }, [buyMode, buyAmountEth, buyAmountToken, unifiedMarket, slippage]);
+
+  const sellQuote = useMemo(() => {
+    const tokensNum = Number(sellAmountToken);
+    if (!Number.isFinite(tokensNum) || tokensNum <= 0) {
+      return {
+        tokensInWei: 0n,
+        grossEthOut: 0,
+        netEthOut: 0,
+        minEthOut: 0,
+        creatorFeeEth: 0,
+        lossPoolFeeEth: 0,
+        totalFeeEth: 0,
+        isValid: false,
+        error: null as string | null,
+      };
+    }
+
+    if (unifiedMarket?.isGraduated) {
+      const priceEth = unifiedMarket.priceEth || 0;
+      const grossEth = tokensNum * priceEth;
+      const creatorFee = grossEth * 0.01;
+      const lossPoolFee = grossEth * 0.01;
+      const netEth = grossEth - creatorFee - lossPoolFee;
+      const minEth = netEth * (1 - slippage / 100);
+      return {
+        tokensInWei: parseUnits(sellAmountToken.trim(), 18),
+        grossEthOut: grossEth,
+        netEthOut: netEth,
+        minEthOut: minEth,
+        creatorFeeEth: creatorFee,
+        lossPoolFeeEth: lossPoolFee,
+        totalFeeEth: creatorFee + lossPoolFee,
+        isValid: netEth > 0,
+        error: null as string | null,
+      };
+    }
+
+    // Pre-graduation (Incentifi Bonding Curve)
+    const realEthReserve = BigInt(Math.round((unifiedMarket?.realEthReserveEth || 0) * 1e18));
+    const realTokenReserve = unifiedMarket?.realTokenReserveTokens !== undefined
+      ? BigInt(Math.round(unifiedMarket.realTokenReserveTokens * 1e18))
+      : TOTAL_TOKEN_SUPPLY;
+
+    try {
+      const tokensInWei = parseUnits(sellAmountToken.trim(), 18);
+      const res = calculateEthOut(tokensInWei, realEthReserve, realTokenReserve);
+      const grossEthOut = Number(res.grossEthOutWei) / 1e18;
+      const netEthOut = Number(res.netEthOut) / 1e18;
+      const minEthWei = (res.netEthOut * BigInt(Math.round((100 - slippage) * 100))) / 10000n;
+      const minEthOut = Number(minEthWei) / 1e18;
+      const creatorFeeEth = Number(res.creatorFeeWei) / 1e18;
+      const lossPoolFeeEth = Number(res.lossPoolFeeWei) / 1e18;
+      return {
+        tokensInWei,
+        grossEthOut,
+        netEthOut,
+        minEthOut,
+        creatorFeeEth,
+        lossPoolFeeEth,
+        totalFeeEth: creatorFeeEth + lossPoolFeeEth,
+        isValid: netEthOut > 0,
+        error: null as string | null,
+      };
+    } catch (err: any) {
+      return {
+        tokensInWei: 0n,
+        grossEthOut: 0,
+        netEthOut: 0,
+        minEthOut: 0,
+        creatorFeeEth: 0,
+        lossPoolFeeEth: 0,
+        totalFeeEth: 0,
+        isValid: false,
+        error: err.message || 'Invalid sell quote',
+      };
+    }
+  }, [sellAmountToken, unifiedMarket, slippage]);
 
   // Load Live Market State (Bonding Curve / Uniswap V3) directly from chain
   useEffect(() => {
@@ -871,10 +1113,16 @@ const TokenPreviewPage = () => {
       setTxPhase('signing');
       setStatus('Initiating transaction...');
 
+      const ethToSend = buyMode === 'payEth'
+        ? buyAmountEth.trim()
+        : buyQuote.grossEthWei > 0n
+          ? buyQuote.grossEthWei
+          : buyQuote.grossEthNum.toFixed(18);
+
       const result = await buyToken(
         tokenData.mintAddress,
         trader,
-        buyAmountEth,
+        ethToSend,
         slippage,
         ethUsdPrice
       );
@@ -925,7 +1173,7 @@ const TokenPreviewPage = () => {
       const result = await sellToken(
         tokenData.mintAddress,
         trader,
-        sellAmountToken,
+        sellAmountToken.trim(),
         slippage,
         ethUsdPrice
       );
@@ -1116,44 +1364,141 @@ const TokenPreviewPage = () => {
 
       {activeTab === 'buy' ? (
         <div className="space-y-4">
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs text-[#8DA3CD] font-medium">You Pay ({EVM_NATIVE_SYMBOL})</label>
-              <span className="text-[11px] text-[#64799E]">
-                Balance: {formatEth(onchainBalances.walletSol)} {EVM_NATIVE_SYMBOL}
-              </span>
-            </div>
-            <div className="relative">
-              <input
-                type="number"
-                min="0"
-                step="0.001"
-                value={buyAmountEth}
-                onChange={(e) => setBuyAmountEth(e.target.value)}
-                placeholder="0.0"
-                className="w-full px-4 py-3 rounded-xl bg-[#081122] border border-[#1D2940] text-[#E8EEF9] placeholder-[#5F6A6E] focus:outline-none focus:border-[#10B981] text-base sm:text-sm font-mono font-medium"
-              />
-              <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-[#8DA3CD]">
-                {EVM_NATIVE_SYMBOL}
-              </span>
-            </div>
-          </div>
-
-          {/* Quick presets for Buy */}
-          <div className="grid grid-cols-4 gap-2">
-            {[0.01, 0.05, 0.1, 0.5].map((value) => (
+          {/* Sub-mode Toggle: [Spend ETH] [Receive Token] */}
+          <div className="flex items-center justify-between bg-[#070A12] p-1 rounded-xl border border-[#1D2940]">
+            <span className="text-[11px] font-semibold text-[#64799E] px-2.5">Input Mode:</span>
+            <div className="grid grid-cols-2 gap-1 flex-1">
               <button
-                key={value}
-                onClick={() => quickBuy(value)}
-                className="py-2 sm:py-1.5 rounded-lg bg-[#10192C] border border-[#1D2940] text-xs font-semibold text-[#A9BCDE] hover:text-white hover:border-[#10B981] active:bg-[#10B981]/10 transition"
+                type="button"
+                onClick={() => setBuyMode('payEth')}
+                className={`py-1.5 px-3 rounded-lg text-xs font-bold transition ${
+                  buyMode === 'payEth'
+                    ? 'bg-[#10192C] text-emerald-400 border border-emerald-500/30 shadow-sm'
+                    : 'text-[#7D92BC] hover:text-white'
+                }`}
               >
-                {value}
+                Spend ETH
               </button>
-            ))}
+              <button
+                type="button"
+                onClick={() => setBuyMode('receiveTokens')}
+                className={`py-1.5 px-3 rounded-lg text-xs font-bold transition ${
+                  buyMode === 'receiveTokens'
+                    ? 'bg-[#10192C] text-emerald-400 border border-emerald-500/30 shadow-sm'
+                    : 'text-[#7D92BC] hover:text-white'
+                }`}
+              >
+                Receive {displaySymbol}
+              </button>
+            </div>
           </div>
 
-          {/* Router Fee Breakdown Note */}
-          <div className="bg-[#070A12] border border-[#1D2940] rounded-xl p-3 text-[11px] text-[#8DA3CD] space-y-1">
+          {buyMode === 'payEth' ? (
+            /* Mode A: Spend ETH */
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs text-[#8DA3CD] font-medium">You Pay ({EVM_NATIVE_SYMBOL})</label>
+                <span className="text-[11px] text-[#64799E]">
+                  Balance: {formatEth(onchainBalances.walletSol)} {EVM_NATIVE_SYMBOL}
+                </span>
+              </div>
+              <div className="relative">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  value={buyAmountEth}
+                  onChange={(e) => setBuyAmountEth(e.target.value)}
+                  placeholder="0.0"
+                  className="w-full px-4 py-3 rounded-xl bg-[#081122] border border-[#1D2940] text-[#E8EEF9] placeholder-[#5F6A6E] focus:outline-none focus:border-[#10B981] text-base sm:text-sm font-mono font-medium"
+                />
+                <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-[#8DA3CD]">
+                  {EVM_NATIVE_SYMBOL}
+                </span>
+              </div>
+
+              {/* Estimated output preview */}
+              <div className="mt-2 flex items-center justify-between text-xs px-1 text-[#8DA3CD]">
+                <span>Estimated Received:</span>
+                <span className="font-bold text-emerald-400 font-mono">
+                  ≈ {formatTokenDetailed(buyQuote.tokensOutNum)} {displaySymbol}
+                </span>
+              </div>
+
+              {/* Quick presets for ETH */}
+              <div className="grid grid-cols-4 gap-2 mt-3">
+                {[0.01, 0.05, 0.1, 0.5].map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => quickBuy(value)}
+                    className="py-2 sm:py-1.5 rounded-lg bg-[#10192C] border border-[#1D2940] text-xs font-semibold text-[#A9BCDE] hover:text-white hover:border-[#10B981] active:bg-[#10B981]/10 transition"
+                  >
+                    {value}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            /* Mode B: Receive Tokens */
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs text-[#8DA3CD] font-medium">You Receive ({displaySymbol})</label>
+                <span className="text-[11px] text-[#64799E]">
+                  Balance: {formatTokenAmount(position.tokens, 2)} {displaySymbol}
+                </span>
+              </div>
+              <div className="relative">
+                <input
+                  type="number"
+                  min="0"
+                  step="1000"
+                  value={buyAmountToken}
+                  onChange={(e) => setBuyAmountToken(normalizeTokenInput(e.target.value))}
+                  placeholder="0"
+                  className="w-full px-4 py-3 rounded-xl bg-[#081122] border border-[#1D2940] text-[#E8EEF9] placeholder-[#5F6A6E] focus:outline-none focus:border-[#10B981] text-base sm:text-sm font-mono font-medium"
+                />
+                <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-[#8DA3CD]">
+                  {displaySymbol}
+                </span>
+              </div>
+
+              {/* Estimated cost preview */}
+              <div className="mt-2 flex items-center justify-between text-xs px-1 text-[#8DA3CD]">
+                <span>Required Total Cost:</span>
+                <span className="font-bold text-emerald-400 font-mono">
+                  ≈ {formatEthDetailed(buyQuote.grossEthNum)} {EVM_NATIVE_SYMBOL}
+                  {ethUsdPrice > 0 && buyQuote.grossEthNum > 0 && (
+                    <span className="text-[#64799E] font-normal ml-1">
+                      (${(buyQuote.grossEthNum * ethUsdPrice).toFixed(2)})
+                    </span>
+                  )}
+                </span>
+              </div>
+
+              {/* Quick presets for Tokens */}
+              <div className="grid grid-cols-4 gap-2 mt-3">
+                {[
+                  { label: '1M', val: '1000000' },
+                  { label: '5M', val: '5000000' },
+                  { label: '10M', val: '10000000' },
+                  { label: '50M', val: '50000000' },
+                ].map((item) => (
+                  <button
+                    key={item.label}
+                    type="button"
+                    onClick={() => setBuyAmountToken(item.val)}
+                    className="py-2 sm:py-1.5 rounded-lg bg-[#10192C] border border-[#1D2940] text-xs font-semibold text-[#A9BCDE] hover:text-white hover:border-[#10B981] active:bg-[#10B981]/10 transition"
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Fee & Slippage Breakdown Card */}
+          <div className="bg-[#070A12] border border-[#1D2940] rounded-xl p-3 text-[11px] text-[#8DA3CD] space-y-1.5">
             <div className="flex items-center justify-between">
               <span>Trading Venue</span>
               <span className="text-white font-medium">
@@ -1161,18 +1506,41 @@ const TokenPreviewPage = () => {
               </span>
             </div>
             <div className="flex items-center justify-between">
-              <span>Fee Allocation</span>
-              <span className="text-emerald-400 font-medium">1.0% Creator / 1.0% Loss Pool</span>
+              <span>Creator Fee (1.0%)</span>
+              <span className="text-white font-mono">
+                {buyQuote.creatorFeeEth > 0 ? `${formatEthDetailed(buyQuote.creatorFeeEth)} ETH` : '1.0%'}
+              </span>
             </div>
             <div className="flex items-center justify-between">
-              <span>Slippage Tolerance</span>
-              <span className="text-white font-medium">{slippage}%</span>
+              <span>Loss Reward Pool (1.0%)</span>
+              <span className="text-emerald-400 font-mono">
+                {buyQuote.lossPoolFeeEth > 0 ? `${formatEthDetailed(buyQuote.lossPoolFeeEth)} ETH` : '1.0%'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>Min Received ({slippage}% Slippage)</span>
+              <span className="text-white font-mono font-medium">
+                {buyQuote.minTokensOutNum > 0 ? `${formatTokenDetailed(buyQuote.minTokensOutNum)} ${displaySymbol}` : '—'}
+              </span>
             </div>
           </div>
 
+          {buyQuote.error && (
+            <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{buyQuote.error}</span>
+            </div>
+          )}
+
           <button
             onClick={handleBuy}
-            disabled={onchainBusy || !tokenData?.mintAddress}
+            disabled={
+              onchainBusy ||
+              !tokenData?.mintAddress ||
+              !buyQuote.isValid ||
+              Boolean(buyQuote.error) ||
+              (connectedWallet ? onchainBalances.walletSol < buyQuote.grossEthNum : false)
+            }
             className="w-full py-3.5 sm:py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-white font-bold text-sm sm:text-base shadow-lg shadow-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition"
           >
             {onchainBusy
@@ -1183,7 +1551,15 @@ const TokenPreviewPage = () => {
                   : txPhase === 'confirming'
                     ? 'Confirming on-chain...'
                     : 'Processing...'
-              : `Buy ${displaySymbol}`}
+              : !connectedWallet
+                ? 'Connect Wallet to Trade'
+                : onchainBalances.walletSol < buyQuote.grossEthNum
+                  ? 'Insufficient ETH Balance'
+                  : buyQuote.error
+                    ? buyQuote.error
+                    : !buyQuote.isValid
+                      ? 'Enter Amount'
+                      : `Buy ${displaySymbol}`}
           </button>
         </div>
       ) : (
@@ -1206,11 +1582,25 @@ const TokenPreviewPage = () => {
                 className="flex-1 px-4 py-3 rounded-xl bg-[#081122] border border-[#1D2940] text-[#E8EEF9] placeholder-[#5F6A6E] focus:outline-none focus:border-rose-500 text-base sm:text-sm font-mono font-medium"
               />
               <button
+                type="button"
                 onClick={setMaxSell}
                 className="px-3.5 py-3 rounded-xl bg-[#13213D] border border-[#1D2940] text-[#C7D8F4] text-xs font-bold hover:text-white hover:bg-[#1C325B] transition"
               >
                 MAX
               </button>
+            </div>
+
+            {/* Estimated output preview */}
+            <div className="mt-2 flex items-center justify-between text-xs px-1 text-[#8DA3CD]">
+              <span>You Receive (Net):</span>
+              <span className="font-bold text-rose-400 font-mono">
+                ≈ {formatEthDetailed(sellQuote.netEthOut)} {EVM_NATIVE_SYMBOL}
+                {ethUsdPrice > 0 && sellQuote.netEthOut > 0 && (
+                  <span className="text-[#64799E] font-normal ml-1">
+                    (${(sellQuote.netEthOut * ethUsdPrice).toFixed(2)})
+                  </span>
+                )}
+              </span>
             </div>
           </div>
 
@@ -1219,6 +1609,7 @@ const TokenPreviewPage = () => {
             {[25, 50, 75, 100].map((value) => (
               <button
                 key={value}
+                type="button"
                 onClick={() => quickSellPct(value)}
                 className="py-2 sm:py-1.5 rounded-lg bg-[#10192C] border border-[#1D2940] text-xs font-semibold text-[#A9BCDE] hover:text-white hover:border-rose-500 active:bg-rose-500/10 transition"
               >
@@ -1228,7 +1619,7 @@ const TokenPreviewPage = () => {
           </div>
 
           {/* Router Fee Breakdown Note */}
-          <div className="bg-[#070A12] border border-[#1D2940] rounded-xl p-3 text-[11px] text-[#8DA3CD] space-y-1">
+          <div className="bg-[#070A12] border border-[#1D2940] rounded-xl p-3 text-[11px] text-[#8DA3CD] space-y-1.5">
             <div className="flex items-center justify-between">
               <span>Trading Venue</span>
               <span className="text-white font-medium">
@@ -1236,22 +1627,41 @@ const TokenPreviewPage = () => {
               </span>
             </div>
             <div className="flex items-center justify-between">
-              <span>Fee Allocation</span>
-              <span className="text-rose-400 font-medium">1.0% Creator / 1.0% Loss Pool</span>
+              <span>Creator Fee (1.0%)</span>
+              <span className="text-white font-mono">
+                {sellQuote.creatorFeeEth > 0 ? `${formatEthDetailed(sellQuote.creatorFeeEth)} ETH` : '1.0%'}
+              </span>
             </div>
             <div className="flex items-center justify-between">
-              <span>Slippage Tolerance</span>
-              <span className="text-white font-medium">{slippage}%</span>
+              <span>Loss Reward Pool (1.0%)</span>
+              <span className="text-rose-400 font-mono">
+                {sellQuote.lossPoolFeeEth > 0 ? `${formatEthDetailed(sellQuote.lossPoolFeeEth)} ETH` : '1.0%'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>Min Received ({slippage}% Slippage)</span>
+              <span className="text-white font-mono font-medium">
+                {sellQuote.minEthOut > 0 ? `${formatEthDetailed(sellQuote.minEthOut)} ${EVM_NATIVE_SYMBOL}` : '—'}
+              </span>
             </div>
           </div>
+
+          {sellQuote.error && (
+            <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{sellQuote.error}</span>
+            </div>
+          )}
 
           <button
             onClick={handleSell}
             disabled={
               onchainBusy ||
               !tokenData?.mintAddress ||
+              !sellQuote.isValid ||
+              Boolean(sellQuote.error) ||
               position.tokens <= 0 ||
-              !(Number(sellAmountToken) > 0 && Number(sellAmountToken) <= position.tokens)
+              (connectedWallet ? onchainBalances.tokenBalance < (Number(sellAmountToken) || 0) : false)
             }
             className="w-full py-3.5 sm:py-3 rounded-xl bg-rose-500 hover:bg-rose-400 active:bg-rose-600 text-white font-bold text-sm sm:text-base shadow-lg shadow-rose-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition"
           >
@@ -1263,9 +1673,17 @@ const TokenPreviewPage = () => {
                   : txPhase === 'confirming'
                     ? 'Confirming on-chain...'
                     : 'Processing...'
-              : position.tokens <= 0
-                ? 'No Tokens to Sell'
-                : `Sell ${displaySymbol}`}
+              : !connectedWallet
+                ? 'Connect Wallet to Trade'
+                : position.tokens <= 0
+                  ? 'No Tokens to Sell'
+                  : onchainBalances.tokenBalance < (Number(sellAmountToken) || 0)
+                    ? `Insufficient ${displaySymbol} Balance`
+                    : sellQuote.error
+                      ? sellQuote.error
+                      : !sellQuote.isValid
+                        ? 'Enter Amount'
+                        : `Sell ${displaySymbol}`}
           </button>
         </div>
       )}
