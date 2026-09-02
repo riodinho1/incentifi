@@ -5,132 +5,203 @@ import {
   parseAbi,
   parseAbiItem,
   getAddress,
-  decodeEventLog,
 } from 'viem';
+import fs from 'fs';
 
-// Environment variables
-const RPC_URL = process.env.VITE_EVM_RPC_URL || process.env.EVM_RPC_URL || 'http://127.0.0.1:8545';
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
-
-if (!SUPABASE_URL || !SUPABASE_KEY) {
-  console.error('Missing SUPABASE_URL or SUPABASE_KEY in environment.');
+// Robust .env.local loader
+if (fs.existsSync('.env.local')) {
+  const envContent = fs.readFileSync('.env.local', 'utf8');
+  for (const line of envContent.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('#') || !trimmed.includes('=')) continue;
+    const [k, ...v] = line.split('=');
+    const keyName = k.trim();
+    let val = v.join('=').trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    if (keyName && val.length > 0) {
+      process.env[keyName] = val;
+    }
+  }
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+// Environment variables
+const RPC_URL = process.env.VITE_EVM_RPC_URL || process.env.EVM_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com';
+const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
-const client = createPublicClient({
-  transport: http(RPC_URL),
+if (!SUPABASE_URL) {
+  throw new Error('[FATAL] Missing SUPABASE_URL in environment configuration.');
+}
+
+if (!SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error(
+    '[FATAL] Missing SUPABASE_SERVICE_ROLE_KEY. The service-role key is required for backend indexer database writes to satisfy PostgreSQL Row-Level Security (RLS) policies. Do not use the publishable anon key for backend indexers.'
+  );
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false },
 });
 
-const ERC20_ABI = parseAbi([
-  'event Transfer(address indexed from, address indexed to, uint256 value)',
-  'function balanceOf(address account) view returns (uint256)',
+const client = createPublicClient({
+  transport: http(RPC_URL, { batch: true, retryCount: 3, retryDelay: 1000 }),
+});
+
+const FACTORY_ABI = parseAbi([
+  'function getBondingCurve(address token) view returns (address)',
+  'function isGraduated(address token) view returns (bool)',
+  'event BondingCurveCreated(address indexed token, address indexed curve, address indexed creator, uint256 initialInventory)',
+]);
+
+const BONDING_CURVE_ABI = parseAbi([
+  'function token() view returns (address)',
+  'function creator() view returns (address)',
+  'function realEthReserve() view returns (uint256)',
+  'function realTokenReserve() view returns (uint256)',
+  'function graduated() view returns (bool)',
+  'function uniswapPool() view returns (address)',
+  'function getCurrentPrice() view returns (uint256)',
+  'event TokensPurchased(address indexed buyer, address indexed recipient, uint256 ethInGross, uint256 tokensOut, uint256 creatorFee, uint256 lossPoolFee)',
+  'event TokensSold(address indexed seller, address indexed recipient, uint256 tokensIn, uint256 netEthOut, uint256 creatorFee, uint256 lossPoolFee)',
+  'event Graduated(address indexed pool, uint256 tokenId, uint256 wethAmount, uint256 tokenAmount)',
 ]);
 
 const ROUTER_ABI = parseAbi([
   'event IncentifiTrade(address indexed token, address indexed trader, bool indexed isBuy, uint256 ethAmount, uint256 tokenAmount, uint256 creatorFee, uint256 lossPoolFee)',
 ]);
 
-const POOL_ABI = parseAbi([
-  'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)',
-  'function observe(uint32[] secondsAgos) view returns (int56[] tickCumulatives, uint160[] secondsPerLiquidityCumulativeX128s)',
+const UNISWAP_V3_POOL_ABI = parseAbi([
+  'event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)',
 ]);
 
-const FACTORY_ABI = parseAbi([
-  'function getPool(address tokenA, address tokenB, uint24 fee) view returns (address pool)',
+const LOSS_POOL_ABI = parseAbi([
+  'function getUnallocatedBalance(address token) view returns (uint256)',
 ]);
 
-const WETH_ADDRESS = (process.env.VITE_WETH_ADDRESS || '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73').toLowerCase();
-const UNISWAP_V3_FACTORY = (process.env.VITE_UNISWAP_V3_FACTORY || '0x1f7d7550B1b028f7571E69A784071F0205FD2EfA');
-const INCENTIFI_SWAP_ROUTER = (process.env.VITE_INCENTIFI_SWAP_ROUTER || process.env.INCENTIFI_SWAP_ROUTER || '0xC04E781fFF1dDEbC874B2A7B5490a6eaE3922c2f');
-const POOL_FEE = 10000;
+const INCENTIFI_BONDING_CURVE_FACTORY = (process.env.VITE_INCENTIFI_BONDING_CURVE_FACTORY || '0x9fcea653c6f31c82606582b22da82b39f61f9c0e');
+const LOSS_REWARD_POOL = (process.env.VITE_LOSS_REWARD_POOL || '0x697bda9db5a297a9cd9ed969bbf2549d0527dcdf');
+const INCENTIFI_SWAP_ROUTER = (process.env.VITE_INCENTIFI_SWAP_ROUTER || '0xbba0384bf34b5cc26daa2c06cdf765bbdeb2acdf');
 
-/**
- * Fetch Uniswap V3 Pool address for token.
- */
-export async function getPoolAddress(tokenAddress) {
+const blockTimeCache = new Map();
+
+async function getBlockTimeIso(blockNumber) {
+  const bNum = typeof blockNumber === 'bigint' ? blockNumber : BigInt(blockNumber);
+  const cached = blockTimeCache.get(bNum.toString());
+  if (cached) return cached;
+
   try {
-    const token = getAddress(tokenAddress);
-    const weth = getAddress(WETH_ADDRESS);
-    const pool = await client.readContract({
-      address: UNISWAP_V3_FACTORY,
-      abi: FACTORY_ABI,
-      functionName: 'getPool',
-      args: [token, weth, POOL_FEE],
-    });
-    if (!pool || pool === '0x0000000000000000000000000000000000000000') return null;
-    return pool.toLowerCase();
+    const block = await client.getBlock({ blockNumber: bNum });
+    const iso = new Date(Number(block.timestamp) * 1000).toISOString();
+    blockTimeCache.set(bNum.toString(), iso);
+    if (blockTimeCache.size > 2000) {
+      const keys = [...blockTimeCache.keys()].slice(0, 500);
+      keys.forEach((k) => blockTimeCache.delete(k));
+    }
+    return iso;
   } catch {
-    return null;
+    return new Date().toISOString();
   }
 }
 
 /**
- * Fetch 30-min TWAP price (or slot0 fallback) in ETH per token.
+ * Aggregates a single trade into the 1-minute candle table (token_candles_1m).
  */
-export async function getPoolTwapPriceEth(tokenAddress) {
-  try {
-    const token = getAddress(tokenAddress);
-    const weth = getAddress(WETH_ADDRESS);
-    const poolAddress = await client.readContract({
-      address: UNISWAP_V3_FACTORY,
-      abi: FACTORY_ABI,
-      functionName: 'getPool',
-      args: [token, weth, POOL_FEE],
+export async function aggregateCandle1m(symbol, mintAddress, priceEth, volumeEth, blockTimeIso) {
+  const tsMs = Date.parse(blockTimeIso);
+  const bucketMs = Math.floor(tsMs / 60_000) * 60_000;
+  const bucketTs = new Date(bucketMs).toISOString();
+
+  // Query existing candle for this minute bucket
+  const { data: existing, error: checkCandleErr } = await supabase
+    .from('token_candles_1m')
+    .select('*')
+    .eq('symbol', symbol.toUpperCase())
+    .eq('bucket_ts', bucketTs)
+    .maybeSingle();
+
+  if (checkCandleErr) {
+    throw new Error(`[DB ERROR] Failed to query token_candles_1m (${symbol} ${bucketTs}): ${checkCandleErr.code} ${checkCandleErr.message}`);
+  }
+
+  if (existing) {
+    const open = Number(existing.open);
+    const high = Math.max(Number(existing.high), priceEth);
+    const low = Math.min(Number(existing.low), priceEth);
+    const close = priceEth;
+    const volumeSol = Number(existing.volume_sol) + volumeEth;
+
+    const { error: upsertCandleErr } = await supabase.from('token_candles_1m').upsert({
+      symbol: symbol.toUpperCase(),
+      mint_address: mintAddress.toLowerCase(),
+      bucket_ts: bucketTs,
+      open,
+      high,
+      low,
+      close,
+      volume_sol: volumeSol,
+      source: 'indexer',
+      updated_at: new Date().toISOString(),
     });
 
-    if (!poolAddress || poolAddress === '0x0000000000000000000000000000000000000000') {
-      return 0;
+    if (upsertCandleErr) {
+      throw new Error(`[DB ERROR] Failed to update token_candles_1m (${symbol} ${bucketTs}): ${upsertCandleErr.code} ${upsertCandleErr.message}`);
     }
+  } else {
+    const { error: insertCandleErr } = await supabase.from('token_candles_1m').upsert({
+      symbol: symbol.toUpperCase(),
+      mint_address: mintAddress.toLowerCase(),
+      bucket_ts: bucketTs,
+      open: priceEth,
+      high: priceEth,
+      low: priceEth,
+      close: priceEth,
+      volume_sol: volumeEth,
+      source: 'indexer',
+      updated_at: new Date().toISOString(),
+    });
 
-    const isToken0 = BigInt(token) < BigInt(weth);
-
-    // Try 30-min (1800s) observe
-    try {
-      const [tickCumulatives] = await client.readContract({
-        address: poolAddress,
-        abi: POOL_ABI,
-        functionName: 'observe',
-        args: [[1800, 0]],
-      });
-      const tickDelta = Number(tickCumulatives[1] - tickCumulatives[0]);
-      const avgTick = Math.round(tickDelta / 1800);
-      const ratio = 1.0001 ** (avgTick / 2);
-      const price1Per0 = ratio * ratio;
-      return isToken0 ? price1Per0 : 1 / price1Per0;
-    } catch {
-      // Fallback to slot0 instantaneous if pool history < 1800s
-      const slot0 = await client.readContract({
-        address: poolAddress,
-        abi: POOL_ABI,
-        functionName: 'slot0',
-      });
-      const sqrtPriceX96 = Number(slot0[0]) / 2 ** 96;
-      const price1Per0 = sqrtPriceX96 * sqrtPriceX96;
-      return isToken0 ? price1Per0 : 1 / price1Per0;
+    if (insertCandleErr) {
+      throw new Error(`[DB ERROR] Failed to insert token_candles_1m (${symbol} ${bucketTs}): ${insertCandleErr.code} ${insertCandleErr.message}`);
     }
-  } catch (err) {
-    console.error(`Error fetching TWAP for ${tokenAddress}:`, err.message);
-    return 0;
   }
 }
 
 /**
- * Process a Buy trade for a holder.
+ * Process a Buy trade on bonding curve.
  */
-export async function processBuyTrade(tokenAddress, trader, amountToken, amountEth, creatorFee, lossPoolFee, txHash, blockNumber, blockTime) {
+export async function processBuyTrade(tokenAddress, symbol, trader, amountToken, amountEth, creatorFee, lossPoolFee, tradeIdentity, blockNumber, blockTime) {
   const token = tokenAddress.toLowerCase();
   const wallet = trader.toLowerCase();
-  const priceEth = amountToken > 0 ? amountEth / amountToken : 0;
+  const priceEth = amountToken > 0 ? (amountEth - creatorFee - lossPoolFee) / amountToken : 0;
 
-  // 1. Fetch current cost basis
-  const { data: existing } = await supabase
+  // 1. Deduplication check: if trade already recorded, skip to prevent double-counting
+  const { data: existingTrade, error: checkTradeErr } = await supabase
+    .from('token_trades_evm')
+    .select('tx_hash')
+    .eq('tx_hash', tradeIdentity)
+    .maybeSingle();
+
+  if (checkTradeErr) {
+    throw new Error(`[DB ERROR] Failed to query token_trades_evm (${tradeIdentity}): ${checkTradeErr.code} ${checkTradeErr.message}`);
+  }
+
+  if (existingTrade) {
+    return;
+  }
+
+  // 2. Fetch current cost basis
+  const { data: existing, error: fetchHolderErr } = await supabase
     .from('holder_cost_basis')
     .select('*')
     .eq('token_address', token)
     .eq('wallet_address', wallet)
-    .single();
+    .maybeSingle();
+
+  if (fetchHolderErr) {
+    throw new Error(`[DB ERROR] Failed to query holder_cost_basis (${token} ${wallet}): ${fetchHolderErr.code} ${fetchHolderErr.message}`);
+  }
 
   const prevInvested = existing ? Number(existing.total_invested_eth) : 0;
   const prevBalance = existing ? Number(existing.token_balance) : 0;
@@ -139,8 +210,8 @@ export async function processBuyTrade(tokenAddress, trader, amountToken, amountE
   const newBalance = prevBalance + amountToken;
   const newCostBasis = newBalance > 0 ? newInvested / newBalance : 0;
 
-  // 2. Upsert holder state (Buy re-establishes eligibility)
-  await supabase.from('holder_cost_basis').upsert({
+  // 3. Upsert holder state
+  const { error: upsertHolderErr } = await supabase.from('holder_cost_basis').upsert({
     token_address: token,
     wallet_address: wallet,
     token_balance: newBalance,
@@ -151,9 +222,13 @@ export async function processBuyTrade(tokenAddress, trader, amountToken, amountE
     last_updated_at: new Date().toISOString(),
   });
 
-  // 3. Record trade log
-  await supabase.from('token_trades_evm').upsert({
-    tx_hash: txHash,
+  if (upsertHolderErr) {
+    throw new Error(`[DB ERROR] Failed to upsert holder_cost_basis (${token} ${wallet}): ${upsertHolderErr.code} ${upsertHolderErr.message}`);
+  }
+
+  // 4. Upsert trade log
+  const { error: insertTradeErr } = await supabase.from('token_trades_evm').upsert({
+    tx_hash: tradeIdentity,
     token_address: token,
     trader_address: wallet,
     side: 'buy',
@@ -163,28 +238,54 @@ export async function processBuyTrade(tokenAddress, trader, amountToken, amountE
     creator_fee_eth: creatorFee,
     loss_pool_fee_eth: lossPoolFee,
     is_underwater_sale: false,
-    block_number: blockNumber,
+    block_number: Number(blockNumber),
     block_time: blockTime,
   });
 
-  console.log(`[BUY] ${wallet.slice(0, 8)} bought ${amountToken.toFixed(2)} tokens for ${amountEth.toFixed(4)} ETH. Cost Basis: ${newCostBasis.toFixed(6)} ETH`);
+  if (insertTradeErr) {
+    throw new Error(`[DB ERROR] Failed to upsert token_trades_evm (${tradeIdentity}): ${insertTradeErr.code} ${insertTradeErr.message}`);
+  }
+
+  // 5. Update 1m candle
+  await aggregateCandle1m(symbol, token, priceEth, amountEth, blockTime);
+
+  console.log(`[BUY] ${symbol} by ${wallet.slice(0, 8)}: +${amountToken.toLocaleString(undefined, { maximumFractionDigits: 2 })} tokens for ${amountEth.toFixed(4)} ETH (Price: ${priceEth.toExponential(4)} ETH)`);
 }
 
 /**
- * Process a Sell trade for a holder.
+ * Process a Sell trade on bonding curve.
  */
-export async function processSellTrade(tokenAddress, trader, amountToken, amountEth, creatorFee, lossPoolFee, txHash, blockNumber, blockTime) {
+export async function processSellTrade(tokenAddress, symbol, trader, amountToken, amountEth, creatorFee, lossPoolFee, tradeIdentity, blockNumber, blockTime) {
   const token = tokenAddress.toLowerCase();
   const wallet = trader.toLowerCase();
   const priceEth = amountToken > 0 ? amountEth / amountToken : 0;
 
-  // 1. Fetch current cost basis
-  const { data: existing } = await supabase
+  // 1. Deduplication check: if trade already recorded, skip to prevent double-counting
+  const { data: existingTrade, error: checkTradeErr } = await supabase
+    .from('token_trades_evm')
+    .select('tx_hash')
+    .eq('tx_hash', tradeIdentity)
+    .maybeSingle();
+
+  if (checkTradeErr) {
+    throw new Error(`[DB ERROR] Failed to query token_trades_evm (${tradeIdentity}): ${checkTradeErr.code} ${checkTradeErr.message}`);
+  }
+
+  if (existingTrade) {
+    return;
+  }
+
+  // 2. Fetch current cost basis
+  const { data: existing, error: fetchHolderErr } = await supabase
     .from('holder_cost_basis')
     .select('*')
     .eq('token_address', token)
     .eq('wallet_address', wallet)
-    .single();
+    .maybeSingle();
+
+  if (fetchHolderErr) {
+    throw new Error(`[DB ERROR] Failed to query holder_cost_basis (${token} ${wallet}): ${fetchHolderErr.code} ${fetchHolderErr.message}`);
+  }
 
   const prevInvested = existing ? Number(existing.total_invested_eth) : 0;
   const prevBalance = existing ? Number(existing.token_balance) : 0;
@@ -199,19 +300,16 @@ export async function processSellTrade(tokenAddress, trader, amountToken, amount
   let isUnderwaterSeller = existing ? existing.is_underwater_seller : false;
 
   if (isUnderwater) {
-    // UNDERWATER SELL: Disqualify remaining position
     isEligible = false;
     isUnderwaterSeller = true;
     newInvested = newBalance > 0 ? newBalance * prevCostBasis : 0;
-    console.log(`[UNDERWATER SELL] ${wallet.slice(0, 8)} sold at loss (${priceEth.toFixed(6)} < ${prevCostBasis.toFixed(6)}). DISQUALIFIED.`);
+    console.log(`[UNDERWATER SELL] ${wallet.slice(0, 8)} sold at loss (${priceEth.toExponential(4)} < ${prevCostBasis.toExponential(4)} ETH). DISQUALIFIED.`);
   } else {
-    // PROFITABLE SELL: Maintain cost basis and eligibility
     newInvested = newBalance > 0 ? newBalance * prevCostBasis : 0;
-    console.log(`[PROFITABLE SELL] ${wallet.slice(0, 8)} sold in profit (${priceEth.toFixed(6)} >= ${prevCostBasis.toFixed(6)}). Remains eligible.`);
   }
 
-  // 2. Upsert holder state
-  await supabase.from('holder_cost_basis').upsert({
+  // 3. Upsert holder state
+  const { error: upsertHolderErr } = await supabase.from('holder_cost_basis').upsert({
     token_address: token,
     wallet_address: wallet,
     token_balance: newBalance,
@@ -222,9 +320,13 @@ export async function processSellTrade(tokenAddress, trader, amountToken, amount
     last_updated_at: new Date().toISOString(),
   });
 
-  // 3. Record trade log
-  await supabase.from('token_trades_evm').upsert({
-    tx_hash: txHash,
+  if (upsertHolderErr) {
+    throw new Error(`[DB ERROR] Failed to upsert holder_cost_basis (${token} ${wallet}): ${upsertHolderErr.code} ${upsertHolderErr.message}`);
+  }
+
+  // 4. Upsert trade log
+  const { error: insertTradeErr } = await supabase.from('token_trades_evm').upsert({
+    tx_hash: tradeIdentity,
     token_address: token,
     trader_address: wallet,
     side: 'sell',
@@ -234,134 +336,75 @@ export async function processSellTrade(tokenAddress, trader, amountToken, amount
     creator_fee_eth: creatorFee,
     loss_pool_fee_eth: lossPoolFee,
     is_underwater_sale: isUnderwater,
-    block_number: blockNumber,
+    block_number: Number(blockNumber),
     block_time: blockTime,
   });
+
+  if (insertTradeErr) {
+    throw new Error(`[DB ERROR] Failed to upsert token_trades_evm (${tradeIdentity}): ${insertTradeErr.code} ${insertTradeErr.message}`);
+  }
+
+  // 5. Update 1m candle
+  await aggregateCandle1m(symbol, token, priceEth, amountEth, blockTime);
+
+  console.log(`[SELL] ${symbol} by ${wallet.slice(0, 8)}: -${amountToken.toLocaleString(undefined, { maximumFractionDigits: 2 })} tokens for ${amountEth.toFixed(4)} ETH (Price: ${priceEth.toExponential(4)} ETH)`);
 }
 
 /**
- * Process ERC20 Transfer between two wallets or with Uniswap V3 Pool.
+ * Updates token_market_snapshots_evm from live curve/pool state.
  */
-export async function processTransfer(tokenAddress, from, to, amountToken, blockTime) {
-  const token = tokenAddress.toLowerCase();
-  const fromAddr = from.toLowerCase();
-  const toAddr = to.toLowerCase();
+export async function updateMarketSnapshot(tokenAddress, symbol, curveAddress) {
+  try {
+    const token = tokenAddress.toLowerCase();
+    let priceEth = 0;
+    let liquidityEth = 0;
+    let marketCapUsd = 0;
+    let lossPoolTvlEth = 0;
 
-  // 1. Ignore mints from zero address
-  if (fromAddr === '0x0000000000000000000000000000000000000000') return;
+    if (curveAddress) {
+      const [realEthReserve, realTokenReserve, graduated] = await Promise.all([
+        client.readContract({ address: curveAddress, abi: BONDING_CURVE_ABI, functionName: 'realEthReserve' }),
+        client.readContract({ address: curveAddress, abi: BONDING_CURVE_ABI, functionName: 'realTokenReserve' }),
+        client.readContract({ address: curveAddress, abi: BONDING_CURVE_ABI, functionName: 'graduated' }),
+      ]);
 
-  // 2. Ignore transfers to/from IncentifiSwapRouter (already processed via IncentifiTrade)
-  const routerAddr = INCENTIFI_SWAP_ROUTER.toLowerCase();
-  if (fromAddr === routerAddr || toAddr === routerAddr) return;
-
-  const poolAddr = (await getPoolAddress(token)) || '';
-
-  // 3. Case A: Direct Uniswap Sell (Tokens transferred directly into the pool outside IncentifiSwapRouter)
-  if (poolAddr && toAddr === poolAddr) {
-    const { data: senderData } = await supabase
-      .from('holder_cost_basis')
-      .select('*')
-      .eq('token_address', token)
-      .eq('wallet_address', fromAddr)
-      .single();
-
-    if (senderData && Number(senderData.token_balance) > 0) {
-      const senderCostBasis = Number(senderData.avg_cost_basis_eth || 0);
-      const twap = await getPoolTwapPriceEth(token);
-      const isUnderwater = senderCostBasis > 0 && twap < senderCostBasis;
-      const senderPrevBalance = Number(senderData.token_balance);
-      const senderNewBalance = Math.max(0, senderPrevBalance - amountToken);
-      const senderNewInvested = senderNewBalance * senderCostBasis;
-
-      let isEligible = senderData.is_eligible;
-      let isUnderwaterSeller = senderData.is_underwater_seller;
-
-      if (isUnderwater) {
-        isEligible = false;
-        isUnderwaterSeller = true;
-        console.log(`[UNROUTED UNDERWATER SELL] ${fromAddr.slice(0, 8)} sold directly to Uniswap pool below cost basis (${twap.toFixed(6)} < ${senderCostBasis.toFixed(6)}). DISQUALIFIED.`);
-      }
-
-      await supabase.from('holder_cost_basis').upsert({
-        token_address: token,
-        wallet_address: fromAddr,
-        token_balance: senderNewBalance,
-        total_invested_eth: senderNewInvested,
-        avg_cost_basis_eth: senderCostBasis,
-        is_eligible: isEligible,
-        is_underwater_seller: isUnderwaterSeller,
-        last_updated_at: new Date().toISOString(),
-      });
+      const VIRTUAL_ETH = 2.15625;
+      const VIRTUAL_TOKEN = 78_125_000;
+      const curEth = VIRTUAL_ETH + (Number(realEthReserve) / 1e18);
+      const curToken = VIRTUAL_TOKEN + (Number(realTokenReserve) / 1e18);
+      priceEth = curEth / curToken;
+      liquidityEth = (Number(realEthReserve) / 1e18) * 2;
+      marketCapUsd = priceEth * 1_000_000_000 * 2500;
     }
-    return;
-  }
 
-  // 4. Case B: Direct Uniswap Buy (Tokens transferred directly from the pool to a user)
-  if (poolAddr && fromAddr === poolAddr) {
-    console.log(`[DIRECT UNISWAP BUY] ${toAddr.slice(0, 8)} bought ${amountToken.toFixed(2)} tokens directly from Uniswap pool (0 fee paid, no Incentifi cost basis recorded).`);
-    return;
-  }
+    try {
+      const tvl = await client.readContract({
+        address: getAddress(LOSS_REWARD_POOL),
+        abi: LOSS_POOL_ABI,
+        functionName: 'getUnallocatedBalance',
+        args: [getAddress(tokenAddress)],
+      });
+      lossPoolTvlEth = Number(tvl) / 1e18;
+    } catch {
+      // Ignore
+    }
 
-  // 5. Case C: Ordinary Wallet-to-Wallet Transfer
-  const { data: senderData } = await supabase
-    .from('holder_cost_basis')
-    .select('*')
-    .eq('token_address', token)
-    .eq('wallet_address', fromAddr)
-    .single();
-
-  const senderCostBasis = senderData ? Number(senderData.avg_cost_basis_eth) : 0;
-  const senderPrevBalance = senderData ? Number(senderData.token_balance) : 0;
-  const senderNewBalance = Math.max(0, senderPrevBalance - amountToken);
-  const senderNewInvested = senderNewBalance * senderCostBasis;
-
-  if (senderData) {
-    await supabase.from('holder_cost_basis').upsert({
+    const { error: snapErr } = await supabase.from('token_market_snapshots_evm').upsert({
       token_address: token,
-      wallet_address: fromAddr,
-      token_balance: senderNewBalance,
-      total_invested_eth: senderNewInvested,
-      avg_cost_basis_eth: senderCostBasis,
-      is_eligible: senderData.is_eligible,
-      is_underwater_seller: senderData.is_underwater_seller,
-      last_updated_at: new Date().toISOString(),
+      symbol: symbol.toUpperCase(),
+      price_eth: priceEth,
+      price_usd: priceEth * 2500,
+      liquidity_eth: liquidityEth,
+      market_cap_usd: marketCapUsd,
+      loss_pool_tvl_eth: lossPoolTvlEth,
+      updated_at: new Date().toISOString(),
     });
-  }
 
-  if (toAddr !== '0x0000000000000000000000000000000000000000' && toAddr !== '0x000000000000000000000000000000000000dead') {
-    const twap = await getPoolTwapPriceEth(token);
-    const transferCostBasis = senderCostBasis > 0 ? Math.min(senderCostBasis, twap) : 0;
-
-    if (transferCostBasis > 0) {
-      const { data: recipientData } = await supabase
-        .from('holder_cost_basis')
-        .select('*')
-        .eq('token_address', token)
-        .eq('wallet_address', toAddr)
-        .single();
-
-      const recipPrevInvested = recipientData ? Number(recipientData.total_invested_eth) : 0;
-      const recipPrevBalance = recipientData ? Number(recipientData.token_balance) : 0;
-
-      const recipNewInvested = recipPrevInvested + (amountToken * transferCostBasis);
-      const recipNewBalance = recipPrevBalance + amountToken;
-      const recipNewCostBasis = recipNewBalance > 0 ? recipNewInvested / recipNewBalance : 0;
-
-      await supabase.from('holder_cost_basis').upsert({
-        token_address: token,
-        wallet_address: toAddr,
-        token_balance: recipNewBalance,
-        total_invested_eth: recipNewInvested,
-        avg_cost_basis_eth: recipNewCostBasis,
-        is_eligible: true,
-        is_underwater_seller: false,
-        last_updated_at: new Date().toISOString(),
-      });
-
-      console.log(`[TRANSFER] ${amountToken.toFixed(2)} tokens from ${fromAddr.slice(0, 8)} to ${toAddr.slice(0, 8)} (Transfer Basis: ${transferCostBasis.toFixed(6)} ETH)`);
-    } else {
-      console.log(`[UNTRACKED TRANSFER] ${amountToken.toFixed(2)} tokens from ${fromAddr.slice(0, 8)} to ${toAddr.slice(0, 8)} (Sender has 0 basis, recipient receives 0 basis).`);
+    if (snapErr) {
+      throw new Error(`[DB ERROR] Failed to upsert token_market_snapshots_evm (${symbol}): ${snapErr.code} ${snapErr.message}`);
     }
+  } catch (err) {
+    console.warn(`Could not update market snapshot for ${symbol}:`, err.message);
   }
 }
 
@@ -370,112 +413,123 @@ export async function processTransfer(tokenAddress, from, to, amountToken, block
  */
 export async function runIndexer() {
   console.log('--- Starting Incentifi EVM Indexer ---');
-  console.log(`Connected RPC: ${RPC_URL}`);
+  console.log(`RPC: ${RPC_URL}`);
+  console.log(`Factory: ${INCENTIFI_BONDING_CURVE_FACTORY}`);
 
   let lastPolledBlock = 0n;
+  const curveAddressCache = new Map();
 
   setInterval(async () => {
     try {
       const currentBlock = await client.getBlockNumber();
       if (lastPolledBlock === 0n) {
-        lastPolledBlock = currentBlock > 50n ? currentBlock - 50n : 0n;
+        // Startup recovery: fetch latest indexed block from token_trades_evm
+        const { data: latestTrades, error: latestTradesErr } = await supabase
+          .from('token_trades_evm')
+          .select('block_number')
+          .order('block_number', { ascending: false })
+          .limit(1);
+
+        if (latestTradesErr) {
+          throw new Error(`[DB ERROR] Failed to query latest block from token_trades_evm: ${latestTradesErr.code} ${latestTradesErr.message}`);
+        }
+
+        if (latestTrades && latestTrades.length > 0 && latestTrades[0].block_number > 0) {
+          // Re-scan from latest trade block to catch any partial block writes
+          lastPolledBlock = BigInt(latestTrades[0].block_number) > 1n ? BigInt(latestTrades[0].block_number) - 1n : 0n;
+          console.log(`[INDEXER RECOVERY] Resuming from block ${lastPolledBlock}`);
+        } else {
+          lastPolledBlock = currentBlock > 50n ? currentBlock - 50n : 0n;
+          console.log(`[INDEXER INIT] Starting fresh from block ${lastPolledBlock}`);
+        }
       }
+
       if (currentBlock <= lastPolledBlock) return;
 
       const fromBlock = lastPolledBlock + 1n;
-      const toBlock = currentBlock;
-      lastPolledBlock = currentBlock;
+      // Cap chunk size to 5,000 blocks to prevent RPC timeout/range errors
+      const CHUNK_SIZE = 5000n;
+      const toBlock = currentBlock > fromBlock + CHUNK_SIZE ? fromBlock + CHUNK_SIZE : currentBlock;
 
-      // 1. Fetch active tokens from Supabase
-      const { data: tokens } = await supabase.from('tokens').select('mint_address, symbol');
+      // 1. Fetch active tokens
+      const { data: tokens, error: tokensErr } = await supabase.from('tokens').select('mint_address, symbol');
+      if (tokensErr) {
+        throw new Error(`[DB ERROR] Failed to fetch active tokens: ${tokensErr.code} ${tokensErr.message}`);
+      }
       if (!tokens || tokens.length === 0) return;
 
-      const tokenSet = new Set(tokens.map((t) => (t.mint_address || '').toLowerCase()));
+      for (const t of tokens) {
+        if (!t.mint_address) continue;
+        const tokenAddr = t.mint_address.toLowerCase();
 
-      // 2. Poll IncentifiTrade logs from Router
-      if (INCENTIFI_SWAP_ROUTER) {
-        try {
-          const tradeLogs = await client.getLogs({
-            address: getAddress(INCENTIFI_SWAP_ROUTER),
-            fromBlock,
-            toBlock,
-          });
-
-          for (const log of tradeLogs) {
-            try {
-              const decoded = decodeEventLog({
-                abi: ROUTER_ABI,
-                data: log.data,
-                topics: log.topics,
-              });
-
-              if (decoded.eventName === 'IncentifiTrade') {
-                const token = (decoded.args.token || '').toLowerCase();
-                if (!tokenSet.has(token)) continue;
-
-                const trader = (decoded.args.trader || '').toLowerCase();
-                const isBuy = Boolean(decoded.args.isBuy);
-                const ethAmount = Number(decoded.args.ethAmount) / 1e18;
-                const tokenAmount = Number(decoded.args.tokenAmount) / 1e18;
-                const creatorFee = Number(decoded.args.creatorFee) / 1e18;
-                const lossPoolFee = Number(decoded.args.lossPoolFee) / 1e18;
-                const txHash = log.transactionHash;
-                const blockNum = Number(log.blockNumber);
-                const blockTime = new Date().toISOString();
-
-                if (isBuy) {
-                  await processBuyTrade(token, trader, tokenAmount, ethAmount, creatorFee, lossPoolFee, txHash, blockNum, blockTime);
-                } else {
-                  await processSellTrade(token, trader, tokenAmount, ethAmount, creatorFee, lossPoolFee, txHash, blockNum, blockTime);
-                }
-              }
-            } catch {
-              // Log not matching ROUTER_ABI
+        // Resolve curve address
+        let curveAddr = curveAddressCache.get(tokenAddr);
+        if (!curveAddr) {
+          try {
+            const curve = await client.readContract({
+              address: getAddress(INCENTIFI_BONDING_CURVE_FACTORY),
+              abi: FACTORY_ABI,
+              functionName: 'getBondingCurve',
+              args: [getAddress(t.mint_address)],
+            });
+            if (curve && curve !== '0x0000000000000000000000000000000000000000') {
+              curveAddr = curve.toLowerCase();
+              curveAddressCache.set(tokenAddr, curveAddr);
             }
+          } catch {
+            // Ignore
           }
-        } catch (err) {
-          console.error('Error fetching trade logs:', err.message);
         }
-      }
 
-      // 3. Poll ERC20 Transfer logs for active tokens
-      for (const t of tokens) {
-        if (!t.mint_address) continue;
-        try {
-          const transferLogs = await client.getLogs({
-            address: getAddress(t.mint_address),
-            event: parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)'),
+        if (curveAddr) {
+          // Poll TokensPurchased & TokensSold on the Curve
+          const buyLogs = await client.getLogs({
+            address: getAddress(curveAddr),
+            event: parseAbiItem('event TokensPurchased(address indexed buyer, address indexed recipient, uint256 ethInGross, uint256 tokensOut, uint256 creatorFee, uint256 lossPoolFee)'),
             fromBlock,
             toBlock,
           });
 
-          for (const log of transferLogs) {
-            const from = (log.args.from || '').toLowerCase();
-            const to = (log.args.to || '').toLowerCase();
-            const amountToken = Number(log.args.value || 0n) / 1e18;
-            const blockTime = new Date().toISOString();
-            await processTransfer(t.mint_address, from, to, amountToken, blockTime);
+          for (const log of buyLogs) {
+            const buyer = log.args.buyer;
+            const grossEth = Number(log.args.ethInGross) / 1e18;
+            const tokensOut = Number(log.args.tokensOut) / 1e18;
+            const creatorFee = Number(log.args.creatorFee) / 1e18;
+            const lossPoolFee = Number(log.args.lossPoolFee) / 1e18;
+            const blockTime = await getBlockTimeIso(log.blockNumber);
+            const tradeId = `${log.transactionHash}:${log.logIndex ?? 0}`;
+
+            await processBuyTrade(tokenAddr, t.symbol, buyer, tokensOut, grossEth, creatorFee, lossPoolFee, tradeId, log.blockNumber, blockTime);
           }
-        } catch {
-          // Skip if log query error on transfer
+
+          const sellLogs = await client.getLogs({
+            address: getAddress(curveAddr),
+            event: parseAbiItem('event TokensSold(address indexed seller, address indexed recipient, uint256 tokensIn, uint256 netEthOut, uint256 creatorFee, uint256 lossPoolFee)'),
+            fromBlock,
+            toBlock,
+          });
+
+          for (const log of sellLogs) {
+            const seller = log.args.seller;
+            const tokensIn = Number(log.args.tokensIn) / 1e18;
+            const netEthOut = Number(log.args.netEthOut) / 1e18;
+            const creatorFee = Number(log.args.creatorFee) / 1e18;
+            const lossPoolFee = Number(log.args.lossPoolFee) / 1e18;
+            const blockTime = await getBlockTimeIso(log.blockNumber);
+            const tradeId = `${log.transactionHash}:${log.logIndex ?? 0}`;
+
+            await processSellTrade(tokenAddr, t.symbol, seller, tokensIn, netEthOut, creatorFee, lossPoolFee, tradeId, log.blockNumber, blockTime);
+          }
+
+          // Update snapshot
+          await updateMarketSnapshot(tokenAddr, t.symbol, curveAddr);
         }
       }
 
-      // 4. Update market snapshots for all tokens
-      for (const t of tokens) {
-        if (!t.mint_address) continue;
-        const twap = await getPoolTwapPriceEth(t.mint_address);
-
-        await supabase.from('token_market_snapshots_evm').upsert({
-          token_address: t.mint_address.toLowerCase(),
-          symbol: t.symbol,
-          price_eth: twap,
-          market_cap_usd: twap * 1_000_000_000 * 2500, // 1B supply * price * ETH USD
-          updated_at: new Date().toISOString(),
-        });
-      }
+      // Successfully processed all events for range; advance block pointer safely
+      lastPolledBlock = toBlock;
     } catch (err) {
-      console.error('Indexer loop error:', err.message);
+      console.error('Indexer loop error (will retry next interval without advancing block):', err.message);
     }
   }, 10_000);
 }

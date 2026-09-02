@@ -54,7 +54,6 @@ import {
 } from '../../lib/lossReward';
 import {
   getStoredSession,
-  clearStoredSession,
   authenticateWallet,
   fetchLossRewardData,
 } from '../../lib/lossRewardAuth';
@@ -280,9 +279,6 @@ const TokenPreviewPage = () => {
     setClaimSuccessMsg(null);
     setSellAmountToken('');
     setAuthError(null);
-    if (!connectedWallet) {
-      clearStoredSession();
-    }
   }, [connectedWallet]);
 
   const loadLossRewardData = async () => {
