@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Incentifi - Deploy LossRewardPool.sol (Robinhood Chain Mainnet)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: #061214;
+      color: #E9E1D8;
+      font-family: 'Inter', -apple-system, sans-serif;
+      padding: 2rem 1rem;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+    }
+    .container {
+      width: 100%;
+      max-width: 800px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.25rem 0.75rem;
+      border-radius: 9999px;
+      background: #102428;
+      border: 1px solid #183033;
+      color: #00E599;
+      font-size: 0.75rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #00E599;
+      box-shadow: 0 0 8px #00E599;
+    }
+    h1 { font-size: 1.75rem; font-weight: 800; color: #fff; margin-bottom: 0.5rem; }
+    p.subtitle { color: #8EACB0; font-size: 0.875rem; margin-bottom: 1.5rem; }
+    .card {
+      background: #0B171A;
+      border: 1px solid #183033;
+      border-radius: 1rem;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    .card-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 0.75rem;
+    }
+    .item {
+      background: #061214;
+      border: 1px solid #183033;
+      border-radius: 0.75rem;
+      padding: 0.75rem 1rem;
+    }
+    .item label {
+      display: block;
+      color: #8EACB0;
+      font-size: 0.75rem;
+      font-weight: 500;
+      margin-bottom: 0.25rem;
+    }
+    .item .value {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      color: #fff;
+      word-break: break-all;
+    }
+    .item .value.highlight { color: #00E599; font-weight: 600; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.85rem 1.75rem;
+      border-radius: 0.75rem;
+      font-weight: 700;
+      font-size: 0.875rem;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s ease;
+      text-decoration: none;
+    }
+    .btn-primary {
+      background: #00E599;
+      color: #061214;
+      box-shadow: 0 4px 20px rgba(0, 229, 153, 0.25);
+    }
+    .btn-primary:hover { background: #00c984; transform: translateY(-1px); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .btn-secondary { background: #183033; color: #fff; }
+    .btn-secondary:hover { background: #224448; }
+    .status-box {
+      margin-top: 1rem;
+      padding: 1rem;
+      border-radius: 0.75rem;
+      font-size: 0.825rem;
+    }
+    .status-box.success { background: #102428; border: 1px solid #00E599; color: #00E599; }
+    .status-box.error { background: #3d1419; border: 1px solid #7A2730; color: #FFD7D7; }
+    .status-box.info { background: #0B171A; border: 1px solid #183033; color: #8EACB0; }
+    .spinner {
+      display: inline-block;
+      width: 1rem;
+      height: 1rem;
+      border: 2px solid rgba(0,229,153,0.3);
+      border-top-color: #00E599;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 0.5rem;
+      vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    details { margin-top: 1rem; font-size: 0.75rem; color: #8EACB0; }
+    details summary { cursor: pointer; color: #00E599; }
+    .raw-box {
+      background: #061214;
+      border: 1px solid #183033;
+      padding: 0.5rem;
+      border-radius: 0.5rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.65rem;
+      max-height: 120px;
+      overflow-y: auto;
+      word-break: break-all;
+      margin-top: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="badge">
+      <span class="dot"></span>
+      Robinhood Chain Mainnet (Chain ID 4663)
+    </div>
+    <h1>Deploy LossRewardPool.sol</h1>
+    <p class="subtitle">Direct browser wallet signer. Verify all deployment specifications and sign manually in MetaMask / Rabby.</p>
+
+    <div class="card">
+      <div class="card-title">Contract Specifications</div>
+      <div class="grid">
+        <div class="item">
+          <label>Target Contract</label>
+          <div class="value">contracts/LossRewardPool.sol</div>
+        </div>
+        <div class="item">
+          <label>Target Network</label>
+          <div class="value">Robinhood Chain (Chain ID: 4663)</div>
+        </div>
+        <div class="item">
+          <label>Constructor Argument (_operator)</label>
+          <div class="value highlight">address(0) [0x000...000]</div>
+        </div>
+        <div class="item">
+          <label>Estimated Deployment Gas</label>
+          <div class="value">~955,475 gas (~0.00039 ETH)</div>
+        </div>
+        <div class="item" style="grid-column: 1 / -1;">
+          <label>Connected Deployer Wallet</label>
+          <div class="value highlight" id="wallet-address">Not Connected</div>
+        </div>
+      </div>
+
+      <details>
+        <summary>View Full Encoded Calldata Preview</summary>
+        <div class="raw-box" id="calldata-preview">Loading compiled bytecode...</div>
+      </details>
+    </div>
+
+    <div class="card" style="text-align: center;">
+      <div id="action-container">
+        <button class="btn btn-primary" id="btn-deploy" onclick="deploy()">Connect Wallet & Deploy</button>
+      </div>
+      <div id="status-container"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { LOSS_REWARD_POOL_FULL_DEPLOY_DATA, LOSS_REWARD_POOL_CONSTRUCTOR_ARGS_ZERO_ADDR } from '/src/lib/lossRewardPoolBytecode.ts';
+
+    window.DEPLOY_DATA = LOSS_REWARD_POOL_FULL_DEPLOY_DATA;
+    document.getElementById('calldata-preview').innerText = LOSS_REWARD_POOL_FULL_DEPLOY_DATA;
+
+    const CHAIN_ID_HEX = '0x1237'; // 4663 in hex
+    const RPC_URL = 'https://rpc.mainnet.chain.robinhood.com';
+    const EXPLORER_URL = 'https://robinhoodchain.blockscout.com';
+
+    async function checkConnectedWallet() {
+      if (!window.ethereum) return;
+      try {
+        const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+        if (accounts && accounts[0]) {
+          const bal = await window.ethereum.request({ method: 'eth_getBalance', params: [accounts[0], 'latest'] });
+          const ethBal = (Number(BigInt(bal)) / 1e18).toFixed(6);
+          document.getElementById('wallet-address').innerText = `${accounts[0]} (${ethBal} ETH)`;
+          document.getElementById('btn-deploy').innerText = 'Sign & Deploy LossRewardPool via Wallet';
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    window.deploy = async function() {
+      const statusDiv = document.getElementById('status-container');
+      const btn = document.getElementById('btn-deploy');
+
+      if (!window.ethereum) {
+        statusDiv.innerHTML = '<div class="status-box error">Please install MetaMask, Rabby, or Robinhood Wallet.</div>';
+        return;
+      }
+
+      try {
+        btn.disabled = true;
+        statusDiv.innerHTML = '<div class="status-box info"><span class="spinner"></span>Connecting wallet and switching to Robinhood Chain Mainnet (4663)...</div>';
+
+        // Switch or Add Chain
+        try {
+          await window.ethereum.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: CHAIN_ID_HEX }],
+          });
+        } catch (switchError) {
+          if (switchError.code === 4902) {
+            await window.ethereum.request({
+              method: 'wallet_addEthereumChain',
+              params: [{
+                chainId: CHAIN_ID_HEX,
+                chainName: 'Robinhood Chain',
+                nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+                rpcUrls: [RPC_URL],
+                blockExplorerUrls: [EXPLORER_URL],
+              }],
+            });
+          } else {
+            throw switchError;
+          }
+        }
+
+        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+        const account = accounts[0];
+
+        const balHex = await window.ethereum.request({ method: 'eth_getBalance', params: [account, 'latest'] });
+        const bal = Number(BigInt(balHex || '0x0')) / 1e18;
+        document.getElementById('wallet-address').innerText = `${account} (${bal.toFixed(6)} ETH)`;
+
+        if (bal < 0.0004) {
+          throw new Error(`Insufficient funds: ${bal.toFixed(6)} ETH in wallet. Recommended: >= 0.001 ETH.`);
+        }
+
+        statusDiv.innerHTML = '<div class="status-box info"><span class="spinner"></span>Please review and APPROVE the transaction in your wallet popup...</div>';
+
+        const txHash = await window.ethereum.request({
+          method: 'eth_sendTransaction',
+          params: [{
+            from: account,
+            data: window.DEPLOY_DATA,
+          }],
+        });
+
+        statusDiv.innerHTML = `<div class="status-box info"><span class="spinner"></span>Tx broadcasted! Waiting for confirmation...<br><a href="${EXPLORER_URL}/tx/${txHash}" target="_blank" style="color: #00E599; word-break: break-all;">${txHash}</a></div>`;
+
+        // Poll receipt
+        let receipt = null;
+        for (let i = 0; i < 90; i++) {
+          receipt = await window.ethereum.request({
+            method: 'eth_getTransactionReceipt',
+            params: [txHash],
+          });
+          if (receipt && receipt.contractAddress) break;
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+
+        if (!receipt || !receipt.contractAddress) {
+          throw new Error('Transaction submitted but receipt confirmation timed out. Check explorer.');
+        }
+
+        const contractAddress = receipt.contractAddress;
+        const code = await window.ethereum.request({
+          method: 'eth_getCode',
+          params: [contractAddress, 'latest'],
+        });
+
+        const isCodeNonEmpty = Boolean(code && code !== '0x' && code.length > 2);
+        const codeBytes = code ? (code.length - 2) / 2 : 0;
+
+        statusDiv.innerHTML = `
+          <div class="status-box success" style="text-align: left;">
+            <div style="font-weight: 700; font-size: 1rem; margin-bottom: 0.75rem;">🎉 LossRewardPool.sol Deployed & Verified!</div>
+            <div style="margin-bottom: 0.4rem;"><strong>Contract Address:</strong> <a href="${EXPLORER_URL}/address/${contractAddress}" target="_blank" style="color: #fff; font-family: monospace;">${contractAddress}</a></div>
+            <div style="margin-bottom: 0.4rem;"><strong>Transaction Hash:</strong> <a href="${EXPLORER_URL}/tx/${txHash}" target="_blank" style="color: #fff; font-family: monospace;">${txHash}</a></div>
+            <div style="margin-bottom: 0.4rem;"><strong>Block Number:</strong> <span style="font-family: monospace; color: #fff;">${BigInt(receipt.blockNumber)}</span></div>
+            <div style="margin-bottom: 0.4rem;"><strong>Deployer Address:</strong> <span style="font-family: monospace; color: #fff;">${account}</span></div>
+            <div style="margin-bottom: 0.4rem;"><strong>Constructor Argument:</strong> <span style="font-family: monospace; color: #fff;">0x0000000000000000000000000000000000000000</span></div>
+            <div style="margin-bottom: 0.4rem;"><strong>Gas Used:</strong> <span style="font-family: monospace; color: #fff;">${BigInt(receipt.gasUsed)}</span></div>
+            <div><strong>eth_getCode:</strong> <span style="color: #00E599; font-weight: 700;">${isCodeNonEmpty ? 'NON-EMPTY (VERIFIED)' : 'EMPTY'}</span> (${codeBytes} bytes)</div>
+          </div>
+        `;
+      } catch (err) {
+        console.error(err);
+        statusDiv.innerHTML = `<div class="status-box error">Deployment Error: ${err.message || 'Rejected'}</div>`;
+        btn.disabled = false;
+      }
+    };
+
+    checkConnectedWallet();
+    if (window.ethereum) {
+      window.ethereum.on('accountsChanged', checkConnectedWallet);
+    }
+  </script>
+</body>
+</html>

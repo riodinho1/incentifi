@@ -240,7 +240,7 @@ const LaunchPage = () => {
               Launch Your Token
             </h1>
             <p className="mt-2.5 max-w-2xl text-sm sm:text-base text-slate-400 leading-relaxed">
-              Deploy a standard ERC-20 token contract with built-in Incentifi Router trading and automated 10% hourly loss-reward protection.
+              Deploy a standard ERC-20 token contract with built-in Incentifi Router trading and automated 10% 5-minute loss-reward protection.
             </p>
           </div>
         </section>
@@ -458,10 +458,10 @@ const LaunchPage = () => {
                       </div>
                       <div className="space-y-1">
                         <h3 className="text-xs font-bold text-white flex items-center gap-2">
-                          10% Hourly Loss-Reward Protection & 1% Trading Fee
+                          10% 5-Minute Loss-Reward Protection & 2% Trading Fee
                         </h3>
                         <p className="text-[11px] text-slate-300 leading-relaxed">
-                          All trades route through the Incentifi Router with a 1.0% fee (0.5% directly to creator wallet, 0.5% deposited into the token's Loss Reward Pool). Eligible underwater holders receive hourly 10% loss-reward distributions in native ETH.
+                          All trades route through the Incentifi Router with a 2.0% fee (1.0% directly to creator wallet, 1.0% deposited into the token's Loss Reward Pool). Eligible underwater holders receive 10% 5-minute loss-reward distributions in native ETH.
                         </p>
                       </div>
                     </div>
@@ -562,11 +562,11 @@ const LaunchPage = () => {
                     </div>
                     <div className="flex items-center justify-between text-slate-400">
                       <span>Router Fee</span>
-                      <span className="text-[#10B981] font-medium">1.0% (50/50 Split)</span>
+                      <span className="text-[#10B981] font-medium">2.0% (1% Creator / 1% Loss Pool)</span>
                     </div>
                     <div className="flex items-center justify-between text-slate-400">
                       <span>Protection</span>
-                      <span className="text-emerald-400 font-medium">10% Hourly Loss Pool</span>
+                      <span className="text-emerald-400 font-medium">10% / 5-Min Loss Pool</span>
                     </div>
                   </div>
                 </div>

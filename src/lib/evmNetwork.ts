@@ -9,7 +9,9 @@ export const EVM_CHAIN_NAME = String(
 export const EVM_CHAIN_ID_DECIMAL = Number(import.meta.env.VITE_EVM_CHAIN_ID || 4663);
 export const EVM_CHAIN_ID_HEX = `0x${EVM_CHAIN_ID_DECIMAL.toString(16)}`;
 
-export const EVM_RPC_URL = String(import.meta.env.VITE_EVM_RPC_URL || '').trim();
+export const EVM_RPC_URL = String(
+  import.meta.env.VITE_EVM_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com'
+).trim();
 
 export const EVM_EXPLORER_URL = String(
   import.meta.env.VITE_EVM_EXPLORER_URL || 'https://robinhoodchain.blockscout.com'
@@ -39,12 +41,6 @@ export const ensureEvmChain = async () => {
   const provider = getEvmProvider();
   if (!provider) {
     throw new Error('Install an EVM wallet such as MetaMask, Rabby, or Robinhood Wallet.');
-  }
-
-  if (!EVM_RPC_URL) {
-    throw new Error(
-      'VITE_EVM_RPC_URL is not configured. Add the official Robinhood Chain RPC URL in Vercel before deploying tokens.'
-    );
   }
 
   try {

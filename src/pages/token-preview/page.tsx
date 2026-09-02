@@ -35,7 +35,7 @@ import {
   fetchEvmSnapshot,
   fetchEvmTrades,
 } from '../../lib/marketData';
-import { buyToken, sellToken, getPoolMarketState } from '../../lib/swap';
+import { buyToken, sellToken, getUnifiedMarketState, type UnifiedMarketState } from '../../lib/swap';
 import { fetchPoolHistory } from '../../lib/poolHistory';
 import { fetchChatMessages, postChatMessage, type ChatMessage } from '../../lib/chat';
 import { getWalletAccount } from '../../lib/walletAccount';
@@ -369,23 +369,31 @@ const TokenPreviewPage = () => {
     });
   }, [tokenData]);
 
-  // Derived market statistics (Pump.fun Model: Initial $5,000 cap -> live dynamic market cap)
-  const isPoolActive = Boolean(primaryPoolAddress && livePoolState && livePoolState.priceEth > 0);
-  const currentPriceEth = livePoolState?.priceEth || marketSnapshot?.priceSol || 0;
+  // Track unified bonding curve & pool state
+  const [unifiedMarket, setUnifiedMarket] = useState<UnifiedMarketState | null>(null);
+
+  // Derived market statistics (Deterministic Initial $5,000 cap -> live dynamic bonding curve & V3 cap)
+  const isPoolActive = Boolean(
+    (primaryPoolAddress && livePoolState && livePoolState.priceEth > 0) ||
+    (unifiedMarket && !unifiedMarket.isGraduated)
+  );
+  const currentPriceEth = unifiedMarket?.priceEth || livePoolState?.priceEth || marketSnapshot?.priceSol || 0;
   
   // Deterministic initial token price based on standard launch parameters
   const initialPriceEth = ethUsdPrice > 0 ? INITIAL_TOKEN_PRICE_USD / ethUsdPrice : 0.000000002;
   const displayPriceEth = currentPriceEth > 0 ? currentPriceEth : initialPriceEth;
   const displayPriceUsd = currentPriceEth > 0 ? currentPriceEth * ethUsdPrice : INITIAL_TOKEN_PRICE_USD;
 
-  // Market cap is always a numeric value (never "Awaiting pool")
-  const marketCapUsd = currentPriceEth > 0
-    ? currentPriceEth * TOTAL_SUPPLY * ethUsdPrice
-    : marketSnapshot?.marketCapUsd && marketSnapshot.marketCapUsd > 0
-      ? marketSnapshot.marketCapUsd
-      : INITIAL_MARKET_CAP_USD;
+  // Market cap is always a live numeric value
+  const marketCapUsd = unifiedMarket?.marketCapUsd && unifiedMarket.marketCapUsd > 0
+    ? unifiedMarket.marketCapUsd
+    : currentPriceEth > 0
+      ? currentPriceEth * TOTAL_SUPPLY * ethUsdPrice
+      : marketSnapshot?.marketCapUsd && marketSnapshot.marketCapUsd > 0
+        ? marketSnapshot.marketCapUsd
+        : INITIAL_MARKET_CAP_USD;
 
-  const liquidityEth = livePoolState?.liquidityEth || marketSnapshot?.liquiditySol || 0;
+  const liquidityEth = unifiedMarket?.realEthReserveEth ? unifiedMarket.realEthReserveEth * 2 : (livePoolState?.liquidityEth || marketSnapshot?.liquiditySol || 0);
   const liquidityUsd = liquidityEth > 0 ? liquidityEth * ethUsdPrice : 0;
 
   const totalVolumeEth = useMemo(() => {
@@ -409,36 +417,36 @@ const TokenPreviewPage = () => {
 
   const displaySymbol = onchainMintInfo.symbol || tokenData?.tokenSymbol || '';
 
-  // Load Live Pool Market State directly from chain
+  // Load Live Market State (Bonding Curve / Uniswap V3) directly from chain
   useEffect(() => {
     if (!tokenData?.mintAddress) return;
     let cancelled = false;
 
-    const loadLivePoolState = async () => {
+    const loadLiveState = async () => {
       try {
-        const pool = await getPoolMarketState(tokenData.mintAddress!);
+        const market = await getUnifiedMarketState(tokenData.mintAddress!, ethUsdPrice);
         if (cancelled) return;
-        setPrimaryPoolAddress(pool.poolAddress);
+        setUnifiedMarket(market);
+        if (market.poolAddress) {
+          setPrimaryPoolAddress(market.poolAddress);
+        }
         setLivePoolState({
-          priceEth: pool.priceEth,
-          liquidityEth: pool.liquidityEth,
+          priceEth: market.priceEth,
+          liquidityEth: market.realEthReserveEth * 2,
           updatedAt: Date.now(),
         });
       } catch (err) {
-        if (!cancelled) {
-          setPrimaryPoolAddress('');
-          setLivePoolState(null);
-        }
+        console.warn('Failed to load unified market state:', err);
       }
     };
 
-    loadLivePoolState();
-    const timer = setInterval(loadLivePoolState, 15_000);
+    loadLiveState();
+    const timer = setInterval(loadLiveState, 10_000);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [tokenData?.mintAddress]);
+  }, [tokenData?.mintAddress, ethUsdPrice]);
 
   // Load Chat Messages
   useEffect(() => {
@@ -788,10 +796,10 @@ const TokenPreviewPage = () => {
     try {
       setOnchainBusy(true);
       setTxPhase('signing');
-      const result = await buyToken(tokenData.mintAddress, trader, ethIn, slippage);
+      const result = await buyToken(tokenData.mintAddress, trader, ethIn, slippage, ethUsdPrice);
       const timestamp = Date.now();
       if (result.trade.side !== 'buy') {
-        throw new Error('Transaction confirmed, but the pool reported a sell instead of a buy.');
+        throw new Error('Transaction confirmed, but reported sell instead of buy.');
       }
       pushTrade({
         id: result.txHash,
@@ -805,9 +813,10 @@ const TokenPreviewPage = () => {
         feeSol: 0,
       });
       appendConfirmedTradePoint(result.trade.priceEth, result.trade.amountEth, timestamp);
-      const pool = await getPoolMarketState(tokenData.mintAddress);
-      setPrimaryPoolAddress(pool.poolAddress);
-      setLivePoolState({ priceEth: pool.priceEth, liquidityEth: pool.liquidityEth, updatedAt: Date.now() });
+      const market = await getUnifiedMarketState(tokenData.mintAddress, ethUsdPrice);
+      setUnifiedMarket(market);
+      if (market.poolAddress) setPrimaryPoolAddress(market.poolAddress);
+      setLivePoolState({ priceEth: market.priceEth, liquidityEth: market.realEthReserveEth * 2, updatedAt: Date.now() });
       setTxPhase('success');
       setStatus(`Buy confirmed (${shortSig(result.txHash)}).`);
       await refreshOnchainBalances();
@@ -842,12 +851,12 @@ const TokenPreviewPage = () => {
         tokenData.mintAddress,
         trader,
         amount,
-        onchainMintInfo.decimals,
-        slippage
+        slippage,
+        ethUsdPrice
       );
       const timestamp = Date.now();
       if (result.trade.side !== 'sell') {
-        throw new Error('Transaction confirmed, but the pool reported a buy instead of a sell.');
+        throw new Error('Transaction confirmed, but reported buy instead of sell.');
       }
       pushTrade({
         id: result.txHash,
@@ -861,9 +870,10 @@ const TokenPreviewPage = () => {
         feeSol: 0,
       });
       appendConfirmedTradePoint(result.trade.priceEth, result.trade.amountEth, timestamp);
-      const pool = await getPoolMarketState(tokenData.mintAddress);
-      setPrimaryPoolAddress(pool.poolAddress);
-      setLivePoolState({ priceEth: pool.priceEth, liquidityEth: pool.liquidityEth, updatedAt: Date.now() });
+      const market = await getUnifiedMarketState(tokenData.mintAddress, ethUsdPrice);
+      setUnifiedMarket(market);
+      if (market.poolAddress) setPrimaryPoolAddress(market.poolAddress);
+      setLivePoolState({ priceEth: market.priceEth, liquidityEth: market.realEthReserveEth * 2, updatedAt: Date.now() });
       setTxPhase('success');
       setStatus(`Sell confirmed (${shortSig(result.txHash)}).`);
       setSellAmountToken('');
@@ -944,6 +954,59 @@ const TokenPreviewPage = () => {
     setTimeout(() => setContractCopied(false), 2000);
   };
 
+  const renderGraduationProgressCard = () => {
+    const isGrad = Boolean(unifiedMarket?.isGraduated);
+    const progressPct = unifiedMarket?.progressBps ? (unifiedMarket.progressBps / 100).toFixed(1) : '0.0';
+    const ethAccumulated = unifiedMarket?.realEthReserveEth ? unifiedMarket.realEthReserveEth.toFixed(4) : '0.0000';
+    
+    return (
+      <div className="bg-[#0B1120] border border-[#1D2940] rounded-2xl p-4 sm:p-5 shadow-xl shadow-black/20">
+        <div className="flex items-center justify-between mb-2.5">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="w-4 h-4 text-[#10B981]" />
+            <h3 className="text-white font-bold text-sm">Graduation Progress</h3>
+          </div>
+          <span className={`text-[11px] font-bold px-2 py-0.5 rounded border ${
+            isGrad
+              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+              : 'bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20'
+          }`}>
+            {isGrad ? 'Graduated (Uniswap V3)' : `${progressPct}%`}
+          </span>
+        </div>
+
+        {/* Progress Bar */}
+        <div className="w-full bg-[#070A12] border border-[#1D2940] rounded-full h-3 mb-3 p-0.5 overflow-hidden">
+          <div
+            className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-500"
+            style={{ width: `${Math.min(100, Math.max(0, Number(progressPct)))}%` }}
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 text-xs mb-3">
+          <div className="bg-[#070A12] border border-[#1D2940] rounded-xl p-2.5">
+            <span className="text-[#64799E] block text-[10px] uppercase font-medium">Curve Reserve</span>
+            <span className="text-white font-bold text-xs mt-0.5 block truncate">
+              {ethAccumulated} / 5.8539 ETH
+            </span>
+          </div>
+          <div className="bg-[#070A12] border border-[#1D2940] rounded-xl p-2.5">
+            <span className="text-[#64799E] block text-[10px] uppercase font-medium">Target Cap</span>
+            <span className="text-[#10B981] font-bold text-xs mt-0.5 block truncate">
+              $69,000 USD
+            </span>
+          </div>
+        </div>
+
+        <p className="text-[11px] text-[#8DA3CD] leading-relaxed">
+          {isGrad
+            ? 'Liquidity permanently seeded into Uniswap V3. Position NFT permanently burned to 0xdead.'
+            : 'When bonding curve hits 5.85 ETH ($69K MC), accumulated ETH & remaining tokens are automatically deposited to Uniswap V3 and LP burned forever.'}
+        </p>
+      </div>
+    );
+  };
+
   // Reusable Component Blocks (rendered in optimal order on mobile & desktop)
   const renderTradingPanel = () => (
     <div className="bg-[#0B1120] border border-[#1D2940] rounded-2xl p-4 sm:p-5 shadow-xl shadow-black/20">
@@ -953,7 +1016,7 @@ const TokenPreviewPage = () => {
           Trade ${displaySymbol}
         </h3>
         <span className="text-[11px] font-medium text-[#10B981] bg-[#10B981]/10 px-2 py-0.5 rounded border border-[#10B981]/20">
-          1% Router Fee
+          1% Fee Split
         </span>
       </div>
 
@@ -1022,12 +1085,14 @@ const TokenPreviewPage = () => {
           {/* Router Fee Breakdown Note */}
           <div className="bg-[#070A12] border border-[#1D2940] rounded-xl p-3 text-[11px] text-[#8DA3CD] space-y-1">
             <div className="flex items-center justify-between">
-              <span>Router Execution</span>
-              <span className="text-white font-medium">IncentifiSwapRouter</span>
+              <span>Trading Venue</span>
+              <span className="text-white font-medium">
+                {unifiedMarket?.isGraduated ? 'Uniswap V3 Pool' : 'Incentifi Bonding Curve'}
+              </span>
             </div>
             <div className="flex items-center justify-between">
               <span>Fee Allocation</span>
-              <span className="text-emerald-400 font-medium">0.5% Creator / 0.5% Loss Pool</span>
+              <span className="text-emerald-400 font-medium">1.0% Creator / 1.0% Loss Pool</span>
             </div>
             <div className="flex items-center justify-between">
               <span>Slippage Tolerance</span>
@@ -1037,7 +1102,7 @@ const TokenPreviewPage = () => {
 
           <button
             onClick={submitBuy}
-            disabled={onchainBusy || !isPoolActive}
+            disabled={onchainBusy || !tokenData?.mintAddress}
             className="w-full py-3.5 sm:py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-white font-bold text-sm sm:text-base shadow-lg shadow-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition"
           >
             {onchainBusy
@@ -1048,9 +1113,7 @@ const TokenPreviewPage = () => {
                   : txPhase === 'confirming'
                     ? 'Confirming on-chain...'
                     : 'Processing...'
-              : !isPoolActive
-                ? 'Awaiting Liquidity Pool'
-                : `Buy ${displaySymbol}`}
+              : `Buy ${displaySymbol}`}
           </button>
         </div>
       ) : (
@@ -1097,12 +1160,14 @@ const TokenPreviewPage = () => {
           {/* Router Fee Breakdown Note */}
           <div className="bg-[#070A12] border border-[#1D2940] rounded-xl p-3 text-[11px] text-[#8DA3CD] space-y-1">
             <div className="flex items-center justify-between">
-              <span>Router Execution</span>
-              <span className="text-white font-medium">IncentifiSwapRouter</span>
+              <span>Trading Venue</span>
+              <span className="text-white font-medium">
+                {unifiedMarket?.isGraduated ? 'Uniswap V3 Pool' : 'Incentifi Bonding Curve'}
+              </span>
             </div>
             <div className="flex items-center justify-between">
               <span>Fee Allocation</span>
-              <span className="text-rose-400 font-medium">0.5% Creator / 0.5% Loss Pool</span>
+              <span className="text-rose-400 font-medium">1.0% Creator / 1.0% Loss Pool</span>
             </div>
             <div className="flex items-center justify-between">
               <span>Slippage Tolerance</span>
@@ -1114,7 +1179,7 @@ const TokenPreviewPage = () => {
             onClick={submitSell}
             disabled={
               onchainBusy ||
-              !isPoolActive ||
+              !tokenData?.mintAddress ||
               position.tokens <= 0 ||
               !(Number(sellAmountToken) > 0 && Number(sellAmountToken) <= position.tokens)
             }
@@ -1128,11 +1193,9 @@ const TokenPreviewPage = () => {
                   : txPhase === 'confirming'
                     ? 'Confirming on-chain...'
                     : 'Processing...'
-              : !isPoolActive
-                ? 'Awaiting Liquidity Pool'
-                : position.tokens <= 0
-                  ? 'No Tokens to Sell'
-                  : `Sell ${displaySymbol}`}
+              : position.tokens <= 0
+                ? 'No Tokens to Sell'
+                : `Sell ${displaySymbol}`}
           </button>
         </div>
       )}
@@ -1209,7 +1272,7 @@ const TokenPreviewPage = () => {
           <h3 className="text-white font-bold text-sm">Loss-Reward Protection</h3>
         </div>
         <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 uppercase tracking-wider">
-          10% Hourly
+          10% / 5-Min
         </span>
       </div>
 
@@ -1268,7 +1331,7 @@ const TokenPreviewPage = () => {
 
           {lossStats.isUnderwater && lossStats.isEligible && (
             <div className="flex items-center justify-between text-[11px]">
-              <span className="text-[#8DA3CD]">Est. Hourly Reward:</span>
+              <span className="text-[#8DA3CD]">Est. 5-Min Reward:</span>
               <span className="text-emerald-400 font-semibold">
                 {lossStats.theoreticalRewardEth.toFixed(5)} ETH (10%)
               </span>
@@ -1581,6 +1644,7 @@ const TokenPreviewPage = () => {
 
               {/* MOBILE ONLY: Priority Trading and Protection Flow directly below chart */}
               <div className="lg:hidden space-y-4">
+                {renderGraduationProgressCard()}
                 {renderTradingPanel()}
                 {renderPositionCard()}
                 {renderLossRewardCard()}
@@ -1736,6 +1800,7 @@ const TokenPreviewPage = () => {
 
             {/* DESKTOP STICKY RIGHT SIDEBAR */}
             <aside className="hidden lg:block lg:sticky lg:top-24 space-y-5">
+              {renderGraduationProgressCard()}
               {renderTradingPanel()}
               {renderPositionCard()}
               {renderLossRewardCard()}

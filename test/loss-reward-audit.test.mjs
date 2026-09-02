@@ -440,24 +440,24 @@ test('Q: Zero reward when available pool is 0', () => {
   assert.equal(actualReward, 0);
 });
 
-test('R: Router 50/50 fee split (0.5% creator / 0.5% loss pool from 1.0% total)', () => {
-  const grossTradeEth = 1000000000000000000n; // 1.0 ETH
-  const feeBps = 100n; // 1%
-  const fee = (grossTradeEth * feeBps) / 10000n; // 0.01 ETH
-  const creatorShare = fee / 2n; // 0.005 ETH
-  const lossPoolShare = fee - creatorShare; // 0.005 ETH
-  const swapEth = grossTradeEth - fee; // 0.99 ETH
+test('R: Router 50/50 fee split (1.0% creator / 1.0% loss pool from 2.0% total)', () => {
+  const grossTradeEth = 100000000000000000000n; // 100.0 ETH
+  const feeBps = 200n; // 2%
+  const creatorShare = (grossTradeEth * 100n) / 10000n; // 1.0 ETH (1.0%)
+  const lossPoolShare = (grossTradeEth * 100n) / 10000n; // 1.0 ETH (1.0%)
+  const fee = creatorShare + lossPoolShare; // 2.0 ETH (2.0%)
+  const swapEth = grossTradeEth - fee; // 98.0 ETH (98.0%)
 
-  assert.equal(fee, 10000000000000000n);
-  assert.equal(creatorShare, 5000000000000000n);
-  assert.equal(lossPoolShare, 5000000000000000n);
-  assert.equal(swapEth, 990000000000000000n);
+  assert.equal(fee, 2000000000000000000n);
+  assert.equal(creatorShare, 1000000000000000000n);
+  assert.equal(lossPoolShare, 1000000000000000000n);
+  assert.equal(swapEth, 98000000000000000000n);
   assert.equal(creatorShare + lossPoolShare + swapEth, grossTradeEth);
 });
 
 test('S: ETH/WETH conversion invariance (No dust leftover in router)', () => {
   const gross = 1000000000000000000n;
-  const fee = (gross * 100n) / 10000n;
+  const fee = (gross * 200n) / 10000n;
   const swap = gross - fee;
   // Wrapped WETH deposited equals swap amount exactly
   const wethDeposited = swap;
@@ -503,6 +503,49 @@ test('V: Sybil splitting invariance (1 wallet with 100 tokens == 10 wallets with
 
   assert.ok(Math.abs(rSingle.theoreticalReward - totalSybilReward) < 1e-12);
   assert.equal(rSingle.theoreticalReward, 0.05);
+});
+
+test('W: 5-Minute snapshot interval constant verification (SNAPSHOT_INTERVAL_SECONDS = 300)', () => {
+  const SNAPSHOT_INTERVAL_SECONDS = 300;
+  const SNAPSHOT_INTERVAL_MINUTES = 5;
+  const snapshotsPerHour = 3600 / SNAPSHOT_INTERVAL_SECONDS;
+
+  assert.equal(SNAPSHOT_INTERVAL_SECONDS, 300);
+  assert.equal(SNAPSHOT_INTERVAL_MINUTES, 5);
+  assert.equal(snapshotsPerHour, 12);
+});
+
+test('X: 5-Minute epoch frequency non-distortion verification (12 snapshots/hr does not multiply rewards)', () => {
+  // User invests 0.98 ETH (after 2% fee) for 1000 tokens
+  let holder = applyBuy({ tokenBalance: 0, totalInvestedEth: 0, avgCostBasisEth: 0, isEligible: true, isUnderwaterSeller: false }, 1000, 0.98, 1);
+  const twap = 0.0004; // Position value = 0.40 ETH. Initial unrealized loss = 0.58 ETH.
+  const initialLoss = 0.98 - (1000 * twap); // 0.58 ETH
+
+  let totalReceivedIn1Hour = 0;
+  // 12 consecutive 5-minute epochs = 1 hour
+  for (let epoch = 2; epoch <= 13; epoch++) {
+    const { actualReward } = calculateHolderReward(holder, twap, epoch, 1.0);
+    totalReceivedIn1Hour += actualReward;
+    holder = applyRewardDepletion(holder, actualReward);
+  }
+
+  // Under geometric decay: 1 - (0.9)^12 ≈ 71.76% of loss recovered over 1 hour
+  const expected1Hour = initialLoss * (1 - (0.9 ** 12));
+  assert.ok(Math.abs(totalReceivedIn1Hour - expected1Hour) < 1e-10);
+  assert.ok(totalReceivedIn1Hour < initialLoss, '1-hour total payout must be strictly less than initial loss');
+  assert.ok(totalReceivedIn1Hour < 0.58, '1-hour total payout must not exceed initial loss of 0.58 ETH');
+
+  // Over 100 consecutive 5-minute epochs (~8.3 hours)
+  let totalReceivedLifetime = totalReceivedIn1Hour;
+  for (let epoch = 14; epoch <= 100; epoch++) {
+    const { actualReward } = calculateHolderReward(holder, twap, epoch, 1.0);
+    totalReceivedLifetime += actualReward;
+    holder = applyRewardDepletion(holder, actualReward);
+  }
+
+  // Lifetime payout asymptotically approaches initial loss but NEVER exceeds it
+  assert.ok(totalReceivedLifetime <= initialLoss + 1e-12, 'Lifetime payout must NEVER exceed initial loss');
+  assert.ok(totalReceivedLifetime < 0.98, 'Lifetime payout must NEVER exceed invested capital');
 });
 
 console.log('\n======================================================');

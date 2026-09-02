@@ -93,12 +93,12 @@ class IncentifiEcosystemSimulator {
     this.claimedEpochs = new Set(); // `${token}-${epoch}-${wallet}`
   }
 
-  // 1. Official Router Buy (1% fee: 0.5% creator, 0.5% loss pool)
+  // 1. Official Router Buy (2% fee: 1.0% creator, 1.0% loss pool)
   routerBuy(wallet, amountToken, totalEthPaid, epoch = 1) {
-    const fee = totalEthPaid * 0.01;
-    const creatorFee = fee * 0.5;
-    const lossPoolFee = fee * 0.5;
-    const swapEth = totalEthPaid - fee;
+    const fee = totalEthPaid * 0.02;
+    const creatorFee = fee * 0.5; // 1.0%
+    const lossPoolFee = fee * 0.5; // 1.0%
+    const swapEth = totalEthPaid - fee; // 98.0%
 
     this.creatorEarnings += creatorFee;
     this.lossRewardPoolBalance += lossPoolFee;
@@ -138,12 +138,12 @@ class IncentifiEcosystemSimulator {
     return updated;
   }
 
-  // 2. Official Router Sell (1% fee: 0.5% creator, 0.5% loss pool)
+  // 2. Official Router Sell (2% fee: 1.0% creator, 1.0% loss pool)
   routerSell(wallet, amountToken, grossEthOut, currentPriceEth) {
-    const fee = grossEthOut * 0.01;
-    const creatorFee = fee * 0.5;
-    const lossPoolFee = fee * 0.5;
-    const netEth = grossEthOut - fee;
+    const fee = grossEthOut * 0.02;
+    const creatorFee = fee * 0.5; // 1.0%
+    const lossPoolFee = fee * 0.5; // 1.0%
+    const netEth = grossEthOut - fee; // 98.0%
 
     this.creatorEarnings += creatorFee;
     this.lossRewardPoolBalance += lossPoolFee;
@@ -521,7 +521,7 @@ function report(id, title, status, notes = '') {
 
   const state = sim.holders.get('0x1111111111111111111111111111111111111111');
   assert.equal(state.tokenBalance, 1000);
-  assert.equal(state.totalInvestedEth, 0.99);
+  assert.equal(state.totalInvestedEth, 0.98);
   report('I', 'Direct Uniswap Buy -> Router Buy (Mixed Position)', 'PASS',
     `Strict isolation: Only 1,000 router tokens credited with cost basis.`);
 }
@@ -566,7 +566,7 @@ function report(id, title, status, notes = '') {
 // Scenario L: Direct Uniswap whale dump
 {
   const sim = new IncentifiEcosystemSimulator();
-  sim.routerBuy('0x1111111111111111111111111111111111111111', 1000, 1.0, 1); // Pool balance = 0.005 ETH
+  sim.routerBuy('0x1111111111111111111111111111111111111111', 1000, 1.0, 1); // Pool balance = 0.010 ETH
   // Whale dumps directly on Uniswap (0 fee paid) crashing price to 0.00001
   sim.directUniswapSell('0xWhale000000000000000000000000000000000000', 1000000, 10.0, 0.00001);
 
@@ -584,11 +584,11 @@ function report(id, title, status, notes = '') {
   const sim = new IncentifiEcosystemSimulator();
   sim.routerBuy('0x1111111111111111111111111111111111111111', 1000, 1.0, 1);
   const costToManipulateTwapEth = 10.0;
-  const maxExtractableReward = 0.005; // Capped by pool balance
+  const maxExtractableReward = 0.010; // Capped by pool balance
 
   assert.ok(costToManipulateTwapEth > maxExtractableReward * 100);
   report('M', 'TWAP Manipulation Economic Viability', 'PASS',
-    `Cost to suppress 30-min full-range TWAP (10 ETH) >> Max extractable reward (0.005 ETH).`);
+    `Cost to suppress 30-min full-range TWAP (10 ETH) >> Max extractable reward (0.010 ETH).`);
 }
 
 // Scenario N: Buy immediately before epoch snapshot
@@ -626,7 +626,7 @@ function report(id, title, status, notes = '') {
 
   const state = sim.holders.get('0x1111111111111111111111111111111111111111');
   assert.equal(state.tokenBalance, 2000);
-  assert.equal(state.totalInvestedEth, 1.98);
+  assert.equal(state.totalInvestedEth, 1.96);
   report('P', 'Direct Pool Trade Followed by Router Trade', 'PASS',
     `Only router trade funds/receives protection. Direct balance untracked.`);
 }
@@ -746,22 +746,22 @@ console.log('------------------------------------------------------------------'
   console.log('  ✓ [INVARIANT 2] Direct Uniswap buyers receive 0 reward allocation');
 }
 
-// Invariant 3: Router fee accounting remains exactly 1%
+// Invariant 3: Router fee accounting remains exactly 2%
 {
   const ethIn = 5.0;
-  const fee = ethIn * 0.01;
-  assert.equal(fee, 0.05);
-  console.log('  ✓ [INVARIANT 3] Router fee is exactly 1.0%');
+  const fee = ethIn * 0.02;
+  assert.equal(fee, 0.10);
+  console.log('  ✓ [INVARIANT 3] Router fee is exactly 2.0%');
 }
 
-// Invariant 4: Fee split remains exactly 0.5% creator / 0.5% LossRewardPool
+// Invariant 4: Fee split remains exactly 1.0% creator / 1.0% LossRewardPool
 {
-  const fee = 0.05;
+  const fee = 0.10;
   const creator = fee * 0.5;
   const pool = fee * 0.5;
-  assert.equal(creator, 0.025);
-  assert.equal(pool, 0.025);
-  console.log('  ✓ [INVARIANT 4] Fee split is exactly 50/50 (0.50% creator / 0.50% loss pool)');
+  assert.equal(creator, 0.05);
+  assert.equal(pool, 0.05);
+  console.log('  ✓ [INVARIANT 4] Fee split is exactly 50/50 (1.00% creator / 1.00% loss pool)');
 }
 
 // Invariant 5: No wallet transfer can manufacture unrealized loss
@@ -798,7 +798,7 @@ console.log('------------------------------------------------------------------'
 // Invariant 8: Lifetime payout remains bounded by holder economically justified loss
 {
   const sim = new IncentifiEcosystemSimulator();
-  sim.routerBuy('0x1111111111111111111111111111111111111111', 1000, 1.0, 1); // Invested = 0.99 ETH
+  sim.routerBuy('0x1111111111111111111111111111111111111111', 1000, 1.0, 1); // Invested = 0.98 ETH
   sim.lossRewardPoolBalance = 100.0; // Infinite pool for testing depletion
 
   let totalPaid = 0;
@@ -808,8 +808,8 @@ console.log('------------------------------------------------------------------'
       totalPaid += epoch.allocations[0].actualReward;
     }
   }
-  assert.ok(totalPaid <= 0.99);
-  console.log(`  ✓ [INVARIANT 8] Lifetime payout (${totalPaid.toFixed(4)} ETH) strictly <= invested capital (0.99 ETH)`);
+  assert.ok(totalPaid <= 0.98);
+  console.log(`  ✓ [INVARIANT 8] Lifetime payout (${totalPaid.toFixed(4)} ETH) strictly <= invested capital (0.98 ETH)`);
 }
 
 // Invariant 9: One wallet vs multiple wallets remains economically equivalent

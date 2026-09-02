@@ -119,7 +119,7 @@ const sections = [
     title: 'Introduction',
     body: [
       'Welcome to the official incentifi documentation. incentifi is a Robinhood Chain EVM launch platform for tokens with visible holder incentives, creator tools, market discovery, and wallet-powered trading flows.',
-      'The core concept is simple: all trading routes through the Incentifi Router with a 1.0% fee split (0.5% to the token creator in native ETH and 0.5% deposited into the Loss Reward Pool). Eligible underwater holders receive hourly 10% loss-reward distributions in native ETH.',
+      'The core concept is simple: all trading routes through the Incentifi Router with a 2.0% fee split (1.0% to the token creator in native ETH and 1.0% deposited into the Loss Reward Pool). Eligible underwater holders receive 10% loss-reward distributions every 5 minutes in native ETH.',
       'These docs explain how the platform works from first wallet connection to launch, trading, token pages, fee routing logic, mobile use, and safety considerations.',
     ],
   },
@@ -159,7 +159,7 @@ const sections = [
     body: [
       'Each token moves through a simple product lifecycle: deployment, discovery, trading, and ongoing holder rewards.',
       'During launch, the creator enters token details and deploys an ERC-20 contract with fixed 1B supply. During discovery, the token appears in the market grid.',
-      'During trading, all router trades distribute a 1.0% fee split between creator (0.5%) and Loss Reward Pool (0.5%), funding hourly reward distributions for eligible underwater holders.',
+      'During trading, all router trades distribute a 2.0% fee split between creator (1.0%) and Loss Reward Pool (1.0%), funding 5-minute reward distributions for eligible underwater holders.',
     ],
   },
   {
@@ -341,7 +341,7 @@ const sections = [
     title: 'Buying Tokens',
     body: [
       'Buying tokens uses native ETH through the Incentifi router. When you buy, the router updates your tracked cost basis.',
-      'A 1.0% fee is deducted from the trade: 0.5% goes directly to the token creator in native ETH and 0.5% is deposited into the Loss Reward Pool.',
+      'A 2.0% fee is deducted from the trade: 1.0% goes directly to the token creator in native ETH and 1.0% is deposited into the Loss Reward Pool.',
     ],
   },
   {
@@ -388,9 +388,9 @@ const sections = [
     id: 'incentive-routing-overview',
     title: 'Incentive Routing',
     body: [
-      'Incentive routing is the core Incentifi mechanism. Every trade routed through IncentifiSwapRouter applies a 1.0% trading fee.',
-      '50% of the fee (0.5%) is forwarded directly to the token creator in native ETH, and 50% (0.5%) is deposited into the Loss Reward Pool for the token.',
-      'The Loss Reward Pool distributes up to 10% of available rewards hourly to eligible underwater token holders via cryptographic Merkle proofs.',
+      'Incentive routing is the core Incentifi mechanism. Every trade routed through IncentifiSwapRouter applies a 2.0% trading fee.',
+      '50% of the fee (1.0%) is forwarded directly to the token creator in native ETH, and 50% (1.0%) is deposited into the Loss Reward Pool for the token.',
+      'The Loss Reward Pool distributes up to 10% of available rewards every 5 minutes to eligible underwater token holders via cryptographic Merkle proofs.',
     ],
   },
   {
@@ -398,7 +398,7 @@ const sections = [
     title: 'Route Calculation',
     body: [
       'Cost basis equals total ETH spent divided by tokens acquired. If current 30-minute TWAP price is below cost basis, the held position is considered underwater.',
-      'Eligible underwater holders receive a proportional share of the hourly Loss Reward Pool distribution in native ETH, bounded by their unrealized loss and available pool balance.',
+      'Eligible underwater holders receive a proportional share of the 5-minute Loss Reward Pool distribution in native ETH, bounded by their unrealized loss and available pool balance.',
     ],
   },
   {
@@ -429,7 +429,7 @@ const sections = [
     id: 'treasury',
     title: 'Treasury & Loss Pool',
     body: [
-      'Every trade through the router generates revenue: half to the creator wallet as creator revenue, and half into the LossRewardPool contract.',
+      'Every trade through the router generates revenue: half (1.0%) to the creator wallet as creator revenue, and half (1.0%) into the LossRewardPool contract.',
       'Loss pool funds are held securely in the LossRewardPool smart contract and can only be claimed by eligible holders presenting valid Merkle proofs.',
     ],
   },
@@ -439,7 +439,7 @@ const sections = [
     body: [
       'Total Supply: 1,000,000,000 (1 Billion) tokens fixed at launch.',
       'Decimals: 18 (standard EVM ERC-20).',
-      'Trading Fee: 1.0% on router swaps (0.50% to Creator, 0.50% to Loss Reward Pool).',
+      'Trading Fee: 2.0% on router swaps (1.00% to Creator, 1.00% to Loss Reward Pool).',
     ],
   },
   {
@@ -479,7 +479,7 @@ const sections = [
     title: 'Frequently Asked Questions',
     body: [
       'Why launch on incentifi? Because it provides built-in creator revenue and loss-reward protections for token holders.',
-      'How does the fee split work? Every trade through the router applies a 1.0% fee: 0.5% to the creator in native ETH and 0.5% to the Loss Reward Pool.',
+      'How does the fee split work? Every trade through the router applies a 2.0% fee: 1.0% to the creator in native ETH and 1.0% to the Loss Reward Pool.',
       'How are loss rewards claimed? Eligible underwater holders claim their share of the Loss Reward Pool using verified Merkle proofs generated by the indexer.',
     ],
   },
@@ -489,7 +489,7 @@ const sections = [
     body: [
       'ERC-20: Standard Ethereum/EVM token standard used for all Incentifi tokens.',
       'Incentifi Router: The smart contract gateway that executes trades and splits fees between creator and loss pool.',
-      'Loss Reward Pool: The on-chain vault that collects fee revenue and distributes hourly loss rewards to underwater holders.',
+      'Loss Reward Pool: The on-chain vault that collects fee revenue and distributes 5-minute loss rewards to underwater holders.',
       'Cost Basis: The weighted average purchase price of a token position.',
       'TWAP: Time-Weighted Average Price used to assess fair market value without flash-loan manipulation.',
       'Merkle Proof: A cryptographic proof that allows eligible holders to claim their exact reward on-chain.',

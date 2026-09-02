@@ -103,7 +103,7 @@ const WhitepaperPage = () => {
                 <h2 className="text-2xl sm:text-3xl font-bold text-[#C0C0C8] mb-4 sm:mb-6">Abstract</h2>
                 <div className="bg-[#0F0F15] border border-[#1A1A20] rounded-2xl p-6 sm:p-8">
                   <p className="text-sm sm:text-base text-[#909098] leading-relaxed">
-                    incentifi introduces a Robinhood Chain EVM launch platform for tokens with clear holder incentives. By implementing on-chain router fee splitting (0.5% creator / 0.5% Loss Reward Pool) and hourly loss-reward distributions for eligible underwater holders, incentifi gives creators a cleaner way to build markets around transparency, sustainability, and community alignment.
+                    incentifi introduces a Robinhood Chain EVM launch platform for tokens with clear holder incentives. By implementing on-chain router fee splitting (1.0% creator / 1.0% Loss Reward Pool) and 5-minute loss-reward distributions for eligible underwater holders, incentifi gives creators a cleaner way to build markets around transparency, sustainability, and community alignment.
                   </p>
                 </div>
               </div>
@@ -140,7 +140,7 @@ const WhitepaperPage = () => {
                   <div className="bg-[#0F0F15] border border-[#1A1A20] rounded-2xl p-6 sm:p-8">
                     <h3 className="text-lg sm:text-xl font-semibold text-[#E0E0E8] mb-3 sm:mb-4">1.2 Our Solution</h3>
                     <p className="text-sm sm:text-base text-[#909098] leading-relaxed">
-                      incentifi implements an on-chain router fee split: 0.5% is forwarded directly to the creator in native ETH, and 0.5% is deposited into the Loss Reward Pool. Eligible underwater holders receive hourly 10% pool distributions verified via cryptographic Merkle proofs.
+                      incentifi implements an on-chain router fee split: 1.0% is forwarded directly to the creator in native ETH, and 1.0% is deposited into the Loss Reward Pool. Eligible underwater holders receive 10% pool distributions every 5 minutes verified via cryptographic Merkle proofs.
                     </p>
                   </div>
                 </div>
@@ -162,7 +162,7 @@ const WhitepaperPage = () => {
                         </div>
                         <div>
                           <p className="text-sm sm:text-base font-semibold text-[#E0E0E8] mb-1">IncentifiSwapRouter</p>
-                          <p className="text-xs sm:text-sm text-[#707078]">Executes trades, applies 1.0% fee split between creator and loss pool, and records cost basis</p>
+                          <p className="text-xs sm:text-sm text-[#707078]">Executes trades, applies 2.0% fee split between creator and loss pool, and records cost basis</p>
                         </div>
                       </div>
                       <div className="flex items-start gap-3">
@@ -180,7 +180,7 @@ const WhitepaperPage = () => {
                         </div>
                         <div>
                           <p className="text-sm sm:text-base font-semibold text-[#E0E0E8] mb-1">EVM Indexer & Worker</p>
-                          <p className="text-xs sm:text-sm text-[#707078]">Tracks cost basis, detects direct DEX bypasses, and publishes hourly distribution roots</p>
+                          <p className="text-xs sm:text-sm text-[#707078]">Tracks cost basis, detects direct DEX bypasses, and publishes 5-minute distribution roots</p>
                         </div>
                       </div>
                     </div>
@@ -190,9 +190,9 @@ const WhitepaperPage = () => {
                     <h3 className="text-lg sm:text-xl font-semibold text-[#E0E0E8] mb-3 sm:mb-4">2.2 Fee Routing & Invariants</h3>
                     <div className="bg-[#08080D] border border-[#1A1A20] rounded-xl p-4 sm:p-6 mb-4">
                       <code className="text-xs sm:text-sm text-[#14B8A6] font-mono">
-                        fee = swapAmount * 0.01;<br />
-                        creatorFee = fee * 0.5; // 0.50% to Creator (ETH)<br />
-                        lossPoolFee = fee * 0.5; // 0.50% to Loss Pool (ETH)<br />
+                        fee = swapAmount * 0.02;<br />
+                        creatorFee = fee * 0.5; // 1.00% to Creator (ETH)<br />
+                        lossPoolFee = fee * 0.5; // 1.00% to Loss Pool (ETH)<br />
                         netSwap = swapAmount - fee;<br />
                       </code>
                     </div>
@@ -232,17 +232,17 @@ const WhitepaperPage = () => {
                       <div className="space-y-3">
                         <div className="flex items-center justify-between">
                           <span className="text-sm sm:text-base text-[#707078]">Router Swap Fee</span>
-                          <span className="text-sm sm:text-base font-semibold text-[#14B8A6]">1.00%</span>
+                          <span className="text-sm sm:text-base font-semibold text-[#14B8A6]">2.00%</span>
                         </div>
                         <div className="h-px bg-[#1A1A20]"></div>
                         <div className="flex items-center justify-between">
                           <span className="text-sm sm:text-base text-[#707078]">Creator Fee Split</span>
-                          <span className="text-sm sm:text-base font-semibold text-[#14B8A6]">0.50% (ETH)</span>
+                          <span className="text-sm sm:text-base font-semibold text-[#14B8A6]">1.00% (ETH)</span>
                         </div>
                         <div className="h-px bg-[#1A1A20]"></div>
                         <div className="flex items-center justify-between">
                           <span className="text-sm sm:text-base text-[#707078]">Loss Reward Pool Split</span>
-                          <span className="text-sm sm:text-base font-semibold text-[#14B8A6]">0.50% (ETH)</span>
+                          <span className="text-sm sm:text-base font-semibold text-[#14B8A6]">1.00% (ETH)</span>
                         </div>
                       </div>
                     </div>

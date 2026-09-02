@@ -13,6 +13,10 @@ const LOSS_POOL_ABI = parseAbi([
   'function claimBatch(address token, uint256[] calldata epochIds, uint256[] calldata amounts, bytes32[][] calldata merkleProofs)',
 ]);
 
+/** Snapshot interval: 5 minutes (300 seconds) */
+export const SNAPSHOT_INTERVAL_SECONDS = 300;
+export const SNAPSHOT_INTERVAL_MINUTES = 5;
+
 export type HolderCostBasis = {
   tokenAddress: string;
   walletAddress: string;

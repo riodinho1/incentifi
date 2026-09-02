@@ -39,20 +39,31 @@ interface IIncentifiToken {
     function creator() external view returns (address);
 }
 
+interface IIncentifiBondingCurve {
+    function graduated() external view returns (bool);
+    function buy(uint256 minTokensOut, address recipient) external payable returns (uint256 tokensOut);
+    function sell(uint256 tokensIn, uint256 minEthOut, address payable recipient) external returns (uint256 netEthOut);
+}
+
+interface IBondingCurveFactory {
+    function getBondingCurve(address token) external view returns (address);
+}
+
 /**
  * @title IncentifiSwapRouter
- * @notice Trading gateway wrapping Uniswap V3 SwapRouter02.
- *         Deducts the 1.0% creator trading fee on every buy/sell in native ETH:
- *         - 50% (0.5%) forwarded directly to the token creator in native ETH.
- *         - 50% (0.5%) deposited into LossRewardPool for the token.
+ * @notice Trading gateway supporting pre-graduation Bonding Curve swaps
+ *         and post-graduation Uniswap V3 swaps seamlessly with 1% fee split.
  */
 contract IncentifiSwapRouter {
     ISwapRouter02 public immutable uniswapRouter;
     IWETH9 public immutable WETH9;
     ILossRewardPool public immutable lossRewardPool;
+    address public immutable bondingCurveFactory;
 
     uint24 public constant POOL_FEE = 10000; // 1% Uniswap V3 pool fee
-    uint256 public constant CREATOR_FEE_BPS = 100; // 1.0% creator trading fee (100 bps)
+    uint256 public constant PROTOCOL_FEE_BPS = 200; // 2.00% total trading fee (200 bps)
+    uint256 public constant CREATOR_FEE_BPS = 100; // 1.00% creator share (100 bps)
+    uint256 public constant LOSS_REWARD_FEE_BPS = 100; // 1.00% loss reward pool share (100 bps)
     uint256 public constant BPS_DENOMINATOR = 10000;
 
     event IncentifiTrade(
@@ -74,7 +85,8 @@ contract IncentifiSwapRouter {
     constructor(
         address _uniswapRouter,
         address _weth,
-        address _lossRewardPool
+        address _lossRewardPool,
+        address _bondingCurveFactory
     ) {
         if (_uniswapRouter == address(0) || _weth == address(0) || _lossRewardPool == address(0)) {
             revert ZeroAddress();
@@ -82,10 +94,11 @@ contract IncentifiSwapRouter {
         uniswapRouter = ISwapRouter02(_uniswapRouter);
         WETH9 = IWETH9(_weth);
         lossRewardPool = ILossRewardPool(_lossRewardPool);
+        bondingCurveFactory = _bondingCurveFactory;
     }
 
     /**
-     * @notice Buy Incentifi tokens with native ETH.
+     * @notice Buy Incentifi tokens with native ETH (auto-routes to curve or Uniswap V3).
      * @param token Address of the ERC20 token to buy.
      * @param amountOutMinimum Minimum tokens required out (slippage protection).
      * @param deadline Unix timestamp after which the trade will revert.
@@ -99,9 +112,26 @@ contract IncentifiSwapRouter {
         if (msg.value == 0) revert ZeroAmount();
         if (token == address(0)) revert ZeroAddress();
 
-        uint256 fee = (msg.value * CREATOR_FEE_BPS) / BPS_DENOMINATOR;
-        uint256 creatorShare = fee / 2;
-        uint256 lossPoolShare = fee - creatorShare;
+        // Check if token is in pre-graduation bonding curve phase
+        if (bondingCurveFactory != address(0)) {
+            address curve = IBondingCurveFactory(bondingCurveFactory).getBondingCurve(token);
+            if (curve != address(0) && !IIncentifiBondingCurve(curve).graduated()) {
+                uint256 balanceBefore = address(this).balance - msg.value;
+                amountOut = IIncentifiBondingCurve(curve).buy{value: msg.value}(amountOutMinimum, msg.sender);
+                uint256 balanceAfter = address(this).balance;
+                if (balanceAfter > balanceBefore) {
+                    uint256 refund = balanceAfter - balanceBefore;
+                    (bool success, ) = msg.sender.call{value: refund}("");
+                    if (!success) revert TransferFailed();
+                }
+                return amountOut;
+            }
+        }
+
+        // Post-graduation Uniswap V3 Routing
+        uint256 creatorShare = (msg.value * CREATOR_FEE_BPS) / BPS_DENOMINATOR;
+        uint256 lossPoolShare = (msg.value * LOSS_REWARD_FEE_BPS) / BPS_DENOMINATOR;
+        uint256 fee = creatorShare + lossPoolShare;
         uint256 swapEthAmount = msg.value - fee;
 
         // 1. Send Creator Share
@@ -140,10 +170,10 @@ contract IncentifiSwapRouter {
     }
 
     /**
-     * @notice Sell Incentifi tokens for native ETH.
+     * @notice Sell Incentifi tokens for native ETH (auto-routes to curve or Uniswap V3).
      * @param token Address of the ERC20 token to sell.
      * @param tokenAmountIn Amount of tokens to sell.
-     * @param minEthOut Minimum net ETH expected after 1% creator fee.
+     * @param minEthOut Minimum net ETH expected after 2% protocol fee.
      * @param deadline Unix timestamp after which the trade will revert.
      */
     function sellToken(
@@ -156,13 +186,26 @@ contract IncentifiSwapRouter {
         if (tokenAmountIn == 0) revert ZeroAmount();
         if (token == address(0)) revert ZeroAddress();
 
-        // 1. Pull tokens and approve Uniswap
+        // Check if token is in pre-graduation bonding curve phase
+        if (bondingCurveFactory != address(0)) {
+            address curve = IBondingCurveFactory(bondingCurveFactory).getBondingCurve(token);
+            if (curve != address(0) && !IIncentifiBondingCurve(curve).graduated()) {
+                if (!IERC20(token).transferFrom(msg.sender, address(this), tokenAmountIn)) {
+                    revert TransferFailed();
+                }
+                IERC20(token).approve(curve, tokenAmountIn);
+                netEthOut = IIncentifiBondingCurve(curve).sell(tokenAmountIn, minEthOut, payable(msg.sender));
+                return netEthOut;
+            }
+        }
+
+        // Post-graduation Uniswap V3 Routing
         if (!IERC20(token).transferFrom(msg.sender, address(this), tokenAmountIn)) {
             revert TransferFailed();
         }
         IERC20(token).approve(address(uniswapRouter), tokenAmountIn);
 
-        // 2. Swap tokens -> WETH
+        // Swap tokens -> WETH
         uint256 grossEth = uniswapRouter.exactInputSingle(
             ISwapRouter02.ExactInputSingleParams({
                 tokenIn: token,
@@ -176,26 +219,26 @@ contract IncentifiSwapRouter {
         );
         if (grossEth == 0) revert ZeroAmount();
 
-        // 3. Unwrap WETH
+        // Unwrap WETH
         WETH9.withdraw(grossEth);
 
-        // 4. Calculate Fee and Split
-        uint256 fee = (grossEth * CREATOR_FEE_BPS) / BPS_DENOMINATOR;
-        uint256 creatorShare = fee / 2;
-        uint256 lossPoolShare = fee - creatorShare;
+        // Calculate Fee and Split (2% total: 1% creator, 1% loss pool)
+        uint256 creatorShare = (grossEth * CREATOR_FEE_BPS) / BPS_DENOMINATOR;
+        uint256 lossPoolShare = (grossEth * LOSS_REWARD_FEE_BPS) / BPS_DENOMINATOR;
+        uint256 fee = creatorShare + lossPoolShare;
         netEthOut = grossEth - fee;
 
         if (netEthOut < minEthOut) revert SlippageExceeded();
 
-        // 5. Route Creator Share
+        // Route Creator Share
         _sendCreatorFee(token, creatorShare);
 
-        // 6. Route Loss Pool Share
+        // Route Loss Pool Share
         if (lossPoolShare > 0) {
             lossRewardPool.depositReward{value: lossPoolShare}(token);
         }
 
-        // 7. Transfer net ETH to seller
+        // Transfer net ETH to seller
         (bool success, ) = msg.sender.call{value: netEthOut}("");
         if (!success) revert TransferFailed();
 

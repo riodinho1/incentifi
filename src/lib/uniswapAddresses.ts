@@ -18,11 +18,15 @@ export const UNISWAP_SWAP_ROUTER = String(
 ).trim() as `0x${string}`;
 
 export const INCENTIFI_SWAP_ROUTER = String(
-  import.meta.env.VITE_INCENTIFI_SWAP_ROUTER || '0x323326127170135c36384C694c9657cE8f5e135D'
+  import.meta.env.VITE_INCENTIFI_SWAP_ROUTER || '0xbba0384bf34b5cc26daa2c06cdf765bbdeb2acdf'
 ).trim() as `0x${string}`;
 
 export const LOSS_REWARD_POOL = String(
-  import.meta.env.VITE_LOSS_REWARD_POOL || '0x17b3C4b8b6D254c46E13670f5e13B6F960589a1B'
+  import.meta.env.VITE_LOSS_REWARD_POOL || '0x697bda9db5a297a9cd9ed969bbf2549d0527dcdf'
+).trim() as `0x${string}`;
+
+export const INCENTIFI_BONDING_CURVE_FACTORY = String(
+  import.meta.env.VITE_INCENTIFI_BONDING_CURVE_FACTORY || '0x9fcea653c6f31c82606582b22da82b39f61f9c0e'
 ).trim() as `0x${string}`;
 
 export const WETH_ADDRESS = String(
@@ -35,8 +39,11 @@ export const BURN_ADDRESS = '0x000000000000000000000000000000000000dEaD' as cons
 // 1% fee tier (matches how comparable Robinhood Chain launchpads seed new-token pools).
 export const POOL_FEE = 10_000;
 
-// 1.0% Creator Trading Fee (50% Creator / 50% Loss Reward Pool)
+// 2.0% Total Protocol Trading Fee (1.0% Creator / 1.0% Loss Reward Pool)
+export const PROTOCOL_FEE_BPS = 200;
 export const CREATOR_FEE_BPS = 100;
+export const LOSS_REWARD_FEE_BPS = 100;
+export const BPS_DENOMINATOR = 10_000;
 
 // Full-range ticks for the 1% fee tier (tick spacing 200).
 export const TICK_LOWER = -887_200;

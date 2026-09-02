@@ -20,6 +20,10 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_S
 const OPERATOR_PRIVATE_KEY = process.env.OPERATOR_PRIVATE_KEY || '';
 const LOSS_REWARD_POOL_ADDRESS = process.env.VITE_LOSS_REWARD_POOL || '';
 
+/** Loss-Reward Snapshot Interval: 5 minutes (300 seconds) */
+export const SNAPSHOT_INTERVAL_SECONDS = 300;
+export const SNAPSHOT_INTERVAL_MINUTES = 5;
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const publicClient = createPublicClient({ transport: http(RPC_URL) });
 
@@ -302,10 +306,10 @@ export async function executeEpochForToken(tokenAddress) {
 }
 
 /**
- * Main hourly cron runner
+ * Main 5-minute epoch cron runner
  */
-export async function runHourlyWorker() {
-  console.log('--- Incentifi Hourly Loss-Reward Worker Started ---');
+export async function runEpochWorker() {
+  console.log('--- Incentifi 5-Minute Loss-Reward Worker Started ---');
   const { data: tokens } = await supabase.from('tokens').select('mint_address');
   if (!tokens) return;
 
@@ -316,6 +320,9 @@ export async function runHourlyWorker() {
   }
 }
 
+// Backward-compatible alias
+export const runHourlyWorker = runEpochWorker;
+
 if (process.argv[1]?.endsWith('loss-reward-worker.mjs')) {
-  runHourlyWorker().then(() => process.exit(0));
+  runEpochWorker().then(() => process.exit(0));
 }
