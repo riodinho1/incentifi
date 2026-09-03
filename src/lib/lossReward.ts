@@ -1,8 +1,14 @@
 import { encodeFunctionData, parseAbi, getAddress } from 'viem';
 import { supabase } from './supabase';
-import { getEvmProvider, publicClient } from './evmNetwork';
+import { publicClient } from './evmNetwork';
 import { LOSS_REWARD_POOL } from './uniswapAddresses';
-import { getStoredSession, fetchLossRewardData } from './lossRewardAuth';
+import {
+  getStoredSession,
+  fetchLossRewardData,
+  getGatewayBaseUrl,
+  authenticateWallet,
+  clearStoredSession,
+} from './lossRewardAuth';
 
 const LOSS_POOL_ABI = parseAbi([
   'function getUnallocatedBalance(address token) view returns (uint256)',
@@ -167,87 +173,69 @@ export const getClaimableRewards = async (
 };
 
 /**
- * Execute on-chain claim for a single epoch.
+ * Execute gasless on-chain claim for a single or multiple epochs via authenticated relayer gateway.
  */
 export const claimReward = async (
   tokenAddress: string,
   walletAddress: string,
-  epochNumber: number,
-  amountEth: number,
-  merkleProof: string[],
-  epochId?: number
+  _epochNumber?: number,
+  _amountEth?: number,
+  _merkleProof?: string[],
+  _epochId?: number
 ) => {
-  const provider = getEvmProvider();
-  if (!provider) throw new Error('Connect wallet first.');
-
-  const token = getAddress(tokenAddress);
-  const wallet = getAddress(walletAddress);
-  const pool = getAddress(LOSS_REWARD_POOL);
-  const amountWei = BigInt(Math.round(amountEth * 1e18));
-
-  const claimData = encodeFunctionData({
-    abi: LOSS_POOL_ABI,
-    functionName: 'claimReward',
-    args: [token, BigInt(epochNumber), amountWei, merkleProof as `0x${string}`[]],
-  });
-
-  const txHash = await provider.request({
-    method: 'eth_sendTransaction',
-    params: [{ from: wallet, to: pool, data: claimData }],
-  });
-
-  // Mark claimed in Supabase
-  if (epochId) {
-    await supabase
-      .from('epoch_holder_rewards')
-      .update({ claimed: true, claimed_at: new Date().toISOString() })
-      .eq('epoch_id', epochId)
-      .eq('wallet_address', walletAddress.toLowerCase());
-  }
-
-  return txHash;
+  return claimBatchRewards(tokenAddress, walletAddress);
 };
 
 /**
- * Execute on-chain batch claim for all uncollected epochs in a single transaction.
+ * Execute gasless on-chain batch claim for all uncollected epochs in a single transaction via server relayer.
  */
 export const claimBatchRewards = async (
   tokenAddress: string,
   walletAddress: string,
-  unclaimedEpochs: UnclaimedEpoch[]
-) => {
-  const provider = getEvmProvider();
-  if (!provider) throw new Error('Connect wallet first.');
-  if (unclaimedEpochs.length === 0) throw new Error('No claimable rewards available.');
+  _unclaimedEpochs?: UnclaimedEpoch[]
+): Promise<{ success: boolean; txHash: string | null; claimedEth?: string; alreadyClaimed?: boolean; message?: string }> => {
+  if (!tokenAddress || !walletAddress) {
+    throw new Error('Token address and connected wallet are required.');
+  }
 
-  const token = getAddress(tokenAddress);
-  const wallet = getAddress(walletAddress);
-  const pool = getAddress(LOSS_REWARD_POOL);
+  const normalizedWallet = getAddress(walletAddress).toLowerCase();
+  let sessionToken = getStoredSession(normalizedWallet);
 
-  const onchainEpochIds = unclaimedEpochs.map((e) => BigInt(e.epochNumber));
-  const amounts = unclaimedEpochs.map((e) => BigInt(Math.round(e.finalRewardEth * 1e18)));
-  const proofs = unclaimedEpochs.map((e) => e.merkleProof as `0x${string}`[]);
+  // If session token is missing or expired, prompt gas-free EIP-191 signature
+  if (!sessionToken) {
+    sessionToken = await authenticateWallet(walletAddress);
+  }
 
-  const claimData = encodeFunctionData({
-    abi: LOSS_POOL_ABI,
-    functionName: 'claimBatch',
-    args: [token, onchainEpochIds, amounts, proofs],
-  });
+  const gatewayUrl = getGatewayBaseUrl();
+  const makeRequest = async (token: string) => {
+    return await fetch(`${gatewayUrl}/claim`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        apikey: (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim(),
+      },
+      body: JSON.stringify({
+        tokenAddress: getAddress(tokenAddress),
+      }),
+    });
+  };
 
-  const txHash = await provider.request({
-    method: 'eth_sendTransaction',
-    params: [{ from: wallet, to: pool, data: claimData }],
-  });
+  let response = await makeRequest(sessionToken);
 
-  // Mark all claimed in Supabase
-  const epochIdList = unclaimedEpochs.map((e) => e.epochId);
-  await supabase
-    .from('epoch_holder_rewards')
-    .update({ claimed: true, claimed_at: new Date().toISOString() })
-    .in('epoch_id', epochIdList)
-    .eq('wallet_address', walletAddress.toLowerCase());
+  if (response.status === 401) {
+    // Session expired: clear and re-authenticate once
+    clearStoredSession(normalizedWallet);
+    const newSessionToken = await authenticateWallet(walletAddress);
+    response = await makeRequest(newSessionToken);
+  }
 
-  return txHash;
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error || `Gasless claim request failed (${response.status})`);
+  }
+
+  return await response.json();
 };
 
 /**

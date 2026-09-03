@@ -351,9 +351,20 @@ const TokenPreviewPage = () => {
     try {
       setClaiming(true);
       setClaimSuccessMsg(null);
-      await claimBatchRewards(tokenData.mintAddress, wallet, claimableState.unclaimedEpochs);
-      setClaimSuccessMsg(`Claimed ${claimableState.totalClaimableEth.toFixed(4)} ETH!`);
-      setClaimableState({ unclaimedEpochs: [], totalClaimableEth: 0 });
+      const res = await claimBatchRewards(tokenData.mintAddress, wallet, claimableState.unclaimedEpochs);
+      if (res?.alreadyClaimed) {
+        setClaimSuccessMsg('Rewards were already claimed on-chain. State refreshed.');
+      } else if (res?.txHash) {
+        const shortTx = `${res.txHash.slice(0, 8)}...${res.txHash.slice(-6)}`;
+        const amountDisplay = res.claimedEth && res.claimedEth !== '0'
+          ? `${res.claimedEth} ETH`
+          : `${claimableState.totalClaimableEth.toFixed(5)} ETH`;
+        setClaimSuccessMsg(`Claim successful! ${amountDisplay} (Tx: ${shortTx})`);
+      } else {
+        setClaimSuccessMsg('Claim processed successfully.');
+      }
+      // Re-fetch authoritative claimable rewards state from authenticated gateway
+      await loadLossRewardData();
       await refreshOnchainBalances();
     } catch (err: any) {
       console.error('Claim failed:', err);
@@ -1856,7 +1867,7 @@ const TokenPreviewPage = () => {
                 className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#10B981] to-[#059669] hover:from-[#059669] hover:to-[#047857] text-white font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2 shadow-md shadow-emerald-500/20"
               >
                 {claiming ? (
-                  <span>Verifying Proof & Claiming...</span>
+                  <span>Claiming...</span>
                 ) : (
                   <span>Claim Rewards {claimableState.unclaimedEpochs.length > 0 ? `(${claimableState.unclaimedEpochs.length} Epochs)` : ''}</span>
                 )}
