@@ -71,6 +71,8 @@ export type UnclaimedEpoch = {
 export type ClaimableRewardsState = {
   unclaimedEpochs: UnclaimedEpoch[];
   totalClaimableEth: number;
+  pendingEpochs: UnclaimedEpoch[];
+  totalPendingEth: number;
 };
 
 /**
@@ -154,7 +156,7 @@ export const getClaimableRewards = async (
   walletAddress: string
 ): Promise<ClaimableRewardsState> => {
   if (!tokenAddress || !walletAddress) {
-    return { unclaimedEpochs: [], totalClaimableEth: 0 };
+    return { unclaimedEpochs: [], totalClaimableEth: 0, pendingEpochs: [], totalPendingEth: 0 };
   }
 
   const token = tokenAddress.toLowerCase();
@@ -169,7 +171,7 @@ export const getClaimableRewards = async (
     console.warn('Authenticated claimable rewards query skipped/failed:', err);
   }
 
-  return { unclaimedEpochs: [], totalClaimableEth: 0 };
+  return { unclaimedEpochs: [], totalClaimableEth: 0, pendingEpochs: [], totalPendingEth: 0 };
 };
 
 /**

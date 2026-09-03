@@ -340,6 +340,60 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
     console.log(`\n======================================================`);
     console.log(`[EPOCH WORKER] Processing Loss-Reward Epoch for ${token} (DRY RUN = ${dryRun})`);
 
+    // 1b. Check & Resolve Prior Pending Funding Epochs (FIFO)
+    if (!dryRun && OPERATOR_PRIVATE_KEY && LOSS_REWARD_POOL_ADDRESS) {
+      try {
+        const { data: pendingEpochs } = await supabase
+          .from('reward_epochs')
+          .select('epoch_id, epoch_number, total_distributed_eth, merkle_root, status')
+          .eq('token_address', token)
+          .eq('status', 'pending_funding')
+          .order('epoch_number', { ascending: true });
+
+        if (pendingEpochs && pendingEpochs.length > 0) {
+          const currentPoolWei = await publicClient.readContract({
+            address: getAddress(LOSS_REWARD_POOL_ADDRESS),
+            abi: POOL_ABI,
+            functionName: 'getUnallocatedBalance',
+            args: [getAddress(token)],
+          });
+          let currentPoolEth = Number(currentPoolWei) / 1e18;
+
+          for (const pending of pendingEpochs) {
+            const requiredEth = Number(pending.total_distributed_eth || 0);
+            if (currentPoolEth >= requiredEth && requiredEth > 0) {
+              console.log(`[PENDING EPOCH RESOLUTION] Pool funded (${currentPoolEth.toFixed(6)} ETH >= ${requiredEth.toFixed(6)} ETH). Publishing Epoch #${pending.epoch_number}...`);
+              const account = privateKeyToAccount(OPERATOR_PRIVATE_KEY);
+              const walletClient = createWalletClient({ account, transport: http(RPC_URL) });
+              const totalAllocatedWei = BigInt(Math.round(requiredEth * 1e18));
+
+              const txHash = await walletClient.writeContract({
+                address: getAddress(LOSS_REWARD_POOL_ADDRESS),
+                abi: POOL_ABI,
+                functionName: 'setEpochMerkleRoot',
+                args: [getAddress(token), BigInt(pending.epoch_number), pending.merkle_root, totalAllocatedWei],
+              });
+
+              const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+              if (receipt.status === 'success') {
+                await supabase
+                  .from('reward_epochs')
+                  .update({ status: 'published', onchain_tx_hash: txHash })
+                  .eq('epoch_id', pending.epoch_id);
+                console.log(`[PENDING EPOCH PUBLISHED] Epoch #${pending.epoch_number} now published & claimable (Tx: ${txHash}).`);
+                currentPoolEth -= requiredEth;
+              }
+            } else {
+              console.log(`[PENDING EPOCH REMAINS] Epoch #${pending.epoch_number} requires ${requiredEth.toFixed(6)} ETH, pool has ${currentPoolEth.toFixed(6)} ETH.`);
+              break; // Maintain FIFO ordering
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`[PENDING RESOLUTION ERROR] Could not process pending epochs: ${err.message}`);
+      }
+    }
+
     // 2. Fetch authoritative benchmark price (Curve getCurrentPrice pre-graduation, Uniswap V3 post-graduation)
     const priceRes = await getTokenBenchmarkPriceEth(token);
     const benchmarkPriceEth = priceRes.priceEth;
@@ -481,22 +535,20 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
 
     console.log(`[POOL BUDGET] Available Unallocated ETH: ${availablePoolEth.toFixed(6)} ETH`);
 
-    // 7. Calculate Proportional Scaling Factor
-    const scalingFactor = totalTheoreticalDemandEth > 0
-      ? Math.min(1.0, availablePoolEth / totalTheoreticalDemandEth)
-      : 1.0;
-    console.log(`[SCALING] Proportional Scaling Factor: ${(scalingFactor * 100).toFixed(4)}%`);
+    // 7. Calculate Proportional Scaling Factor & Mode
+    // When pool is underfunded, 100% full theoretical rewards and proofs are preserved as pending_funding
+    const isUnderfunded = availablePoolEth < totalTheoreticalDemandEth;
+    const scalingFactor = 1.0;
+    const totalDistributedEth = totalTheoreticalDemandEth;
 
     // 8. Calculate Final Scaled Rewards & Generate Merkle Leaves
-    let totalDistributedEth = 0;
     const leaves = [];
     const finalPayouts = [];
 
     for (let i = 0; i < eligibleAllocations.length; i++) {
       const alloc = eligibleAllocations[i];
-      const finalRewardEth = alloc.theoreticalReward * scalingFactor;
+      const finalRewardEth = alloc.theoreticalReward;
       const finalRewardWei = BigInt(Math.round(finalRewardEth * 1e18));
-      totalDistributedEth += finalRewardEth;
 
       const leaf = hashLeaf(token, candidateEpochNumber, alloc.wallet, finalRewardWei);
       leaves.push(leaf);
@@ -528,36 +580,46 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
 
     // 11. On-Chain Transaction Submission & Confirmation
     let onchainTxHash = null;
+    let epochStatus = 'published';
+
     if (!dryRun && !isCandidatePublishedOnchain && OPERATOR_PRIVATE_KEY && LOSS_REWARD_POOL_ADDRESS) {
-      try {
-        const account = privateKeyToAccount(OPERATOR_PRIVATE_KEY);
-        const walletClient = createWalletClient({
-          account,
-          transport: http(RPC_URL),
-        });
+      if (!isUnderfunded) {
+        try {
+          const account = privateKeyToAccount(OPERATOR_PRIVATE_KEY);
+          const walletClient = createWalletClient({
+            account,
+            transport: http(RPC_URL),
+          });
 
-        const totalAllocatedWei = BigInt(Math.round(totalDistributedEth * 1e18));
-        console.log(`[ON-CHAIN] Submitting setEpochMerkleRoot for Epoch #${candidateEpochNumber}...`);
+          const totalAllocatedWei = BigInt(Math.round(totalDistributedEth * 1e18));
+          console.log(`[ON-CHAIN] Submitting setEpochMerkleRoot for Epoch #${candidateEpochNumber}...`);
 
-        onchainTxHash = await walletClient.writeContract({
-          address: getAddress(LOSS_REWARD_POOL_ADDRESS),
-          abi: POOL_ABI,
-          functionName: 'setEpochMerkleRoot',
-          args: [getAddress(token), BigInt(candidateEpochNumber), merkleRoot, totalAllocatedWei],
-        });
+          onchainTxHash = await walletClient.writeContract({
+            address: getAddress(LOSS_REWARD_POOL_ADDRESS),
+            abi: POOL_ABI,
+            functionName: 'setEpochMerkleRoot',
+            args: [getAddress(token), BigInt(candidateEpochNumber), merkleRoot, totalAllocatedWei],
+          });
 
-        console.log(`[ON-CHAIN] Transaction broadcast: ${onchainTxHash}. Awaiting receipt...`);
+          console.log(`[ON-CHAIN] Transaction broadcast: ${onchainTxHash}. Awaiting receipt...`);
 
-        // Wait for on-chain receipt confirmation
-        const receipt = await publicClient.waitForTransactionReceipt({ hash: onchainTxHash });
-        if (receipt.status !== 'success') {
-          throw new Error(`[ON-CHAIN REVERT] Transaction ${onchainTxHash} reverted on-chain.`);
+          // Wait for on-chain receipt confirmation
+          const receipt = await publicClient.waitForTransactionReceipt({ hash: onchainTxHash });
+          if (receipt.status !== 'success') {
+            throw new Error(`[ON-CHAIN REVERT] Transaction ${onchainTxHash} reverted on-chain.`);
+          }
+          console.log(`[ON-CHAIN CONFIRMED] Block #${receipt.blockNumber} Gas Used: ${receipt.gasUsed}`);
+          epochStatus = 'published';
+        } catch (err) {
+          console.error(`[ON-CHAIN FATAL] setEpochMerkleRoot failed: ${err.message}`);
+          throw err;
         }
-        console.log(`[ON-CHAIN CONFIRMED] Block #${receipt.blockNumber} Gas Used: ${receipt.gasUsed}`);
-      } catch (err) {
-        console.error(`[ON-CHAIN FATAL] setEpochMerkleRoot failed: ${err.message}`);
-        throw err;
+      } else {
+        epochStatus = 'pending_funding';
+        console.log(`[POOL UNDERFUNDED] Available pool (${availablePoolEth.toFixed(6)} ETH) < demand (${totalDistributedEth.toFixed(6)} ETH). Saving Epoch #${candidateEpochNumber} as 'pending_funding' (original theoretical rewards & Merkle proofs preserved).`);
       }
+    } else if (isCandidatePublishedOnchain) {
+      epochStatus = 'published';
     }
 
     // 12. Database Persistence: reward_epochs & epoch_holder_rewards
@@ -572,8 +634,8 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
         scaling_factor: scalingFactor,
         total_distributed_eth: totalDistributedEth,
         merkle_root: merkleRoot,
-        onchain_tx_hash: onchainTxHash || latestDbEpoch?.onchain_tx_hash,
-        status: 'published',
+        onchain_tx_hash: onchainTxHash || (isCandidatePublishedOnchain ? latestDbEpoch?.onchain_tx_hash : null),
+        status: epochStatus,
       }).select('epoch_id').single();
 
       if (insertEpochErr) {

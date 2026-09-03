@@ -497,7 +497,8 @@ export async function handleQuery(req: Request): Promise<Response> {
           merkle_proof,
           claimed,
           reward_epochs!inner (
-            epoch_number
+            epoch_number,
+            status
           )
         `)
         .eq('token_address', normalizedToken)
@@ -528,6 +529,7 @@ export async function handleQuery(req: Request): Promise<Response> {
 
     const candidateRows = claimableRes.data || [];
     const unclaimedEpochs: any[] = [];
+    const pendingEpochs: any[] = [];
     const staleIds: number[] = [];
 
     if (candidateRows.length > 0) {
@@ -535,35 +537,18 @@ export async function handleQuery(req: Request): Promise<Response> {
 
       for (const d of candidateRows) {
         const epochNumber = Number(d.reward_epochs?.epoch_number || d.epoch_id);
-        let onchainClaimed = false;
-
+        const epochStatus = d.reward_epochs?.status || 'published';
+        const rawRewardEthStr = String(d.final_reward_eth || '0');
+        let amountWei = '0';
         try {
-          onchainClaimed = await publicClient.readContract({
-            address: getAddress(LOSS_REWARD_POOL_ADDRESS),
-            abi: POOL_ABI,
-            functionName: 'hasClaimed',
-            args: [getAddress(normalizedToken), BigInt(epochNumber), getAddress(callerWallet)],
-          });
-        } catch (err: any) {
-          console.error(`RPC read error for epoch ${epochNumber} in query:`, err);
-          return new Response(
-            JSON.stringify({ error: `Failed to verify on-chain status for epoch ${epochNumber} via RPC. Please retry shortly.` }),
-            { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
+          amountWei = BigInt(Math.round(Number(d.final_reward_eth || 0) * 1e18)).toString();
+        } catch {
+          amountWei = '0';
         }
 
-        if (onchainClaimed) {
-          staleIds.push(d.id);
-        } else {
-          const rawRewardEthStr = String(d.final_reward_eth || '0');
-          let amountWei = '0';
-          try {
-            amountWei = parseEther(rawRewardEthStr).toString();
-          } catch {
-            amountWei = BigInt(Math.floor(Number(d.final_reward_eth || 0) * 1e18)).toString();
-          }
-
-          unclaimedEpochs.push({
+        if (epochStatus === 'pending_funding') {
+          // Epoch reward preserved exactly; awaiting on-chain pool funding
+          pendingEpochs.push({
             id: d.id,
             epochId: Number(d.epoch_id),
             epochNumber,
@@ -571,6 +556,37 @@ export async function handleQuery(req: Request): Promise<Response> {
             amountWei,
             merkleProof: Array.isArray(d.merkle_proof) ? d.merkle_proof : [],
           });
+        } else {
+          // Published epoch: verify on-chain hasClaimed status
+          let onchainClaimed = false;
+
+          try {
+            onchainClaimed = await publicClient.readContract({
+              address: getAddress(LOSS_REWARD_POOL_ADDRESS),
+              abi: POOL_ABI,
+              functionName: 'hasClaimed',
+              args: [getAddress(normalizedToken), BigInt(epochNumber), getAddress(callerWallet)],
+            });
+          } catch (err: any) {
+            console.error(`RPC read error for epoch ${epochNumber} in query:`, err);
+            return new Response(
+              JSON.stringify({ error: `Failed to verify on-chain status for epoch ${epochNumber} via RPC. Please retry shortly.` }),
+              { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+
+          if (onchainClaimed) {
+            staleIds.push(d.id);
+          } else {
+            unclaimedEpochs.push({
+              id: d.id,
+              epochId: Number(d.epoch_id),
+              epochNumber,
+              finalRewardEth: Number(d.final_reward_eth || 0),
+              amountWei,
+              merkleProof: Array.isArray(d.merkle_proof) ? d.merkle_proof : [],
+            });
+          }
         }
       }
 
@@ -584,6 +600,7 @@ export async function handleQuery(req: Request): Promise<Response> {
     }
 
     const totalClaimableEth = unclaimedEpochs.reduce((sum, item) => sum + item.finalRewardEth, 0);
+    const totalPendingEth = pendingEpochs.reduce((sum, item) => sum + item.finalRewardEth, 0);
 
     return new Response(
       JSON.stringify({
@@ -591,6 +608,10 @@ export async function handleQuery(req: Request): Promise<Response> {
         claimable: {
           unclaimedEpochs,
           totalClaimableEth,
+        },
+        pending: {
+          pendingEpochs,
+          totalPendingEth,
         },
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -661,7 +682,8 @@ export async function handleClaim(req: Request): Promise<Response> {
       merkle_proof,
       claimed,
       reward_epochs!inner (
-        epoch_number
+        epoch_number,
+        status
       )
     `)
     .eq('token_address', normalizedToken)
@@ -676,15 +698,20 @@ export async function handleClaim(req: Request): Promise<Response> {
     });
   }
 
-  const candidateRows = rawRows || [];
+  const allUnclaimedRows = rawRows || [];
+  const candidateRows = allUnclaimedRows.filter((r: any) => r.reward_epochs?.status === 'published');
+
   if (candidateRows.length === 0) {
+    const hasPending = allUnclaimedRows.some((r: any) => r.reward_epochs?.status === 'pending_funding');
     return new Response(
       JSON.stringify({
         success: true,
         txHash: null,
         claimedEth: '0',
         alreadyClaimed: true,
-        message: 'No claimable rewards available.',
+        message: hasPending
+          ? 'Rewards are currently awaiting reward-pool funding.'
+          : 'No claimable rewards available.',
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );

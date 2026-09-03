@@ -17,6 +17,7 @@ import {
   Coins,
   CheckCircle2,
   AlertTriangle,
+  Clock,
 } from 'lucide-react';
 import WalletButton from '../../components/WalletButton';
 import { supabase } from '../../lib/supabase';
@@ -246,7 +247,12 @@ const TokenPreviewPage = () => {
 
   // Incentifi Loss-Reward state
   const [costBasisData, setCostBasisData] = useState<HolderCostBasis | null>(null);
-  const [claimableState, setClaimableState] = useState<ClaimableRewardsState>({ unclaimedEpochs: [], totalClaimableEth: 0 });
+  const [claimableState, setClaimableState] = useState<ClaimableRewardsState>({
+    unclaimedEpochs: [],
+    totalClaimableEth: 0,
+    pendingEpochs: [],
+    totalPendingEth: 0,
+  });
   const [lossPoolTvl, setLossPoolTvl] = useState<number>(0);
   const [claiming, setClaiming] = useState(false);
   const [claimSuccessMsg, setClaimSuccessMsg] = useState<string | null>(null);
@@ -289,7 +295,12 @@ const TokenPreviewPage = () => {
 
       if (!connectedWallet) {
         setCostBasisData(null);
-        setClaimableState({ unclaimedEpochs: [], totalClaimableEth: 0 });
+        setClaimableState({
+          unclaimedEpochs: [],
+          totalClaimableEth: 0,
+          pendingEpochs: [],
+          totalPendingEth: 0,
+        });
         return;
       }
 
@@ -330,6 +341,8 @@ const TokenPreviewPage = () => {
     setClaimableState({
       unclaimedEpochs: [],
       totalClaimableEth: 0,
+      pendingEpochs: [],
+      totalPendingEth: 0,
     });
 
     loadLossRewardData();
@@ -1851,6 +1864,24 @@ const TokenPreviewPage = () => {
                 </div>
               )}
             </div>
+
+            {/* Pending Rewards (Awaiting Pool Funding) */}
+            {claimableState.totalPendingEth > 0 && (
+              <div className="rounded-xl bg-amber-500/10 border border-amber-500/20 p-3 space-y-1 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-amber-400 font-medium flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    Pending Funding ({claimableState.pendingEpochs?.length || 0} Epochs):
+                  </span>
+                  <span className="font-bold font-mono text-amber-300">
+                    {claimableState.totalPendingEth.toFixed(5)} {EVM_NATIVE_SYMBOL}
+                  </span>
+                </div>
+                <p className="text-[11px] text-amber-400/80">
+                  Allocated rewards will automatically become claimable once the pool receives swap fees.
+                </p>
+              </div>
+            )}
 
             {/* Claim Reward Action */}
             <div className="rounded-xl bg-gradient-to-br from-[#0C1A30] to-[#0A1424] p-3.5 border border-[#23385D] space-y-2.5">

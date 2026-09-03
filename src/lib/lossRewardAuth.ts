@@ -170,7 +170,7 @@ export const fetchLossRewardData = async (
   if (!tokenAddress || !walletAddress) {
     return {
       costBasis: null,
-      claimable: { unclaimedEpochs: [], totalClaimableEth: 0 },
+      claimable: { unclaimedEpochs: [], totalClaimableEth: 0, pendingEpochs: [], totalPendingEth: 0 },
     };
   }
 
@@ -207,8 +207,15 @@ export const fetchLossRewardData = async (
   }
 
   const data = await response.json();
+  const claimable: ClaimableRewardsState = {
+    unclaimedEpochs: data.claimable?.unclaimedEpochs || [],
+    totalClaimableEth: Number(data.claimable?.totalClaimableEth || 0),
+    pendingEpochs: data.pending?.pendingEpochs || [],
+    totalPendingEth: Number(data.pending?.totalPendingEth || 0),
+  };
+
   return {
     costBasis: data.costBasis || null,
-    claimable: data.claimable || { unclaimedEpochs: [], totalClaimableEth: 0 },
+    claimable,
   };
 };
