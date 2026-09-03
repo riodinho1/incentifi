@@ -26,6 +26,10 @@ Welcome to the Incentifi Developer Integration Guide. This document provides com
 | **WETH** | `0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73` | Canonical Wrapped Ether |
 | **Uniswap V3 Factory** | `0x1f7d7550B1b028f7571E69A784071F0205FD2EfA` | Canonical DEX Factory |
 | **Uniswap V3 PositionManager** | `0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3` | Nonfungible Position Manager |
+| **Uniswap V3 SwapRouter02** | `0xcaf681a66d020601342297493863e78c959e5cb2` | Underlying router `IncentifiSwapRouter` forwards post-graduation swaps to |
+| **Uniswap V3 QuoterV2** | `0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7` | Off-chain quote simulation for post-graduation swaps (`quoteExactInputSingle`/`quoteExactOutputSingle`) |
+
+> All addresses above (including QuoterV2) are cross-checked against the [official Uniswap Robinhood Chain deployments page](https://developers.uniswap.org/docs/protocols/v3/deployments/v3-robinhood-chain-deployments) and confirmed to have live deployed bytecode via `eth_getCode` on Robinhood Chain mainnet. Uniswap's own docs note that `UniversalRouter` (`0x8876789976decbfcbbbe364623c63652db8c0904`) is now the preferred swap entrypoint, superseding `SwapRouter02` — Incentifi's router currently integrates against `SwapRouter02`, which remains deployed and functional but is not the newest option.
 
 ---
 

@@ -96,6 +96,24 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_S
 const OPERATOR_PRIVATE_KEY = process.env.OPERATOR_PRIVATE_KEY || '';
 const LOSS_REWARD_POOL_ADDRESS = process.env.VITE_LOSS_REWARD_POOL || '0x697bda9db5a297a9cd9ed969bbf2549d0527dcdf';
 const INCENTIFI_FACTORY_ADDRESS = process.env.VITE_INCENTIFI_BONDING_CURVE_FACTORY || '0x9fcea653c6f31c82606582b22da82b39f61f9c0e';
+const ALERT_WEBHOOK_URL = process.env.ALERT_WEBHOOK_URL || '';
+const WORKER_NAME = 'loss-reward-worker';
+
+/**
+ * Indexer freshness gate: scripts/evm-indexer.mjs (worker_name 'evm-indexer') upserts a
+ * heartbeat to `indexer_heartbeats` on every successful (or failed) poll of its 10-second
+ * loop. `holder_cost_basis` — the table this worker reads "who is in loss" from — is
+ * populated exclusively by that indexer, so a stale or missing heartbeat means the
+ * eligibility data below could be trailing real chain state by an unknown amount.
+ *
+ * Threshold: 120 seconds (2 minutes) — 12x the indexer's normal 10-second poll cadence
+ * (generous headroom for a one-off slow batch or RPC hiccup) while still comfortably
+ * under the 5-minute snapshot cadence (SNAPSHOT_INTERVAL_SECONDS), so a genuinely stuck
+ * indexer is caught before more than one epoch could run against stale data.
+ * FLAGGING FOR CONFIRMATION: adjust if the indexer's real-world cadence differs.
+ */
+export const INDEXER_FRESHNESS_THRESHOLD_SECONDS = 120;
+const EVM_INDEXER_WORKER_NAME = 'evm-indexer';
 
 /** Loss-Reward Snapshot Interval: 5 minutes (300 seconds) */
 export const SNAPSHOT_INTERVAL_SECONDS = 300;
@@ -133,6 +151,69 @@ const POOL_ABI = parseAbi([
 
 // In-process lock tracker to prevent concurrent execution on the same token
 const activeTokenLocks = new Set();
+
+async function sendAlert(message) {
+  console.error(`[ALERT] ${WORKER_NAME}: ${message}`);
+  if (!ALERT_WEBHOOK_URL) return;
+  try {
+    await fetch(ALERT_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: `[${new Date().toISOString()}] ${WORKER_NAME}: ${message}` }),
+    });
+  } catch {
+    // ignore alert transport failure — the console.error above is the durable record
+  }
+}
+
+/**
+ * Checks whether scripts/evm-indexer.mjs's heartbeat is fresh enough to trust
+ * `holder_cost_basis` for a snapshot. Returns { fresh: boolean, reason, ageSeconds }.
+ * Missing heartbeat is treated the same as a stale one — the indexer may simply never
+ * have started, which is just as dangerous as it having stalled.
+ */
+export async function checkIndexerFreshness(options = {}) {
+  const thresholdSeconds = options.thresholdSeconds ?? INDEXER_FRESHNESS_THRESHOLD_SECONDS;
+  const nowMs = options.nowMs ?? Date.now();
+
+  const { data: heartbeat, error } = await supabase
+    .from('indexer_heartbeats')
+    .select('worker_name, status, message, updated_at')
+    .eq('worker_name', EVM_INDEXER_WORKER_NAME)
+    .maybeSingle();
+
+  if (error) {
+    return { fresh: false, reason: `DB error reading indexer_heartbeats: ${error.message}`, ageSeconds: null };
+  }
+
+  if (!heartbeat) {
+    return { fresh: false, reason: `No heartbeat found for indexer worker "${EVM_INDEXER_WORKER_NAME}" — indexer may never have run.`, ageSeconds: null };
+  }
+
+  const updatedAtMs = Date.parse(heartbeat.updated_at);
+  if (!Number.isFinite(updatedAtMs)) {
+    return { fresh: false, reason: `Indexer heartbeat has an unparsable updated_at: ${heartbeat.updated_at}`, ageSeconds: null };
+  }
+
+  const ageSeconds = (nowMs - updatedAtMs) / 1000;
+  if (ageSeconds > thresholdSeconds) {
+    return {
+      fresh: false,
+      reason: `Indexer heartbeat is stale: last updated ${ageSeconds.toFixed(1)}s ago, threshold is ${thresholdSeconds}s (status="${heartbeat.status}", message="${heartbeat.message}").`,
+      ageSeconds,
+    };
+  }
+
+  if (heartbeat.status === 'error') {
+    return {
+      fresh: false,
+      reason: `Indexer heartbeat is fresh (${ageSeconds.toFixed(1)}s ago) but reports status="error": ${heartbeat.message}`,
+      ageSeconds,
+    };
+  }
+
+  return { fresh: true, reason: null, ageSeconds };
+}
 
 /**
  * Standard OpenZeppelin-compatible Merkle Tree builder
@@ -339,6 +420,24 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
   try {
     console.log(`\n======================================================`);
     console.log(`[EPOCH WORKER] Processing Loss-Reward Epoch for ${token} (DRY RUN = ${dryRun})`);
+
+    // 1a. Indexer freshness gate — checked FIRST, before any chain or DB work below.
+    // holder_cost_basis (queried further down) is populated exclusively by
+    // scripts/evm-indexer.mjs — if that indexer has stalled or never started, "who is
+    // in loss" would be computed from outdated balances without any indication to
+    // callers. Refuse to proceed rather than silently trusting stale data. Running this
+    // check before any RPC/DB call (rather than after the benchmark-price fetch and
+    // epoch reconciliation) also avoids wasting those calls on a run that's going to be
+    // discarded anyway.
+    if (!options.skipFreshnessCheck) {
+      const freshness = await checkIndexerFreshness();
+      if (!freshness.fresh) {
+        await sendAlert(`Loss-reward snapshot for ${token} BLOCKED — indexer data is not fresh. ${freshness.reason}`);
+        console.error(`[FRESHNESS GATE] Refusing to run epoch for ${token}: ${freshness.reason}`);
+        return { skipped: true, reason: 'indexer_stale', detail: freshness.reason, ageSeconds: freshness.ageSeconds };
+      }
+      console.log(`[FRESHNESS GATE] Indexer heartbeat is fresh (${freshness.ageSeconds.toFixed(1)}s old, threshold ${INDEXER_FRESHNESS_THRESHOLD_SECONDS}s). Proceeding.`);
+    }
 
     // 1b. Check & Resolve Prior Pending Funding Epochs (FIFO)
     if (!dryRun && OPERATOR_PRIVATE_KEY && LOSS_REWARD_POOL_ADDRESS) {

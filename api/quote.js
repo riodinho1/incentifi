@@ -77,13 +77,27 @@ export default async function handler(req, res) {
     });
 
     if (graduated) {
+      // Distinct, explicit shape for the graduated case: no bonding-curve
+      // quote fields are computed here (this endpoint does not implement a
+      // Uniswap V3 quote), so `quoteAvailable` and `error` let a caller
+      // reliably tell "no quote" apart from a successful buy/sell quote
+      // instead of silently reading undefined out of a missing field.
       res.status(200).json({
         token: tokenAddress,
         side: rawSide,
         graduated: true,
+        quoteAvailable: false,
+        reason: 'GRADUATED_QUOTE_NOT_SUPPORTED',
+        error:
+          'This token has graduated to Uniswap V3. This endpoint only computes pre-graduation ' +
+          'bonding-curve quotes and does not return a Uniswap V3 quote. Route trades through ' +
+          'IncentifiSwapRouter and obtain pricing from a Uniswap V3 quoter for post-graduation tokens.',
         marketType: 'Uniswap_V3',
         router: ROUTER_ADDRESS,
-        message: 'Token has graduated to Uniswap V3. Use IncentifiSwapRouter for post-graduation trading.',
+        expectedTokensOut: null,
+        expectedTokensOutWei: null,
+        expectedNetEthOut: null,
+        expectedNetEthOutWei: null,
         chainId: 4663,
       });
       return;

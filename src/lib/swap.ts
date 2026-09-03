@@ -1,5 +1,5 @@
 import { decodeEventLog, encodeFunctionData, parseAbi, getAddress, parseEther, parseUnits } from 'viem';
-import { getEvmProvider, publicClient, ensureEvmChain } from './evmNetwork';
+import { getEvmProvider, publicClient, ensureEvmChain, waitForTransactionReceipt } from './evmNetwork';
 import {
   UNISWAP_V3_FACTORY,
   INCENTIFI_SWAP_ROUTER,
@@ -43,25 +43,7 @@ const INCENTIFI_ROUTER_ABI = parseAbi([
 
 const toQuantityHex = (value: bigint) => `0x${value.toString(16)}`;
 
-const waitForReceipt = async (txHash: string) => {
-  const provider = getEvmProvider();
-  if (!provider) throw new Error('Wallet provider disappeared while waiting for confirmation.');
-
-  for (let attempt = 0; attempt < 90; attempt += 1) {
-    const receipt = await provider.request({
-      method: 'eth_getTransactionReceipt',
-      params: [txHash],
-    });
-    if (receipt) {
-      if (receipt.status === '0x0' || receipt.status === 0 || receipt.status === 0n) {
-        throw new Error('Transaction reverted on-chain. No trade was executed.');
-      }
-      return receipt;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-  }
-  throw new Error('Transaction was submitted, but confirmation timed out.');
-};
+const waitForReceipt = waitForTransactionReceipt;
 
 const priceInEth = (sqrtPriceX96: bigint, isTokenFirst: boolean) => {
   const Q96 = 1n << 96n;

@@ -9,3 +9,8 @@ Thumbs.db
 *.tsbuildinfo
 coverage/
 .vercel/
+
+# Hardhat (fork test tooling, test/hardhat/)
+artifacts/
+cache/
+typechain-types/
