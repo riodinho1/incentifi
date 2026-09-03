@@ -732,9 +732,9 @@ export async function handleClaim(req: Request): Promise<Response> {
     } else {
       let amountWei: bigint;
       try {
-        amountWei = parseEther(String(row.final_reward_eth || '0'));
+        amountWei = BigInt(Math.round(Number(row.final_reward_eth || 0) * 1e18));
       } catch {
-        amountWei = BigInt(Math.floor(Number(row.final_reward_eth || 0) * 1e18));
+        amountWei = 0n;
       }
 
       claimableRows.push({
