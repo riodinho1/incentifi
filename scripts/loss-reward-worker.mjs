@@ -119,6 +119,42 @@ const EVM_INDEXER_WORKER_NAME = 'evm-indexer';
 export const SNAPSHOT_INTERVAL_SECONDS = 300;
 export const SNAPSHOT_INTERVAL_MINUTES = 5;
 
+/**
+ * Minimum-payout dust guard. If a candidate epoch's total allocated amount
+ * would round to fewer wei than this, the epoch is recorded as
+ * `completed_dust` instead of computing a Merkle tree and submitting a real
+ * setEpochMerkleRoot() transaction.
+ *
+ * Why this exists: `theoreticalReward = 0.10 * unrealizedLoss` (below), combined
+ * with immediately depleting a holder's cost basis by exactly what was just
+ * paid (step 13), is a geometric decay — each cycle's reward is exactly 90% of
+ * the previous cycle's, converging toward zero but never cleanly reaching it.
+ * With no floor, the worker keeps submitting a real, successful
+ * setEpochMerkleRoot() transaction every 5 minutes, forever, once a position
+ * has decayed into economic irrelevance. This is not hypothetical: real
+ * production transactions for one position show its on-chain payout decaying
+ * by exactly 0.9x every single 5-minute epoch (267,028 -> 49,481 wei across 16
+ * consecutive real transactions, each costing real gas — ~79,263 gas at
+ * ~0.35 gwei, ~2.8e13 wei — for a reward already far below that cost).
+ *
+ * Default: 1e13 wei (0.00001 ETH), chosen to sit near that measured real-world
+ * gas cost — i.e. "don't spend more recording a reward on-chain than the
+ * reward itself is worth." Configurable via MIN_EPOCH_PAYOUT_WEI for operators
+ * who want a different floor without a code change.
+ */
+export const MIN_EPOCH_PAYOUT_WEI = BigInt(process.env.MIN_EPOCH_PAYOUT_WEI || '10000000000000');
+
+/**
+ * Pure decision function for the minimum-payout dust guard — extracted so
+ * tests can exercise the real guard logic directly (not a hand-mirrored copy
+ * of it) without needing the live Supabase/RPC clients executeEpochForToken()
+ * itself depends on.
+ */
+export function evaluateDustGuard(totalDistributedEth, thresholdWei = MIN_EPOCH_PAYOUT_WEI) {
+  const candidateAllocatedWei = BigInt(Math.round(totalDistributedEth * 1e18));
+  return { candidateAllocatedWei, isDust: candidateAllocatedWei < thresholdWei };
+}
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const publicClient = createPublicClient({ transport: http(RPC_URL) });
 
@@ -639,6 +675,48 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
     const isUnderfunded = availablePoolEth < totalTheoreticalDemandEth;
     const scalingFactor = 1.0;
     const totalDistributedEth = totalTheoreticalDemandEth;
+
+    // 7a. Minimum-payout dust guard (see MIN_EPOCH_PAYOUT_WEI's own doc comment).
+    // Checked here, BEFORE building the Merkle tree or touching cost basis: a
+    // dust-level reward must skip depletion entirely too, or holders would have
+    // their recorded loss reduced for compensation they never actually received.
+    // Only applies when this candidate epoch hasn't already been published
+    // on-chain — an already-published epoch (e.g. from before this guard
+    // existed) still needs full reconciliation below, not a retroactive skip.
+    const { candidateAllocatedWei, isDust } = evaluateDustGuard(totalDistributedEth);
+    if (!isCandidatePublishedOnchain && isDust) {
+      console.log(`[DUST GUARD] Candidate Epoch #${candidateEpochNumber} total payout (${candidateAllocatedWei.toString()} wei) is below the minimum payout threshold (${MIN_EPOCH_PAYOUT_WEI.toString()} wei, ${eligibleAllocations.length} eligible holder(s)). Skipping Merkle tree construction, on-chain submission, and cost-basis depletion — recording as completed_dust instead.`);
+      if (!dryRun) {
+        await supabase.from('reward_epochs').insert({
+          token_address: token,
+          epoch_number: candidateEpochNumber,
+          pool_price_eth: benchmarkPriceEth,
+          pool_twap_price_eth: benchmarkPriceEth,
+          total_theoretical_reward_eth: totalTheoreticalDemandEth,
+          available_pool_eth: availablePoolEth,
+          scaling_factor: scalingFactor,
+          total_distributed_eth: totalDistributedEth,
+          merkle_root: '0x0000000000000000000000000000000000000000000000000000000000000000',
+          status: 'completed_dust',
+        });
+      }
+      return {
+        epochNumber: candidateEpochNumber,
+        tokenAddress: token,
+        isGraduated: priceRes.isGraduated,
+        benchmarkPriceEth,
+        eligibleHolders: eligibleAllocations.length,
+        totalTheoreticalDemandEth,
+        availablePoolEth,
+        scalingFactor,
+        totalDistributedEth,
+        merkleRoot: '0x0000000000000000000000000000000000000000000000000000000000000000',
+        payouts: [],
+        skipped: true,
+        reason: 'dust_payout',
+        candidateAllocatedWei: candidateAllocatedWei.toString(),
+      };
+    }
 
     // 8. Calculate Final Scaled Rewards & Generate Merkle Leaves
     const leaves = [];
