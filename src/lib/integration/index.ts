@@ -21,8 +21,8 @@ export const ROBINHOOD_CHAIN_ID = 4663;
 export const ROBINHOOD_RPC_URL = 'https://rpc.mainnet.chain.robinhood.com';
 export const ROBINHOOD_EXPLORER_URL = 'https://explorer.mainnet.chain.robinhood.com';
 
-export const INCENTIFI_BONDING_CURVE_FACTORY = '0x9fcea653c6f31c82606582b22da82b39f61f9c0e' as Address;
-export const INCENTIFI_SWAP_ROUTER = '0xbba0384bf34b5cc26daa2c06cdf765bbdeb2acdf' as Address;
+export const INCENTIFI_BONDING_CURVE_FACTORY = '0xa0143de84fba1753b887e4e32941e4fb342e473f' as Address;
+export const INCENTIFI_SWAP_ROUTER = '0x4c1f4197b5eebb6cc15c37e053f963a56787575e' as Address;
 export const LOSS_REWARD_POOL = '0x697bda9db5a297a9cd9ed969bbf2549d0527dcdf' as Address;
 export const WETH_ADDRESS = '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73' as Address;
 export const UNISWAP_V3_FACTORY = '0x1f7d7550B1b028f7571E69A784071F0205FD2EfA' as Address;

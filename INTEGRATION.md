@@ -18,10 +18,13 @@ Welcome to the Incentifi Developer Integration Guide. This document provides com
 
 ## 2. Canonical Smart Contract Addresses
 
+> **Redeployed 2026-09-04:** the Factory and Router below were redeployed from fixed contract source (creator-payment DoS + fee-on-transfer accounting fixes). The previous addresses (Factory `0x9fcea653c6f31c82606582b22da82b39f61f9c0e`, Router `0xbba0384bf34b5cc26daa2c06cdf765bbdeb2acdf`) ran old, unfixed bytecode and should no longer be used — a contract's deployed bytecode is immutable, so those fixes could only take effect via a fresh deployment.
+
+
 | Contract Name | Address | Role |
 | :--- | :--- | :--- |
-| **IncentifiBondingCurveFactory** | `0x9fcea653c6f31c82606582b22da82b39f61f9c0e` | Registry & Curve Factory |
-| **IncentifiSwapRouter** | `0xbba0384bf34b5cc26daa2c06cdf765bbdeb2acdf` | Unified Universal Swap Gateway |
+| **IncentifiBondingCurveFactory** | `0xa0143de84fba1753b887e4e32941e4fb342e473f` | Registry & Curve Factory |
+| **IncentifiSwapRouter** | `0x4c1f4197b5eebb6cc15c37e053f963a56787575e` | Unified Universal Swap Gateway |
 | **LossRewardPool** | `0x697bda9db5a297a9cd9ed969bbf2549d0527dcdf` | Loss-Reward Staking & Protection Pool |
 | **WETH** | `0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73` | Canonical Wrapped Ether |
 | **Uniswap V3 Factory** | `0x1f7d7550B1b028f7571E69A784071F0205FD2EfA` | Canonical DEX Factory |
@@ -61,7 +64,7 @@ Trading routes via: IncentifiSwapRouter on Uniswap V3
 
 To determine if an arbitrary address is an Incentifi token and fetch its market status:
 
-1. **Query Factory**: Call `getBondingCurve(tokenAddress)` on `0x9fcea653c6f31c82606582b22da82b39f61f9c0e`.
+1. **Query Factory**: Call `getBondingCurve(tokenAddress)` on `0xa0143de84fba1753b887e4e32941e4fb342e473f`.
    * If result is `0x0000000000000000000000000000000000000000`, the token is not an active Incentifi bonding curve token.
    * If result is non-zero (`curveAddress`), the token is an active Incentifi token.
 2. **Check Graduation State**: Call `isGraduated(tokenAddress)` on the Factory.
@@ -80,7 +83,7 @@ To determine if an arbitrary address is an Incentifi token and fetch its market 
 
 ## 6. Trading Execution via `IncentifiSwapRouter`
 
-The `IncentifiSwapRouter` (`0xbba0384bf34b5cc26daa2c06cdf765bbdeb2acdf`) provides a **single unified gateway** for both pre-graduation and post-graduation trading.
+The `IncentifiSwapRouter` (`0x4c1f4197b5eebb6cc15c37e053f963a56787575e`) provides a **single unified gateway** for both pre-graduation and post-graduation trading.
 
 ### 6.1. Buying Tokens (`buyToken`)
 
@@ -105,7 +108,7 @@ Requires a 1-time standard ERC-20 approval for `IncentifiSwapRouter`:
 
 ```solidity
 // 1. Approve Router
-IERC20(token).approve(0xbba0384bf34b5cc26daa2c06cdf765bbdeb2acdf, tokenAmountIn);
+IERC20(token).approve(0x4c1f4197b5eebb6cc15c37e053f963a56787575e, tokenAmountIn);
 
 // 2. Execute Sell
 function sellToken(
@@ -148,7 +151,7 @@ GET /api/token-info?address=0x<TOKEN_ADDRESS>
   "realEthReserveEth": "0.731732",
   "realTokenReserveTokens": "892145120.50",
   "uniswapPool": null,
-  "router": "0xbba0384bf34b5cc26daa2c06cdf765bbdeb2acdf",
+  "router": "0x4c1f4197b5eebb6cc15c37e053f963a56787575e",
   "chainId": 4663
 }
 ```
@@ -187,7 +190,7 @@ GET /api/quote?token=0x<TOKEN_ADDRESS>&side=buy&amountEth=0.05
 import { ethers } from 'ethers';
 
 const RPC_URL = 'https://rpc.mainnet.chain.robinhood.com';
-const ROUTER_ADDRESS = '0xbba0384bf34b5cc26daa2c06cdf765bbdeb2acdf';
+const ROUTER_ADDRESS = '0x4c1f4197b5eebb6cc15c37e053f963a56787575e';
 
 const ROUTER_ABI = [
   'function buyToken(address token, uint256 amountOutMinimum, uint256 deadline) external payable returns (uint256)',
@@ -236,7 +239,7 @@ export async function sellIncentifiToken(tokenAddress, tokenAmountFormatted = '1
 import { createWalletClient, createPublicClient, http, parseEther, parseAbi } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
-const ROUTER_ADDRESS = '0xbba0384bf34b5cc26daa2c06cdf765bbdeb2acdf';
+const ROUTER_ADDRESS = '0x4c1f4197b5eebb6cc15c37e053f963a56787575e';
 
 const robinhoodChain = {
   id: 4663,
@@ -319,8 +322,8 @@ event Graduated(
 For third-party trading terminals (such as GMGN, Axiom, DEXScreener, GeckoTerminal, Maestro, Trojan, Banana Gun, Photon, BullX) to enable instant token discovery and trading by contract address:
 
 1. **Robinhood Chain Support**: The terminal must support Robinhood Chain (Chain ID `4663`).
-2. **Factory Registration**: Register Factory address `0x9fcea653c6f31c82606582b22da82b39f61f9c0e` in the platform's launchpad parser.
-3. **Router Routing**: Route pre-graduation buy/sell orders through `IncentifiSwapRouter` (`0xbba0384bf34b5cc26daa2c06cdf765bbdeb2acdf`).
+2. **Factory Registration**: Register Factory address `0xa0143de84fba1753b887e4e32941e4fb342e473f` in the platform's launchpad parser.
+3. **Router Routing**: Route pre-graduation buy/sell orders through `IncentifiSwapRouter` (`0x4c1f4197b5eebb6cc15c37e053f963a56787575e`).
 4. **Post-Graduation**: After `isGraduated(token) == true`, terminals can route either through `IncentifiSwapRouter` or standard Robinhood Chain Uniswap V3 infrastructure (`0x1f7d...2EfA`).
 
 *Note: Integrations with third-party terminals require platform-side integration/adaptation.*
