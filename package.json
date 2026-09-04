@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node test/loss-reward-audit.test.mjs && node test/worker-hardening.test.mjs && node test/session-daemon.test.mjs && node test/symbol-registry.test.mjs && node test/bonding-curve-v3-harness.test.mjs && node test/comprehensive-bonding-curve.test.mjs && node test/fee-on-transfer-accounting.test.mjs && node test/graduation-price-continuity.test.mjs && node test/creator-pull-payment.test.mjs && node test/indexer-freshness-gate.test.mjs && node test/integration-layer.test.mjs",
+    "test": "node test/loss-reward-audit.test.mjs && node test/worker-hardening.test.mjs && node test/session-daemon.test.mjs && node test/symbol-registry.test.mjs && node test/bonding-curve-v3-harness.test.mjs && node test/comprehensive-bonding-curve.test.mjs && node test/fee-on-transfer-accounting.test.mjs && node test/graduation-price-continuity.test.mjs && node test/creator-pull-payment.test.mjs && node test/indexer-freshness-gate.test.mjs && node test/loss-reward-dust-guard.test.mjs && node test/integration-layer.test.mjs",
     "daemon": "node scripts/daemon.mjs",
     "test:fork": "hardhat test nodejs --network robinhoodFork",
     "lint": "eslint src --report-unused-disable-directives --max-warnings 0",
@@ -20,6 +20,8 @@
   "dependencies": {
     "@stripe/react-stripe-js": "4.0.2",
     "@supabase/supabase-js": "^2.57.4",
+    "@uniswap/v4-core": "^1.0.2",
+    "@uniswap/v4-periphery": "^1.0.3",
     "buffer": "^6.0.3",
     "firebase": "^12.7.0",
     "i18next": "^25.3.2",
