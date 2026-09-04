@@ -6,6 +6,7 @@ import {
   ensureEvmChain,
   getEvmProvider,
   requestEvmAccounts,
+  waitForTransactionReceipt,
 } from './evmNetwork';
 import { INCENTIFI_LAUNCH_TOKEN_BYTECODE } from './incentifiLaunchTokenBytecode';
 import { INCENTIFI_BONDING_CURVE_FACTORY } from './uniswapAddresses';
@@ -68,27 +69,8 @@ const encodeConstructor = (name: string, symbol: string, supply: bigint) => {
   ].join('');
 };
 
-const waitForReceipt = async (txHash: string, description: string = 'Transaction') => {
-  const provider = getEvmProvider();
-  if (!provider) throw new Error('Wallet provider disappeared while waiting for launch.');
-
-  for (let attempt = 0; attempt < 90; attempt += 1) {
-    const receipt = await provider.request({
-      method: 'eth_getTransactionReceipt',
-      params: [txHash],
-    });
-
-    if (receipt) {
-      if (receipt.status === '0x0' || receipt.status === 0 || receipt.status === 0n) {
-        throw new Error(`${description} reverted on-chain.`);
-      }
-      return receipt;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-  }
-
-  throw new Error(`${description} was submitted, but confirmation timed out.`);
-};
+const waitForReceipt = (txHash: string, description: string = 'Transaction') =>
+  waitForTransactionReceipt(txHash, { description });
 
 export const createEvmToken = async (_provider: any, input: CreateEvmTokenInput) => {
   const provider = getEvmProvider();

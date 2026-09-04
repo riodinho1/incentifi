@@ -43,6 +43,7 @@ interface IIncentifiBondingCurve {
     function graduated() external view returns (bool);
     function buy(uint256 minTokensOut, address recipient) external payable returns (uint256 tokensOut);
     function sell(uint256 tokensIn, uint256 minEthOut, address payable recipient) external returns (uint256 netEthOut);
+    function depositCreatorFee() external payable;
 }
 
 interface IBondingCurveFactory {
@@ -186,24 +187,30 @@ contract IncentifiSwapRouter {
         if (tokenAmountIn == 0) revert ZeroAmount();
         if (token == address(0)) revert ZeroAddress();
 
+        // Pull tokens from the seller, measuring the actual balance delta
+        // rather than trusting `tokenAmountIn` — a fee-on-transfer token
+        // delivers less than the nominal amount requested, and approving/
+        // swapping the nominal amount would then try to move tokens this
+        // router never actually received.
+        uint256 balanceBefore = IERC20(token).balanceOf(address(this));
+        if (!IERC20(token).transferFrom(msg.sender, address(this), tokenAmountIn)) {
+            revert TransferFailed();
+        }
+        uint256 actualAmountIn = IERC20(token).balanceOf(address(this)) - balanceBefore;
+        if (actualAmountIn == 0) revert ZeroAmount();
+
         // Check if token is in pre-graduation bonding curve phase
         if (bondingCurveFactory != address(0)) {
             address curve = IBondingCurveFactory(bondingCurveFactory).getBondingCurve(token);
             if (curve != address(0) && !IIncentifiBondingCurve(curve).graduated()) {
-                if (!IERC20(token).transferFrom(msg.sender, address(this), tokenAmountIn)) {
-                    revert TransferFailed();
-                }
-                IERC20(token).approve(curve, tokenAmountIn);
-                netEthOut = IIncentifiBondingCurve(curve).sell(tokenAmountIn, minEthOut, payable(msg.sender));
+                IERC20(token).approve(curve, actualAmountIn);
+                netEthOut = IIncentifiBondingCurve(curve).sell(actualAmountIn, minEthOut, payable(msg.sender));
                 return netEthOut;
             }
         }
 
         // Post-graduation Uniswap V3 Routing
-        if (!IERC20(token).transferFrom(msg.sender, address(this), tokenAmountIn)) {
-            revert TransferFailed();
-        }
-        IERC20(token).approve(address(uniswapRouter), tokenAmountIn);
+        IERC20(token).approve(address(uniswapRouter), actualAmountIn);
 
         // Swap tokens -> WETH
         uint256 grossEth = uniswapRouter.exactInputSingle(
@@ -212,7 +219,7 @@ contract IncentifiSwapRouter {
                 tokenOut: address(WETH9),
                 fee: POOL_FEE,
                 recipient: address(this),
-                amountIn: tokenAmountIn,
+                amountIn: actualAmountIn,
                 amountOutMinimum: 0,
                 sqrtPriceLimitX96: 0
             })
@@ -247,7 +254,7 @@ contract IncentifiSwapRouter {
             msg.sender,
             false,
             netEthOut,
-            tokenAmountIn,
+            actualAmountIn,
             creatorShare,
             lossPoolShare
         );
@@ -255,6 +262,29 @@ contract IncentifiSwapRouter {
 
     function _sendCreatorFee(address token, uint256 amount) internal {
         if (amount == 0) return;
+
+        // Preferred path: every token this router is meant to trade has a registered
+        // Incentifi bonding curve (created at launch, still present after graduation).
+        // Credit the SAME creatorBalances accounting that curve's own buy()/sell()
+        // already use, via depositCreatorFee() — one unified pull-payment claim path
+        // (claimCreatorFees() on the curve) regardless of whether a fee was earned
+        // pre- or post-graduation. This closes the same DoS buy()/sell() were fixed
+        // against: an immediate push here would let a creator address that reverts on
+        // receiving ETH block every post-graduation trade on this token.
+        if (bondingCurveFactory != address(0)) {
+            address curve = IBondingCurveFactory(bondingCurveFactory).getBondingCurve(token);
+            if (curve != address(0)) {
+                IIncentifiBondingCurve(curve).depositCreatorFee{value: amount}();
+                return;
+            }
+        }
+
+        // Fallback: a token with no registered Incentifi curve is outside this
+        // router's documented usage (it's built for Incentifi tokens specifically).
+        // No pull-payment path exists for this case, but a failed push here can only
+        // affect whoever is already calling this trade themselves — `creator` falls
+        // back to `msg.sender` below when the token doesn't implement creator() — not
+        // a third party, so it isn't the cross-user DoS this fix targets.
         address creator = address(0);
         try IIncentifiToken(token).creator() returns (address c) {
             creator = c;

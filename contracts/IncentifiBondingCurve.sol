@@ -121,7 +121,13 @@ contract IncentifiBondingCurve {
     uint256 public constant VIRTUAL_TOKEN = 78125000000000000000000000; // 78,125,000 Tokens (18 decimals)
     uint256 public constant INVARIANT_K = 2324707031250000000000000000000000000000000000; // 2.32470703125e45
     uint256 public constant GRADUATION_ETH_TARGET = 5853863234375000000; // 5.853863234375 ETH in wei
-    uint160 public constant GRADUATION_SQRT_PRICE_X96 = 476897496634883656268812375606081; // Exact V3 graduation sqrtPriceX96
+    // Reference sqrtPriceX96 for a token whose address sorts ABOVE WETH's (token0=WETH,
+    // token1=TOKEN) reaching the exact graduation target. Kept for documentation/testing
+    // reference only — _graduate() no longer uses this fixed value directly (see
+    // _computeSqrtPriceX96 below), since it is only correct for that one token0/token1
+    // ordering and would misprice the pool by orders of magnitude for a token whose
+    // address sorts below WETH's (which flips which side Uniswap assigns as token0).
+    uint160 public constant GRADUATION_SQRT_PRICE_X96 = 476897496634883656268812375606081;
     int24 public constant TICK_LOWER = -887200;
     int24 public constant TICK_UPPER = 887200;
     uint24 public constant POOL_FEE = 10000; // 1.00% Uniswap V3 fee tier
@@ -142,6 +148,12 @@ contract IncentifiBondingCurve {
     bool public graduated;
     uint256 public lpTokenId;
     address public uniswapPool;
+
+    // Creator fees are credited here rather than pushed immediately (see buy()/sell()) so
+    // that a creator address that cannot receive ETH (a contract with no payable fallback,
+    // or one that reverts) can never block trading for everyone else. The creator pulls
+    // their accrued balance via claimCreatorFees() on their own schedule.
+    mapping(address => uint256) public creatorBalances;
 
     // Reentrancy Guard
     uint256 private _status;
@@ -174,6 +186,8 @@ contract IncentifiBondingCurve {
         uint256 wethAmount,
         uint256 tokenAmount
     );
+    event CreatorFeesClaimed(address indexed creator, uint256 amount);
+    event CreatorFeeDeposited(address indexed depositor, uint256 amount);
 
     // ------------------------------------------------------------------------
     // Custom Errors
@@ -188,6 +202,7 @@ contract IncentifiBondingCurve {
     error InsufficientReserve();
     error Reentrancy();
     error NotAuthorized();
+    error NoBalanceToClaim();
 
     modifier nonReentrant() {
         if (_status == _ENTERED) revert Reentrancy();
@@ -265,9 +280,11 @@ contract IncentifiBondingCurve {
         uint256 lossPoolFee = grossEth / 100; // 1.00%
         uint256 netEth = grossEth - creatorFee - lossPoolFee; // 98.00%
 
-        // Pay creator fee in native ETH if non-zero
+        // Credit creator fee for later withdrawal (pull-payment) rather than pushing it
+        // immediately — a creator address that reverts on receiving ETH must never be
+        // able to brick every trade on this token.
         if (creatorFee > 0) {
-            creator.safeTransferETH(creatorFee);
+            creatorBalances[creator] += creatorFee;
         }
 
         // Deposit loss reward pool fee in native ETH if non-zero
@@ -281,15 +298,24 @@ contract IncentifiBondingCurve {
             tokensOut = (VIRTUAL_TOKEN + realTokenReserve) - (INVARIANT_K / newEth);
         }
 
-        if (tokensOut < minTokensOut) revert SlippageExceeded();
         if (tokensOut > realTokenReserve) revert InsufficientReserve();
 
         realEthReserve += netEth;
         realTokenReserve -= tokensOut;
 
+        // Deliver tokens and measure what the recipient actually received.
+        // A fee-on-transfer token can silently deliver less than `tokensOut`
+        // (the curve's own balance still drops by the full nominal amount,
+        // so `realTokenReserve` above is unaffected — only the recipient's
+        // side is taxed), so slippage must be checked against the real
+        // delivered amount, not the pre-tax computed one.
+        uint256 recipientBalanceBefore = IERC20(token).balanceOf(recipient);
         token.safeTransfer(recipient, tokensOut);
+        uint256 actualTokensReceived = IERC20(token).balanceOf(recipient) - recipientBalanceBefore;
 
-        emit TokensPurchased(msg.sender, recipient, grossEth, tokensOut, creatorFee, lossPoolFee);
+        if (actualTokensReceived < minTokensOut) revert SlippageExceeded();
+
+        emit TokensPurchased(msg.sender, recipient, grossEth, actualTokensReceived, creatorFee, lossPoolFee);
 
         // Check for graduation trigger
         if (realEthReserve >= GRADUATION_ETH_TARGET) {
@@ -309,14 +335,21 @@ contract IncentifiBondingCurve {
         if (tokensIn == 0) revert ZeroAmount();
         if (recipient == address(0)) revert ZeroAddress();
 
-        // Transfer tokens from seller into curve vault
+        // Transfer tokens from seller into curve vault. Measure the actual
+        // balance delta rather than trusting `tokensIn` — a fee-on-transfer
+        // token delivers less than the nominal amount requested, and crediting
+        // the reserve for tokens the curve never received would let sellers
+        // drain more ETH than their real deposit backs.
+        uint256 balanceBefore = IERC20(token).balanceOf(address(this));
         token.safeTransferFrom(msg.sender, address(this), tokensIn);
+        uint256 actualTokensIn = IERC20(token).balanceOf(address(this)) - balanceBefore;
+        if (actualTokensIn == 0) revert ZeroAmount();
 
-        // Calculate gross ETH output from invariant
+        // Calculate gross ETH output from invariant using tokens actually received
         uint256 currentEth = VIRTUAL_ETH + realEthReserve;
         uint256 currentToken = VIRTUAL_TOKEN + realTokenReserve;
 
-        uint256 newToken = currentToken + tokensIn;
+        uint256 newToken = currentToken + actualTokensIn;
         uint256 newEth = INVARIANT_K / newToken;
         uint256 grossEthOut = currentEth - newEth;
 
@@ -329,11 +362,11 @@ contract IncentifiBondingCurve {
         if (netEthOut < minEthOut) revert SlippageExceeded();
 
         realEthReserve -= grossEthOut;
-        realTokenReserve += tokensIn;
+        realTokenReserve += actualTokensIn;
 
-        // Pay creator fee in native ETH
+        // Credit creator fee for later withdrawal (pull-payment) — see buy() for why.
         if (creatorFee > 0) {
-            creator.safeTransferETH(creatorFee);
+            creatorBalances[creator] += creatorFee;
         }
 
         // Deposit loss reward pool fee in native ETH
@@ -344,7 +377,43 @@ contract IncentifiBondingCurve {
         // Pay net ETH to seller
         SafeTransferLib.safeTransferETH(recipient, netEthOut);
 
-        emit TokensSold(msg.sender, recipient, tokensIn, netEthOut, creatorFee, lossPoolFee);
+        emit TokensSold(msg.sender, recipient, actualTokensIn, netEthOut, creatorFee, lossPoolFee);
+    }
+
+    /**
+     * @notice Withdraws the caller's accrued creator fees.
+     * @dev Pull-payment counterpart to the credits in buy()/sell(). Balance is zeroed
+     *      before the transfer (checks-effects-interactions); if the transfer itself
+     *      reverts, the whole call reverts and the balance remains claimable for a
+     *      later attempt — it is never lost.
+     */
+    function claimCreatorFees() external nonReentrant {
+        uint256 amount = creatorBalances[msg.sender];
+        if (amount == 0) revert NoBalanceToClaim();
+
+        creatorBalances[msg.sender] = 0;
+        SafeTransferLib.safeTransferETH(msg.sender, amount);
+
+        emit CreatorFeesClaimed(msg.sender, amount);
+    }
+
+    /**
+     * @notice Permissionless entrypoint for crediting this token's creator with native
+     *         ETH via the same pull-payment accounting buy()/sell() use.
+     * @dev Exists so IncentifiSwapRouter can route POST-graduation creator fees here too,
+     *      giving the creator one unified claim path (claimCreatorFees()) regardless of
+     *      whether a fee was earned pre- or post-graduation — instead of the router
+     *      pushing ETH to the creator directly, which reintroduces the exact DoS
+     *      buy()/sell() were fixed against (a creator address that reverts on receiving
+     *      ETH would otherwise block every post-graduation trade on this token).
+     *      Permissionless and unconditional on `graduated`, mirroring
+     *      ILossRewardPool.depositReward()'s pattern: anyone may call it, but funds
+     *      always land in this curve's own fixed, immutable `creator`'s balance.
+     */
+    function depositCreatorFee() external payable {
+        if (msg.value == 0) revert ZeroAmount();
+        creatorBalances[creator] += msg.value;
+        emit CreatorFeeDeposited(msg.sender, msg.value);
     }
 
     /**
@@ -369,12 +438,17 @@ contract IncentifiBondingCurve {
         IERC20(weth).approve(positionManager, wethDeposit);
         IERC20(token).approve(positionManager, tokenDeposit);
 
-        // Create and initialize pool at exact graduation sqrtPriceX96
+        // Compute sqrtPriceX96 for whichever token0/token1 ordering actually applies to
+        // this token, so the pool always opens at the bonding curve's real spot price
+        // regardless of how the token's address happens to sort against WETH's.
+        uint160 sqrtPriceX96 = _computeSqrtPriceX96(amount0Desired, amount1Desired);
+
+        // Create and initialize pool at the correctly-oriented graduation sqrtPriceX96
         uniswapPool = INonfungiblePositionManager(positionManager).createAndInitializePoolIfNecessary(
             token0,
             token1,
             POOL_FEE,
-            GRADUATION_SQRT_PRICE_X96
+            sqrtPriceX96
         );
 
         // Mint full-range LP position
@@ -404,6 +478,44 @@ contract IncentifiBondingCurve {
         );
 
         emit Graduated(uniswapPool, tokenId, wethDeposit, tokenDeposit);
+    }
+
+    /**
+     * @dev Computes sqrtPriceX96 = sqrt(amount1 / amount0) * 2^96 for a pool seeded with
+     *      `amount0` of token0 and `amount1` of token1, regardless of which side is WETH
+     *      and which is the launch token. Ordering-agnostic by construction: the caller
+     *      passes amounts already assigned to the correct token0/token1 slots, so the
+     *      resulting price is always correct for whichever ordering Uniswap chose for
+     *      this specific token address.
+     *
+     *      Computed as sqrt(amount1) * 2^96 / sqrt(amount0) rather than the more direct
+     *      sqrt(amount1 * 2^192 / amount0), because amount1 * 2^192 overflows uint256 for
+     *      realistic deposit sizes. Splitting the square root avoids needing 512-bit
+     *      intermediate multiplication; the relative precision lost by taking two
+     *      integer square roots instead of one is on the order of 1/sqrt(min(amount0,
+     *      amount1)) — negligible (well under 1e-9) at the token/ETH amounts this
+     *      contract ever handles.
+     */
+    function _computeSqrtPriceX96(uint256 amount0, uint256 amount1) internal pure returns (uint160) {
+        if (amount0 == 0 || amount1 == 0) revert ZeroAmount();
+        uint256 sqrtAmount0 = _sqrt(amount0);
+        uint256 sqrtAmount1 = _sqrt(amount1);
+        uint256 sqrtPriceX96 = (sqrtAmount1 << 96) / sqrtAmount0;
+        return uint160(sqrtPriceX96);
+    }
+
+    /**
+     * @dev Integer square root (Babylonian method), returns floor(sqrt(x)). Standard,
+     *      widely-used implementation (the same pattern as Uniswap V2's Math.sol).
+     */
+    function _sqrt(uint256 x) internal pure returns (uint256 y) {
+        if (x == 0) return 0;
+        uint256 z = (x + 1) / 2;
+        y = x;
+        while (z < y) {
+            y = z;
+            z = (x / z + z) / 2;
+        }
     }
 
     // ------------------------------------------------------------------------

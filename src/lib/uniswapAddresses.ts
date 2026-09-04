@@ -17,6 +17,13 @@ export const UNISWAP_SWAP_ROUTER = String(
   import.meta.env.VITE_UNISWAP_SWAP_ROUTER || '0xcaf681a66d020601342297493863e78c959e5cb2'
 ).trim() as `0x${string}`;
 
+// Verified against https://developers.uniswap.org/docs/protocols/v3/deployments/v3-robinhood-chain-deployments
+// and confirmed live via eth_getCode on Robinhood Chain mainnet (chain 4663). Used for simulating
+// post-graduation swap quotes without executing a trade (quoteExactInputSingle/quoteExactOutputSingle).
+export const UNISWAP_QUOTER_V2 = String(
+  import.meta.env.VITE_UNISWAP_QUOTER_V2 || '0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7'
+).trim() as `0x${string}`;
+
 export const INCENTIFI_SWAP_ROUTER = String(
   import.meta.env.VITE_INCENTIFI_SWAP_ROUTER || '0xbba0384bf34b5cc26daa2c06cdf765bbdeb2acdf'
 ).trim() as `0x${string}`;

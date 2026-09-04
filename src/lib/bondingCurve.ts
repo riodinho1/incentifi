@@ -1,5 +1,5 @@
 import { decodeEventLog, encodeFunctionData, parseAbi, getAddress } from 'viem';
-import { getEvmProvider, publicClient } from './evmNetwork';
+import { getEvmProvider, publicClient, waitForTransactionReceipt } from './evmNetwork';
 import {
   INCENTIFI_BONDING_CURVE_FACTORY,
   WETH_ADDRESS,
@@ -71,25 +71,7 @@ export interface BondingCurveState {
 
 const toQuantityHex = (value: bigint) => `0x${value.toString(16)}`;
 
-const waitForReceipt = async (txHash: string) => {
-  const provider = getEvmProvider();
-  if (!provider) throw new Error('Wallet provider disappeared while waiting for confirmation.');
-
-  for (let attempt = 0; attempt < 90; attempt += 1) {
-    const receipt = await provider.request({
-      method: 'eth_getTransactionReceipt',
-      params: [txHash],
-    });
-    if (receipt) {
-      if (receipt.status === '0x0' || receipt.status === 0 || receipt.status === 0n) {
-        throw new Error('Transaction reverted on-chain. No trade was executed.');
-      }
-      return receipt;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-  }
-  throw new Error('Transaction was submitted, but confirmation timed out.');
-};
+const waitForReceipt = waitForTransactionReceipt;
 
 /**
  * Pure offline calculation of token output given gross ETH input.
@@ -281,23 +263,34 @@ export async function getBondingCurveAddress(tokenAddress: string): Promise<`0x$
   if (!INCENTIFI_BONDING_CURVE_FACTORY || INCENTIFI_BONDING_CURVE_FACTORY === '0x') {
     return null;
   }
+  const normalizedToken = getAddress(tokenAddress);
+
+  // A `null` return means the Factory legitimately has no curve registered
+  // for this token. An RPC/network failure is a different situation entirely
+  // and must NOT be reinterpreted as "no curve" — it is rethrown with context
+  // so callers (including bots polling this) can tell the two apart and retry
+  // instead of concluding the token doesn't exist.
+  let curve: unknown;
   try {
-    const normalizedToken = getAddress(tokenAddress);
-    const curve = await publicClient.readContract({
+    curve = await publicClient.readContract({
       address: getAddress(INCENTIFI_BONDING_CURVE_FACTORY),
       abi: BONDING_CURVE_FACTORY_ABI,
       functionName: 'getBondingCurve',
       args: [normalizedToken],
     } as any);
+  } catch (error) {
+    throw new Error(
+      `RPC error while querying Factory.getBondingCurve(${normalizedToken}): ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error }
+    );
+  }
 
-    if (!curve || curve === '0x0000000000000000000000000000000000000000') {
-      return null;
-    }
-    return curve as `0x${string}`;
-  } catch (err) {
-    console.warn('Failed to resolve bonding curve address from factory:', err);
+  if (!curve || curve === '0x0000000000000000000000000000000000000000') {
     return null;
   }
+  return curve as `0x${string}`;
 }
 
 /**
@@ -309,28 +302,38 @@ export async function fetchBondingCurveState(
 ): Promise<BondingCurveState> {
   const normalizedToken = getAddress(tokenAddress);
 
+  // NOTE: deliberately not wrapped in a catch-all. An RPC/network failure
+  // must propagate as a real thrown error rather than being reinterpreted as
+  // "token has no bonding curve yet" — that fallback previously made a
+  // transient RPC blip indistinguishable from a legitimately unregistered
+  // token, which surfaced to users/bots as the misleading "bonding curve has
+  // not been activated" message. Callers should catch this themselves and
+  // decide how to handle a genuine RPC failure (retry, show an error, etc.).
+  const curveAddress = await getBondingCurveAddress(normalizedToken);
+
+  if (!curveAddress) {
+    // Legitimate case: the Factory has no curve registered for this token.
+    const { priceEth, marketCapUsd, progressBps } = calculateSpotPriceAndMarketCap(0n, TOTAL_TOKEN_SUPPLY, ethPriceUsd);
+    return {
+      curveAddress: null,
+      initialized: true,
+      graduated: false,
+      realEthReserve: 0n,
+      realTokenReserve: TOTAL_TOKEN_SUPPLY,
+      progressBps,
+      currentPriceEth: priceEth,
+      marketCapUsd,
+      circulatingTokens: 0,
+      uniswapPoolAddress: null,
+    };
+  }
+
+  let realEthReserveRaw: unknown;
+  let realTokenReserveRaw: unknown;
+  let graduatedRaw: unknown;
   try {
-    const curveAddress = await getBondingCurveAddress(normalizedToken);
-
-    if (!curveAddress) {
-      // Return default deterministic initial state
-      const { priceEth, marketCapUsd, progressBps } = calculateSpotPriceAndMarketCap(0n, TOTAL_TOKEN_SUPPLY, ethPriceUsd);
-      return {
-        curveAddress: null,
-        initialized: true,
-        graduated: false,
-        realEthReserve: 0n,
-        realTokenReserve: TOTAL_TOKEN_SUPPLY,
-        progressBps,
-        currentPriceEth: priceEth,
-        marketCapUsd,
-        circulatingTokens: 0,
-        uniswapPoolAddress: null,
-      };
-    }
-
     // Read curve state on-chain via dedicated Robinhood Chain publicClient
-    const [realEthReserveRaw, realTokenReserveRaw, graduatedRaw] = await Promise.all([
+    [realEthReserveRaw, realTokenReserveRaw, graduatedRaw] = await Promise.all([
       publicClient.readContract({
         address: curveAddress,
         abi: BONDING_CURVE_ABI,
@@ -347,47 +350,39 @@ export async function fetchBondingCurveState(
         functionName: 'graduated',
       } as any),
     ]);
-
-    const realEthReserve = BigInt((realEthReserveRaw as any) ?? 0n);
-    const realTokenReserve = BigInt((realTokenReserveRaw as any) ?? TOTAL_TOKEN_SUPPLY);
-    const graduated = Boolean(graduatedRaw);
-
-    const { priceEth, marketCapUsd, progressBps } = calculateSpotPriceAndMarketCap(
-      realEthReserve,
-      realTokenReserve,
-      ethPriceUsd
-    );
-
-    const circulatingTokens = Number(TOTAL_TOKEN_SUPPLY - realTokenReserve) / 1e18;
-
-    return {
-      curveAddress,
-      initialized: true,
-      graduated,
-      realEthReserve,
-      realTokenReserve,
-      progressBps: graduated ? 10000 : progressBps,
-      currentPriceEth: priceEth,
-      marketCapUsd,
-      circulatingTokens,
-      uniswapPoolAddress: null,
-    };
   } catch (error) {
-    console.warn('Error reading bonding curve state on-chain:', error);
-    const { priceEth, marketCapUsd, progressBps } = calculateSpotPriceAndMarketCap(0n, TOTAL_TOKEN_SUPPLY, ethPriceUsd);
-    return {
-      curveAddress: null,
-      initialized: true,
-      graduated: false,
-      realEthReserve: 0n,
-      realTokenReserve: TOTAL_TOKEN_SUPPLY,
-      progressBps,
-      currentPriceEth: priceEth,
-      marketCapUsd,
-      circulatingTokens: 0,
-      uniswapPoolAddress: null,
-    };
+    throw new Error(
+      `RPC error while reading bonding curve state for token ${normalizedToken} (curve ${curveAddress}): ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error }
+    );
   }
+
+  const realEthReserve = BigInt((realEthReserveRaw as any) ?? 0n);
+  const realTokenReserve = BigInt((realTokenReserveRaw as any) ?? TOTAL_TOKEN_SUPPLY);
+  const graduated = Boolean(graduatedRaw);
+
+  const { priceEth, marketCapUsd, progressBps } = calculateSpotPriceAndMarketCap(
+    realEthReserve,
+    realTokenReserve,
+    ethPriceUsd
+  );
+
+  const circulatingTokens = Number(TOTAL_TOKEN_SUPPLY - realTokenReserve) / 1e18;
+
+  return {
+    curveAddress,
+    initialized: true,
+    graduated,
+    realEthReserve,
+    realTokenReserve,
+    progressBps: graduated ? 10000 : progressBps,
+    currentPriceEth: priceEth,
+    marketCapUsd,
+    circulatingTokens,
+    uniswapPoolAddress: null,
+  };
 }
 
 /**

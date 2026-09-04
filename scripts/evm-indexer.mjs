@@ -84,6 +84,36 @@ const INCENTIFI_BONDING_CURVE_FACTORY = (process.env.VITE_INCENTIFI_BONDING_CURV
 const LOSS_REWARD_POOL = (process.env.VITE_LOSS_REWARD_POOL || '0x697bda9db5a297a9cd9ed969bbf2549d0527dcdf');
 const INCENTIFI_SWAP_ROUTER = (process.env.VITE_INCENTIFI_SWAP_ROUTER || '0xbba0384bf34b5cc26daa2c06cdf765bbdeb2acdf');
 
+// This process indexes on-chain trade events into `holder_cost_basis` for ALL
+// registered tokens in one loop (not one worker per token), so it reports a single
+// global heartbeat rather than the per-token pattern used by phase3-indexer.mjs.
+// scripts/loss-reward-worker.mjs gates loss-reward snapshots on this heartbeat's
+// freshness before trusting `holder_cost_basis` as "not stale".
+const EVM_INDEXER_WORKER_NAME = 'evm-indexer';
+const EVM_INDEXER_LOOP_MS = 10_000;
+
+async function upsertIndexerHeartbeat(status, message) {
+  try {
+    const { error } = await supabase.from('indexer_heartbeats').upsert(
+      {
+        worker_name: EVM_INDEXER_WORKER_NAME,
+        symbol: 'ALL',
+        mint_address: '0x0000000000000000000000000000000000000000',
+        status,
+        message: message || '',
+        loop_ms: EVM_INDEXER_LOOP_MS,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'worker_name' }
+    );
+    if (error) {
+      console.error('[HEARTBEAT ERROR] Failed to upsert indexer_heartbeats:', error.message);
+    }
+  } catch (err) {
+    console.error('[HEARTBEAT ERROR] Failed to upsert indexer_heartbeats:', err.message);
+  }
+}
+
 const blockTimeCache = new Map();
 
 async function getBlockTimeIso(blockNumber) {
@@ -528,10 +558,12 @@ export async function runIndexer() {
 
       // Successfully processed all events for range; advance block pointer safely
       lastPolledBlock = toBlock;
+      await upsertIndexerHeartbeat('ok', `Indexed through block ${toBlock}`);
     } catch (err) {
       console.error('Indexer loop error (will retry next interval without advancing block):', err.message);
+      await upsertIndexerHeartbeat('error', err.message);
     }
-  }, 10_000);
+  }, EVM_INDEXER_LOOP_MS);
 }
 
 if (process.argv[1]?.endsWith('evm-indexer.mjs')) {

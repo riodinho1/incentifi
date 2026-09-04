@@ -23,7 +23,21 @@ export const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || '';
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
-const SESSION_SECRET = Deno.env.get('SESSION_SECRET') || 'incentifi-loss-reward-default-secret-key-256';
+
+// SESSION_SECRET signs the HS256 JWTs that authenticate wallet sessions for
+// loss-reward claim access. There is deliberately NO hardcoded fallback here:
+// a default secret checked into source would let anyone forge a valid session
+// for any wallet address. Fail fast at cold start instead of silently running
+// with a public, guessable key.
+const SESSION_SECRET = Deno.env.get('SESSION_SECRET');
+if (!SESSION_SECRET) {
+  throw new Error(
+    'SESSION_SECRET environment variable is required and must not be empty. ' +
+      'Refusing to start with an insecure default — set a strong, unique secret ' +
+      'in the Edge Function environment before deploying.'
+  );
+}
+
 const RPC_URL = Deno.env.get('RPC_URL') || Deno.env.get('VITE_EVM_RPC_URL') || Deno.env.get('EVM_RPC_URL') || 'https://rpc.mainnet.chain.robinhood.com';
 const LOSS_REWARD_POOL_ADDRESS = Deno.env.get('LOSS_REWARD_POOL_ADDRESS') || Deno.env.get('VITE_LOSS_REWARD_POOL') || '0x697bda9db5a297a9cd9ed969bbf2549d0527dcdf';
 const OPERATOR_PRIVATE_KEY = Deno.env.get('OPERATOR_PRIVATE_KEY') || '';

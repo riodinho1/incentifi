@@ -1,8 +1,10 @@
 # Go-Live Checklist (Mainnet)
 
 ## Config
-- Set `VITE_SOLANA_NETWORK=mainnet`
-- Set production `VITE_RPC_URL`
+- Confirm `VITE_EVM_CHAIN_ID=4663` (Robinhood Chain) — the app throws at startup if this resolves to anything else
+- Set production `VITE_EVM_RPC_URL` (defaults to `https://rpc.mainnet.chain.robinhood.com`)
+- Set `VITE_EVM_EXPLORER_URL` if not using the default (`https://explorer.mainnet.chain.robinhood.com`)
+- Set `SESSION_SECRET` on the `loss-reward-gateway` Supabase Edge Function — it now fails to start without one
 - Remove dev/test placeholder env values
 
 ## Security
