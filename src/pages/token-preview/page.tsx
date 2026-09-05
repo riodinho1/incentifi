@@ -1522,7 +1522,9 @@ const TokenPreviewPage = () => {
             <div className="flex items-center justify-between">
               <span>Trading Venue</span>
               <span className="text-white font-medium">
-                {unifiedMarket?.isGraduated ? 'Uniswap V3 Pool' : 'Incentifi Bonding Curve'}
+                {unifiedMarket?.isGraduated
+                  ? (unifiedMarket?.isV4 ? 'Uniswap V4 Pool' : 'Uniswap V3 Pool')
+                  : 'Incentifi Bonding Curve'}
               </span>
             </div>
             <div className="flex items-center justify-between">
@@ -1643,7 +1645,9 @@ const TokenPreviewPage = () => {
             <div className="flex items-center justify-between">
               <span>Trading Venue</span>
               <span className="text-white font-medium">
-                {unifiedMarket?.isGraduated ? 'Uniswap V3 Pool' : 'Incentifi Bonding Curve'}
+                {unifiedMarket?.isGraduated
+                  ? (unifiedMarket?.isV4 ? 'Uniswap V4 Pool' : 'Uniswap V3 Pool')
+                  : 'Incentifi Bonding Curve'}
               </span>
             </div>
             <div className="flex items-center justify-between">
