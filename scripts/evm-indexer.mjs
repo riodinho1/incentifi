@@ -80,9 +80,9 @@ const LOSS_POOL_ABI = parseAbi([
   'function getUnallocatedBalance(address token) view returns (uint256)',
 ]);
 
-const INCENTIFI_BONDING_CURVE_FACTORY = (process.env.VITE_INCENTIFI_BONDING_CURVE_FACTORY || '0x9fcea653c6f31c82606582b22da82b39f61f9c0e');
+const INCENTIFI_BONDING_CURVE_FACTORY = (process.env.VITE_INCENTIFI_BONDING_CURVE_FACTORY || '0xa0143de84fba1753b887e4e32941e4fb342e473f');
 const LOSS_REWARD_POOL = (process.env.VITE_LOSS_REWARD_POOL || '0x697bda9db5a297a9cd9ed969bbf2549d0527dcdf');
-const INCENTIFI_SWAP_ROUTER = (process.env.VITE_INCENTIFI_SWAP_ROUTER || '0xbba0384bf34b5cc26daa2c06cdf765bbdeb2acdf');
+const INCENTIFI_SWAP_ROUTER = (process.env.VITE_INCENTIFI_SWAP_ROUTER || '0x4c1f4197b5eebb6cc15c37e053f963a56787575e');
 
 // This process indexes on-chain trade events into `holder_cost_basis` for ALL
 // registered tokens in one loop (not one worker per token), so it reports a single

@@ -25,7 +25,7 @@ export const UNISWAP_QUOTER_V2 = String(
 ).trim() as `0x${string}`;
 
 export const INCENTIFI_SWAP_ROUTER = String(
-  import.meta.env.VITE_INCENTIFI_SWAP_ROUTER || '0xbba0384bf34b5cc26daa2c06cdf765bbdeb2acdf'
+  import.meta.env.VITE_INCENTIFI_SWAP_ROUTER || '0x4c1f4197b5eebb6cc15c37e053f963a56787575e'
 ).trim() as `0x${string}`;
 
 export const LOSS_REWARD_POOL = String(
@@ -33,7 +33,7 @@ export const LOSS_REWARD_POOL = String(
 ).trim() as `0x${string}`;
 
 export const INCENTIFI_BONDING_CURVE_FACTORY = String(
-  import.meta.env.VITE_INCENTIFI_BONDING_CURVE_FACTORY || '0x9fcea653c6f31c82606582b22da82b39f61f9c0e'
+  import.meta.env.VITE_INCENTIFI_BONDING_CURVE_FACTORY || '0xa0143de84fba1753b887e4e32941e4fb342e473f'
 ).trim() as `0x${string}`;
 
 export const WETH_ADDRESS = String(
