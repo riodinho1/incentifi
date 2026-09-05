@@ -36,6 +36,33 @@ export const INCENTIFI_BONDING_CURVE_FACTORY = String(
   import.meta.env.VITE_INCENTIFI_BONDING_CURVE_FACTORY || '0xa0143de84fba1753b887e4e32941e4fb342e473f'
 ).trim() as `0x${string}`;
 
+// V4: new token launches go through this factory/router/hook instead of the V3
+// ones above (which remain here, unchanged, so already-launched V3 tokens stay
+// tradeable). This is IncentifiV4HookNoPostGradFee — the core, already
+// real-mainnet-proven bonding-curve/graduation logic at full production
+// economics ($5,000 launch / $69,000 graduation), wired to the real production
+// LossRewardPool — WITHOUT the newer afterSwap post-graduation fee mechanism
+// (that 6-flag hook remains deployed and paused pending funding). Once a token
+// launched here graduates, its pool trades with zero Incentifi protocol fee —
+// deliberate, not a bug: see contracts/v4/IncentifiV4HookNoPostGradFee.sol's
+// header comment. Independently verified on-chain (code, cross-wiring,
+// deployer, lossRewardPool == real production pool, GRADUATION_ETH_TARGET ==
+// full production value) before this address was ever used here.
+export const INCENTIFI_V4_FACTORY = String(
+  import.meta.env.VITE_INCENTIFI_V4_FACTORY || '0xdEca2efDB578B6E5F298885b97F64d52f92f5Aa9'
+).trim() as `0x${string}`;
+
+export const INCENTIFI_V4_ROUTER = String(
+  import.meta.env.VITE_INCENTIFI_V4_ROUTER || '0x0666399367fa585d672BF793158b35290b7F4082'
+).trim() as `0x${string}`;
+
+// The shared hook every V4-launched token's pool uses. Not a per-token
+// contract (unlike the V3 bonding curve) — there is no "curve address" for a
+// V4 token; its state lives in this hook's own curveStates(poolId) mapping.
+export const INCENTIFI_V4_HOOK = String(
+  import.meta.env.VITE_INCENTIFI_V4_HOOK || '0x5bBcf2CDAAA00c285eEc903AA1E2aB9142782888'
+).trim() as `0x${string}`;
+
 export const WETH_ADDRESS = String(
   import.meta.env.VITE_WETH_ADDRESS || '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73'
 ).trim() as `0x${string}`;

@@ -9,7 +9,7 @@ import {
   waitForTransactionReceipt,
 } from './evmNetwork';
 import { INCENTIFI_LAUNCH_TOKEN_BYTECODE } from './incentifiLaunchTokenBytecode';
-import { INCENTIFI_BONDING_CURVE_FACTORY } from './uniswapAddresses';
+import { INCENTIFI_V4_FACTORY, INCENTIFI_V4_HOOK } from './uniswapAddresses';
 
 export type CreateEvmTokenProgressCallback = (
   step: number,
@@ -31,9 +31,14 @@ const ERC20_APPROVE_ABI = parseAbi([
   'function balanceOf(address account) view returns (uint256)',
 ]);
 
-const FACTORY_REGISTER_ABI = parseAbi([
-  'function registerExistingToken(address token, address creator) returns (address curve)',
-  'function getBondingCurve(address token) view returns (address)',
+// V4: IncentifiV4Factory.launchToken() replaces registerExistingToken() — one
+// call, no separate `creator` arg (it reads msg.sender and cross-checks it
+// against token.creator() itself). isLaunched() replaces getBondingCurve() for
+// post-launch verification — V4 has no per-token curve contract to look up;
+// the launch either registered successfully or it didn't.
+const FACTORY_V4_ABI = parseAbi([
+  'function launchToken(address token) returns (bytes32 poolId)',
+  'function isLaunched(address token) view returns (bool)',
 ]);
 
 const strip0x = (value: string) => value.replace(/^0x/i, '');
@@ -113,7 +118,7 @@ export const createEvmToken = async (_provider: any, input: CreateEvmTokenInput)
   const tokenAddress = getAddress(deployReceipt.contractAddress as string);
 
   // --------------------------------------------------------------------------
-  // STEP 2/3: Authorize Bonding Curve Factory (Approve 1B Supply)
+  // STEP 2/3: Authorize the V4 Factory (Approve 1B Supply)
   // --------------------------------------------------------------------------
   onProgress?.(
     2,
@@ -125,7 +130,7 @@ export const createEvmToken = async (_provider: any, input: CreateEvmTokenInput)
   const approveData = encodeFunctionData({
     abi: ERC20_APPROVE_ABI,
     functionName: 'approve',
-    args: [INCENTIFI_BONDING_CURVE_FACTORY, TOTAL_SUPPLY],
+    args: [INCENTIFI_V4_FACTORY, TOTAL_SUPPLY],
   });
 
   const approveTxHash = await provider.request({
@@ -142,7 +147,8 @@ export const createEvmToken = async (_provider: any, input: CreateEvmTokenInput)
   await waitForReceipt(approveTxHash, 'Factory approval');
 
   // --------------------------------------------------------------------------
-  // STEP 3/3: Initialize Incentifi Bonding Curve
+  // STEP 3/3: Launch on the V4 Factory (registers the token + initializes its
+  // pool against the shared hook in one call — no separate curve deployment)
   // --------------------------------------------------------------------------
   onProgress?.(
     3,
@@ -151,52 +157,51 @@ export const createEvmToken = async (_provider: any, input: CreateEvmTokenInput)
     `Please confirm the final transaction to deploy and activate the bonding curve on Robinhood Chain.`
   );
 
-  const registerData = encodeFunctionData({
-    abi: FACTORY_REGISTER_ABI,
-    functionName: 'registerExistingToken',
-    args: [tokenAddress, account],
+  const launchData = encodeFunctionData({
+    abi: FACTORY_V4_ABI,
+    functionName: 'launchToken',
+    args: [tokenAddress],
   });
 
-  const registerTxHash = await provider.request({
+  const launchTxHash = await provider.request({
     method: 'eth_sendTransaction',
     params: [
       {
         from: account,
-        to: INCENTIFI_BONDING_CURVE_FACTORY,
-        data: registerData,
+        to: INCENTIFI_V4_FACTORY,
+        data: launchData,
       },
     ],
   });
 
-  await waitForReceipt(registerTxHash, 'Bonding curve initialization');
+  await waitForReceipt(launchTxHash, 'Bonding curve initialization');
 
   // --------------------------------------------------------------------------
-  // VERIFICATION: Verify Curve on-chain and confirm 1B inventory
+  // VERIFICATION: confirm the factory registered the launch, and that the full
+  // 1B supply actually landed on the shared hook (V4 has no per-token curve
+  // contract to look up — IncentifiV4Hook._beforeInitialize already enforces
+  // this same balance check on-chain before the pool activates at all; this
+  // re-confirms it independently rather than just trusting the tx didn't revert).
   // --------------------------------------------------------------------------
-  const getCurveData = encodeFunctionData({
-    abi: FACTORY_REGISTER_ABI,
-    functionName: 'getBondingCurve',
+  const isLaunchedData = encodeFunctionData({
+    abi: FACTORY_V4_ABI,
+    functionName: 'isLaunched',
     args: [tokenAddress],
   });
 
-  const curveRes = await provider.request({
+  const isLaunchedRes = await provider.request({
     method: 'eth_call',
-    params: [{ to: INCENTIFI_BONDING_CURVE_FACTORY, data: getCurveData }, 'latest'],
+    params: [{ to: INCENTIFI_V4_FACTORY, data: isLaunchedData }, 'latest'],
   });
 
-  const curveAddress = (curveRes && curveRes.length >= 66
-    ? getAddress(`0x${curveRes.slice(26)}`)
-    : null) as `0x${string}` | null;
-
-  if (!curveAddress || curveAddress === '0x0000000000000000000000000000000000000000') {
-    throw new Error('Bonding curve was created, but Factory lookup returned a zero address.');
+  if (BigInt(isLaunchedRes || '0x0') !== 1n) {
+    throw new Error('Bonding curve initialization transaction succeeded, but Factory.isLaunched() still reports false.');
   }
 
-  // Verify curve holds the 1B tokens
   const balanceData = encodeFunctionData({
     abi: ERC20_APPROVE_ABI,
     functionName: 'balanceOf',
-    args: [curveAddress],
+    args: [INCENTIFI_V4_HOOK],
   });
 
   const balRes = await provider.request({
@@ -204,21 +209,26 @@ export const createEvmToken = async (_provider: any, input: CreateEvmTokenInput)
     params: [{ to: tokenAddress, data: balanceData }, 'latest'],
   });
 
-  const curveTokenBalance = BigInt(balRes || '0x0');
-  if (curveTokenBalance !== TOTAL_SUPPLY) {
+  const hookTokenBalance = BigInt(balRes || '0x0');
+  if (hookTokenBalance !== TOTAL_SUPPLY) {
     throw new Error(
-      `Bonding curve token balance verification failed: expected ${TOTAL_SUPPLY} tokens, but found ${curveTokenBalance}.`
+      `Bonding curve token balance verification failed: expected ${TOTAL_SUPPLY} tokens on the hook, but found ${hookTokenBalance}.`
     );
   }
 
   return {
     mint: tokenAddress,
-    curveAddress,
+    // V4 has no per-token curve contract — every launched token's pool state
+    // lives in the shared hook's own curveStates mapping instead of a
+    // dedicated address. Left null (not omitted) so callers see explicitly
+    // that this field doesn't apply anymore, rather than reading undefined.
+    curveAddress: null as `0x${string}` | null,
+    hookAddress: INCENTIFI_V4_HOOK,
     creatorAddress: account,
     chain: EVM_CHAIN_NAME,
     txExplorer: EVM_TX_URL(deployTxHash),
     explorer: EVM_ADDRESS_URL(tokenAddress),
-    curveExplorer: EVM_ADDRESS_URL(curveAddress),
+    curveExplorer: EVM_ADDRESS_URL(INCENTIFI_V4_HOOK),
     launchPayment: null,
   };
 };

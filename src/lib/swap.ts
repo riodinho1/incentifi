@@ -19,6 +19,12 @@ import {
   REFERENCE_ETH_USD,
   BondingCurveState,
 } from './bondingCurve';
+import {
+  isV4LaunchedToken,
+  fetchV4CurveState,
+  executeV4Buy,
+  executeV4Sell,
+} from './bondingCurveV4';
 
 const FACTORY_ABI = parseAbi([
   'function getPool(address tokenA, address tokenB, uint24 fee) view returns (address pool)',
@@ -102,15 +108,45 @@ export type UnifiedMarketState = {
   circulatingTokens: number;
   realEthReserveEth: number;
   realTokenReserveTokens: number;
+  /** True for a token launched through the V4 factory (see ./bondingCurveV4). */
+  isV4?: boolean;
+  /**
+   * False only for a graduated V4 pool — IncentifiV4Router doesn't support
+   * post-graduation trades and no replacement router is deployed yet (see
+   * bondingCurveV4.ts's header comment). Always true otherwise.
+   */
+  tradingSupported?: boolean;
 };
 
 /**
- * Unified query resolving either pre-graduation Bonding Curve or post-graduation Uniswap V3.
+ * Unified query resolving, in order: V4 bonding curve / V4 pool, v3 Bonding
+ * Curve, or post-graduation Uniswap V3 — whichever actually applies to this
+ * token. New launches go through V4 (see src/lib/createEvmToken.ts); tokens
+ * launched before that switch remain on v3, so both paths stay live here.
  */
 export const getUnifiedMarketState = async (
   tokenAddress: string,
   ethPriceUsd: number = REFERENCE_ETH_USD
 ): Promise<UnifiedMarketState> => {
+  if (await isV4LaunchedToken(tokenAddress)) {
+    const v4State = await fetchV4CurveState(tokenAddress, ethPriceUsd);
+    return {
+      isBondingCurve: !v4State.graduated,
+      isGraduated: v4State.graduated,
+      isV4: true,
+      tradingSupported: v4State.tradingSupported,
+      poolAddress: v4State.uniswapPoolAddress || undefined,
+      curveAddress: undefined, // V4 has no per-token curve contract
+      priceEth: v4State.currentPriceEth,
+      priceUsd: v4State.currentPriceEth * ethPriceUsd,
+      marketCapUsd: v4State.marketCapUsd,
+      progressBps: v4State.progressBps,
+      circulatingTokens: v4State.circulatingTokens,
+      realEthReserveEth: Number(v4State.realEthReserve) / 1e18,
+      realTokenReserveTokens: Number(v4State.realTokenReserve) / 1e18,
+    };
+  }
+
   const curveState = await fetchBondingCurveState(tokenAddress, ethPriceUsd);
 
   if (!curveState.graduated) {
@@ -196,6 +232,37 @@ export const buyToken = async (
       : parseEther(String(ethAmount).trim());
 
   if (ethWei <= 0n) throw new Error('Enter a valid ETH amount.');
+
+  // 0. V4-launched token: route to the V4 factory/hook/router instead.
+  if (await isV4LaunchedToken(token)) {
+    const v4State = await fetchV4CurveState(token, ethPriceUsd);
+    if (v4State.graduated) {
+      // executeV4Buy would throw this same error — surfaced here first so the
+      // quote math below isn't computed against a curve that no longer exists.
+      throw new Error(
+        "This token has graduated to a real, permissionless V4 pool. Trading it directly through this site isn't " +
+        'wired up yet — post-graduation V4 trading needs its own dedicated router, which hasn\'t been deployed.'
+      );
+    }
+
+    const { tokensOut } = calculateTokensOut(ethWei, v4State.realEthReserve, v4State.realTokenReserve);
+    const minTokensOut = applySlippage(tokensOut, slippagePct * 100);
+
+    const { txHash } = await executeV4Buy(token, ethWei, minTokensOut, v4State.graduated);
+
+    const tokensPurchasedNum = Number(tokensOut) / 1e18;
+    const ethPaidNum = Number(ethWei) / 1e18;
+
+    return {
+      txHash,
+      trade: {
+        side: 'buy',
+        amountToken: tokensPurchasedNum,
+        amountEth: ethPaidNum,
+        priceEth: tokensPurchasedNum > 0 ? ethPaidNum / tokensPurchasedNum : 0,
+      },
+    };
+  }
 
   const curveState = await fetchBondingCurveState(token, ethPriceUsd);
 
@@ -304,6 +371,35 @@ export const sellToken = async (
       : parseUnits(String(tokenAmount).trim(), 18);
 
   if (tokenWei <= 0n) throw new Error('Enter a valid token amount.');
+
+  // 0. V4-launched token: route to the V4 factory/hook/router instead.
+  if (await isV4LaunchedToken(token)) {
+    const v4State = await fetchV4CurveState(token, ethPriceUsd);
+    if (v4State.graduated) {
+      throw new Error(
+        "This token has graduated to a real, permissionless V4 pool. Trading it directly through this site isn't " +
+        'wired up yet — post-graduation V4 trading needs its own dedicated router, which hasn\'t been deployed.'
+      );
+    }
+
+    const { netEthOut } = calculateEthOut(tokenWei, v4State.realEthReserve, v4State.realTokenReserve);
+    const minEthOut = applySlippage(netEthOut, slippagePct * 100);
+
+    const { txHash } = await executeV4Sell(token, tokenWei, minEthOut, v4State.graduated);
+
+    const tokensSoldNum = Number(tokenWei) / 1e18;
+    const ethReceivedNum = Number(netEthOut) / 1e18;
+
+    return {
+      txHash,
+      trade: {
+        side: 'sell',
+        amountToken: tokensSoldNum,
+        amountEth: ethReceivedNum,
+        priceEth: tokensSoldNum > 0 ? ethReceivedNum / tokensSoldNum : 0,
+      },
+    };
+  }
 
   const curveState = await fetchBondingCurveState(token, ethPriceUsd);
 
