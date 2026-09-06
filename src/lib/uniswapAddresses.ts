@@ -63,6 +63,20 @@ export const INCENTIFI_V4_HOOK = String(
   import.meta.env.VITE_INCENTIFI_V4_HOOK || '0x5bBcf2CDAAA00c285eEc903AA1E2aB9142782888'
 ).trim() as `0x${string}`;
 
+// Canonical Uniswap Permit2 + UniversalRouter deployments on Robinhood Chain mainnet.
+// Independently verified on-chain before use here: both addresses have real deployed
+// bytecode; Permit2.DOMAIN_SEPARATOR() returns a real, non-zero value; Permit2.allowance()
+// responds with the expected (uint160 amount, uint48 expiration, uint48 nonce) shape.
+// Used by src/lib/permit2.ts's "allow external bots to sell this token" flow — a
+// deliberately separate, explicitly-labeled action, never bundled into buyToken/sellToken.
+export const PERMIT2_ADDRESS = String(
+  import.meta.env.VITE_PERMIT2_ADDRESS || '0x000000000022D473030F116dDEE9F6B43aC78BA3'
+).trim() as `0x${string}`;
+
+export const UNIVERSAL_ROUTER_ADDRESS = String(
+  import.meta.env.VITE_UNIVERSAL_ROUTER_ADDRESS || '0x8876789976dEcBfCbBbe364623C63652db8C0904'
+).trim() as `0x${string}`;
+
 export const WETH_ADDRESS = String(
   import.meta.env.VITE_WETH_ADDRESS || '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73'
 ).trim() as `0x${string}`;

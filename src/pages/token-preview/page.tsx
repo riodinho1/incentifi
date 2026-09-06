@@ -66,6 +66,11 @@ import {
   calculateGrossEthForTokens,
   TOTAL_TOKEN_SUPPLY,
 } from '../../lib/bondingCurve';
+import {
+  getExternalBotSellingStatus,
+  enableExternalBotSelling,
+  type ExternalBotSellingStatus,
+} from '../../lib/permit2';
 import IncentifiPriceChart, { type ChartPoint, type Trade, type TradeSide } from './IncentifiPriceChart';
 
 type TokenData = {
@@ -259,6 +264,13 @@ const TokenPreviewPage = () => {
   const [unlocking, setUnlocking] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
+  // "Allow external bots to sell this token" — deliberately separate from the loss-reward
+  // state above and from the buy/sell flow entirely. See src/lib/permit2.ts's header
+  // comment for why this must always be its own explicit action.
+  const [botSellingStatus, setBotSellingStatus] = useState<ExternalBotSellingStatus | null>(null);
+  const [enablingBotSelling, setEnablingBotSelling] = useState(false);
+  const [botSellingMsg, setBotSellingMsg] = useState<string | null>(null);
+
   // Fetch live ETH/USD price from Coinbase
   useEffect(() => {
     let cancelled = false;
@@ -312,6 +324,49 @@ const TokenPreviewPage = () => {
       }
     } catch (err: any) {
       console.warn('Loss reward data load issue:', err);
+    }
+  };
+
+  const loadBotSellingStatus = async () => {
+    if (!tokenData?.mintAddress || !connectedWallet) {
+      setBotSellingStatus(null);
+      return;
+    }
+    try {
+      const status = await getExternalBotSellingStatus(tokenData.mintAddress, connectedWallet);
+      setBotSellingStatus(status);
+    } catch (err: any) {
+      console.warn('Could not load external-bot-selling status:', err);
+    }
+  };
+
+  useEffect(() => {
+    loadBotSellingStatus();
+  }, [tokenData?.mintAddress, connectedWallet]);
+
+  const handleEnableBotSelling = async () => {
+    if (!connectedWallet || !tokenData?.mintAddress) return;
+    try {
+      setEnablingBotSelling(true);
+      setBotSellingMsg(null);
+      const { steps } = await enableExternalBotSelling(tokenData.mintAddress, (step) => {
+        setBotSellingMsg(
+          step === 'erc20-approve'
+            ? 'Step 1 of 2 confirmed — approving Universal Router in Permit2...'
+            : 'Step 2 of 2 confirmed...'
+        );
+      });
+      await loadBotSellingStatus();
+      setBotSellingMsg(
+        steps.length > 0
+          ? 'Done — external bots and other Uniswap-compatible tools can now sell this token for you.'
+          : 'Already enabled — nothing to do.'
+      );
+    } catch (err: any) {
+      console.error('Enable external bot selling failed:', err);
+      setBotSellingMsg(describeError(err));
+    } finally {
+      setEnablingBotSelling(false);
     }
   };
 
@@ -1918,6 +1973,54 @@ const TokenPreviewPage = () => {
     </div>
   );
 
+  // Deliberately its own card, its own button, its own copy — never merged into the
+  // buy/sell panel above. See src/lib/permit2.ts's header comment for why.
+  const renderBotSellingCard = () => {
+    if (!connectedWallet) return null;
+    return (
+      <div className="bg-[#0B1120] border border-[#1D2940] rounded-2xl p-4 sm:p-5 shadow-xl shadow-black/20">
+        <h3 className="text-white font-bold text-sm mb-1">Allow External Bots to Sell This Token</h3>
+        <p className="text-[#8DA3CD] text-[11px] leading-relaxed mb-3">
+          This lets Uniswap's Universal Router move this token from your wallet, so third-party trading bots and
+          tools (e.g. Telegram trading bots) can sell it for you. Two on-chain transactions, paid by your own wallet.
+        </p>
+
+        {botSellingStatus?.fullyEnabled ? (
+          <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-3 space-y-1">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span className="text-emerald-400 text-xs font-medium">Enabled — external bots can sell this token for you.</span>
+            </div>
+            {botSellingStatus.permit2ExpiresAt && (
+              <p className="text-emerald-400/70 text-[11px] pl-6">
+                Expires {botSellingStatus.permit2ExpiresAt.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
+                {' '}— come back and re-enable it after that.
+              </p>
+            )}
+          </div>
+        ) : (
+          <button
+            onClick={handleEnableBotSelling}
+            disabled={enablingBotSelling}
+            className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#2563EB] to-[#1D4ED8] hover:from-[#1D4ED8] hover:to-[#1E40AF] text-white font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2 shadow-md shadow-blue-500/20"
+          >
+            {enablingBotSelling ? (
+              <span>Confirm in wallet...</span>
+            ) : botSellingStatus?.erc20ApprovedToPermit2 ? (
+              <span>Finish Enabling (1 transaction left)</span>
+            ) : (
+              <span>Enable External Bot Selling (2 transactions)</span>
+            )}
+          </button>
+        )}
+
+        {botSellingMsg && (
+          <p className="text-center text-[#8DA3CD] text-[11px] mt-2">{botSellingMsg}</p>
+        )}
+      </div>
+    );
+  };
+
   const renderContractDetailsCard = () => (
     <div className="bg-[#0B1120] border border-[#1D2940] rounded-2xl p-4 sm:p-5 shadow-xl shadow-black/20">
       <h3 className="text-white font-bold text-sm mb-3">Token Contract Details</h3>
@@ -2209,6 +2312,7 @@ const TokenPreviewPage = () => {
                 {renderTradingPanel()}
                 {renderPositionCard()}
                 {renderLossRewardCard()}
+                {renderBotSellingCard()}
               </div>
 
               {/* 2. TOKEN ABOUT / DESCRIPTION */}
@@ -2365,6 +2469,7 @@ const TokenPreviewPage = () => {
               {renderTradingPanel()}
               {renderPositionCard()}
               {renderLossRewardCard()}
+              {renderBotSellingCard()}
               {renderContractDetailsCard()}
             </aside>
           </div>

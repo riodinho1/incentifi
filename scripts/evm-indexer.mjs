@@ -6,6 +6,7 @@ import {
   parseAbiItem,
   getAddress,
 } from 'viem';
+import { createServer as createViteServer } from 'vite';
 import fs from 'fs';
 
 // Robust .env.local loader
@@ -80,9 +81,37 @@ const LOSS_POOL_ABI = parseAbi([
   'function getUnallocatedBalance(address token) view returns (uint256)',
 ]);
 
+// V4: unlike V3's per-token BondingCurveCreated, there is one shared factory whose
+// TokenLaunched event is the only on-chain record of "a V4 token exists" — there is no
+// per-token curve contract to independently discover from, so this event IS the discovery
+// mechanism (see discoverV4TokensInRange below), not just a convenience.
+const V4_FACTORY_ABI = parseAbi([
+  'event TokenLaunched(address indexed token, address indexed creator, bytes32 poolId)',
+]);
+const ERC20_SYMBOL_ABI = parseAbi(['function symbol() view returns (string)']);
+
 const INCENTIFI_BONDING_CURVE_FACTORY = (process.env.VITE_INCENTIFI_BONDING_CURVE_FACTORY || '0xa0143de84fba1753b887e4e32941e4fb342e473f');
 const LOSS_REWARD_POOL = (process.env.VITE_LOSS_REWARD_POOL || '0x697bda9db5a297a9cd9ed969bbf2549d0527dcdf');
 const INCENTIFI_SWAP_ROUTER = (process.env.VITE_INCENTIFI_SWAP_ROUTER || '0x4c1f4197b5eebb6cc15c37e053f963a56787575e');
+const INCENTIFI_V4_FACTORY = (process.env.VITE_INCENTIFI_V4_FACTORY || '0xdEca2efDB578B6E5F298885b97F64d52f92f5Aa9');
+
+// Reference ETH/USD used for price_usd — kept numerically identical to
+// src/lib/bondingCurve.ts's REFERENCE_ETH_USD (also 2500) so V3 and V4 rows in
+// token_market_snapshots_evm are computed on the same basis.
+const REFERENCE_ETH_USD = 2500;
+
+// Conservative floor for the one-time V4 TokenLaunched historical catch-up scan (see
+// discoverV4TokensInRange). NOT derived from a binary search on eth_getCode/eth_getBytecode
+// — this RPC only retains full state (balances, code) for roughly the last 5,600-6,000
+// blocks (empirically measured against real responses; confirmed independently the hard
+// way while building test/hardhat/loss-reward-fork.test.ts), so a getCode-based binary
+// search for the V4 factory's real deployment block is unreliable for anything older than
+// that. getLogs, in contrast, has been repeatedly confirmed to work correctly across much
+// older block ranges on this same RPC. This floor was chosen by chunked getLogs scanning
+// from a wide starting point and confirming it still finds the real, known TokenLaunched
+// events (TESTTT among them) with room to spare — comfortably before the V4 factory's
+// actual deployment, not an exact value that could go stale as more blocks pass.
+const V4_DISCOVERY_FLOOR_BLOCK = 54_600_000n;
 
 // This process indexes on-chain trade events into `holder_cost_basis` for ALL
 // registered tokens in one loop (not one worker per token), so it reports a single
@@ -438,6 +467,139 @@ export async function updateMarketSnapshot(tokenAddress, symbol, curveAddress) {
   }
 }
 
+// ============================================================================
+// V4 token discovery + market snapshot indexing
+// ============================================================================
+// V4 has no per-token curve contract to read state from directly (unlike V3's
+// IncentifiBondingCurve) — every launched token shares one hook instance, keyed by a
+// PoolId derived from the token's PoolKey. src/lib/bondingCurveV4.ts's
+// fetchV4CurveState() already implements the full pre-/post-graduation state-reading
+// logic (hook.curveStates(poolId) pre-graduation, StateView.getSlot0(poolId)
+// post-graduation) and is the single, already-verified source of truth for it — reused
+// here via Vite's SSR module loader rather than re-derived, so there is exactly one
+// implementation of this logic for the whole app to ever drift out of sync with. This
+// is heavier than a plain import (a Vite dev server has to spin up once), which is an
+// acceptable one-time startup cost for a long-running indexer process; it is NOT
+// re-created per call, per tick, or per token.
+
+let v4ModulePromise = null;
+async function getV4Module() {
+  if (!v4ModulePromise) {
+    v4ModulePromise = (async () => {
+      const viteServer = await createViteServer({ server: { middlewareMode: true }, appType: 'custom' });
+      return viteServer.ssrLoadModule('/src/lib/bondingCurveV4.ts');
+    })();
+  }
+  return v4ModulePromise;
+}
+
+// lowercase token address -> symbol, for every V4 token discovered so far this process.
+const v4TokenSymbolCache = new Map();
+// Block through which V4 TokenLaunched events have been scanned. Starts unset until
+// discoverV4TokensInRange's one-time historical catch-up (see runIndexer) has run, so the
+// per-tick incremental scan below never fires against an unpopulated cache.
+let v4LastScannedBlock = null;
+
+async function getLogsWithRetry(params, { retries = 3, baseDelayMs = 500 } = {}) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await client.getLogs(params);
+    } catch (err) {
+      if (attempt >= retries) throw err;
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * (attempt + 1)));
+    }
+  }
+}
+
+/**
+ * Scans [fromBlock, toBlock] in 5,000-block chunks (this RPC's per-call range cap, same
+ * limit already respected everywhere else in this file) for real TokenLaunched events on
+ * the V4 factory, resolving and caching each newly-discovered token's real ERC20 symbol()
+ * directly from-chain (independent of whatever the `tokens` table may or may not have —
+ * that table's row is a best-effort client-side write from the launch flow and can be
+ * missing even for a real, successfully-launched token). Retries each chunk on transient
+ * RPC failure rather than silently skipping it, since a skipped chunk here would mean
+ * permanently missing a real token launch, not just a delayed retry on the next tick (this
+ * function is also used for the one-time historical catch-up, where there is no "next
+ * tick" to self-heal on).
+ */
+export async function discoverV4TokensInRange(fromBlock, toBlock, { chunkSize = 5000n } = {}) {
+  let from = fromBlock;
+  while (from <= toBlock) {
+    const to = from + chunkSize > toBlock ? toBlock : from + chunkSize;
+    const logs = await getLogsWithRetry({
+      address: getAddress(INCENTIFI_V4_FACTORY),
+      event: parseAbiItem('event TokenLaunched(address indexed token, address indexed creator, bytes32 poolId)'),
+      fromBlock: from,
+      toBlock: to,
+    });
+
+    for (const log of logs) {
+      const tokenAddr = log.args.token.toLowerCase();
+      if (v4TokenSymbolCache.has(tokenAddr)) continue;
+      try {
+        const symbol = await client.readContract({
+          address: getAddress(tokenAddr),
+          abi: ERC20_SYMBOL_ABI,
+          functionName: 'symbol',
+        });
+        v4TokenSymbolCache.set(tokenAddr, symbol);
+        console.log(`[V4 DISCOVERY] Found V4 token ${symbol} (${tokenAddr}) launched at block ${log.blockNumber}`);
+      } catch (err) {
+        console.warn(`[V4 DISCOVERY] Could not read symbol() for newly-discovered V4 token ${tokenAddr}: ${err.message}`);
+      }
+    }
+
+    from = to + 1n;
+  }
+}
+
+/**
+ * Updates token_market_snapshots_evm for a single V4 token from its real, live on-chain
+ * state, in the same row shape V3 snapshots use so home/page.tsx's existing
+ * snapshot-based rendering picks it up with no V4-specific branching needed there.
+ */
+export async function updateV4MarketSnapshot(tokenAddress, symbol, fetchV4CurveState) {
+  try {
+    const state = await fetchV4CurveState(tokenAddress, REFERENCE_ETH_USD);
+    const priceEth = state.currentPriceEth || 0;
+    // Mirrors V3's own liquidity_eth approximation (real ETH reserve, doubled to
+    // represent both sides of the pool) for consistency between V3 and V4 rows in the
+    // same table — see updateMarketSnapshot above.
+    const liquidityEth = (Number(state.realEthReserve) / 1e18) * 2;
+
+    let lossPoolTvlEth = 0;
+    try {
+      const tvl = await client.readContract({
+        address: getAddress(LOSS_REWARD_POOL),
+        abi: LOSS_POOL_ABI,
+        functionName: 'getUnallocatedBalance',
+        args: [getAddress(tokenAddress)],
+      });
+      lossPoolTvlEth = Number(tvl) / 1e18;
+    } catch {
+      // Ignore
+    }
+
+    const { error: snapErr } = await supabase.from('token_market_snapshots_evm').upsert({
+      token_address: tokenAddress.toLowerCase(),
+      symbol: symbol.toUpperCase(),
+      price_eth: priceEth,
+      price_usd: priceEth * REFERENCE_ETH_USD,
+      liquidity_eth: liquidityEth,
+      market_cap_usd: state.marketCapUsd || 0,
+      loss_pool_tvl_eth: lossPoolTvlEth,
+      updated_at: new Date().toISOString(),
+    });
+
+    if (snapErr) {
+      throw new Error(`[DB ERROR] Failed to upsert token_market_snapshots_evm (V4 ${symbol}): ${snapErr.code} ${snapErr.message}`);
+    }
+  } catch (err) {
+    console.warn(`Could not update V4 market snapshot for ${symbol}:`, err.message);
+  }
+}
+
 /**
  * Main Indexer Poller Loop
  */
@@ -445,9 +607,26 @@ export async function runIndexer() {
   console.log('--- Starting Incentifi EVM Indexer ---');
   console.log(`RPC: ${RPC_URL}`);
   console.log(`Factory: ${INCENTIFI_BONDING_CURVE_FACTORY}`);
+  console.log(`V4 Factory: ${INCENTIFI_V4_FACTORY}`);
 
   let lastPolledBlock = 0n;
   const curveAddressCache = new Map();
+
+  // One-time V4 TokenLaunched historical catch-up: without this, the per-tick
+  // incremental scan below (which only ever looks at the current tick's small block
+  // window) would never see a V4 token launched before this process started — there is
+  // no `tokens`-table-style registry this side can fall back on, since the whole point
+  // of event-based discovery is to work independently of that (see the V4 section's
+  // header comment above for why). Runs once, before the poller loop begins.
+  try {
+    const catchupEndBlock = await client.getBlockNumber();
+    console.log(`[V4 DISCOVERY] Running one-time historical catch-up scan (block ${V4_DISCOVERY_FLOOR_BLOCK} → ${catchupEndBlock})...`);
+    await discoverV4TokensInRange(V4_DISCOVERY_FLOOR_BLOCK, catchupEndBlock);
+    v4LastScannedBlock = catchupEndBlock;
+    console.log(`[V4 DISCOVERY] Historical catch-up complete. Found ${v4TokenSymbolCache.size} V4 token(s) so far.`);
+  } catch (err) {
+    console.error('[V4 DISCOVERY] Historical catch-up scan failed — V4 tokens will not be indexed until this succeeds on a future restart:', err.message);
+  }
 
   setInterval(async () => {
     try {
@@ -480,6 +659,29 @@ export async function runIndexer() {
       // Cap chunk size to 5,000 blocks to prevent RPC timeout/range errors
       const CHUNK_SIZE = 5000n;
       const toBlock = currentBlock > fromBlock + CHUNK_SIZE ? fromBlock + CHUNK_SIZE : currentBlock;
+
+      // V4: independent of the `tokens` table (see the V4 section's header comment) and
+      // of whether any V3 tokens exist, so this runs unconditionally every tick, in its
+      // own try/catch so a V4-specific hiccup never blocks V3 indexing for this tick.
+      if (v4LastScannedBlock !== null) {
+        try {
+          // Guard against toBlock (bounded by the unrelated V3 cursor's own chunking)
+          // ever being behind v4LastScannedBlock — keeps this cursor monotonic even if
+          // V3's own cursor is temporarily lagging chain head for some other reason.
+          if (toBlock > v4LastScannedBlock) {
+            await discoverV4TokensInRange(v4LastScannedBlock + 1n, toBlock);
+            v4LastScannedBlock = toBlock;
+          }
+          if (v4TokenSymbolCache.size > 0) {
+            const v4Module = await getV4Module();
+            for (const [tokenAddr, symbol] of v4TokenSymbolCache) {
+              await updateV4MarketSnapshot(tokenAddr, symbol, v4Module.fetchV4CurveState);
+            }
+          }
+        } catch (err) {
+          console.warn('[V4] Discovery/snapshot pass failed this tick (will retry next tick):', err.message);
+        }
+      }
 
       // 1. Fetch active tokens
       const { data: tokens, error: tokensErr } = await supabase.from('tokens').select('mint_address, symbol');
