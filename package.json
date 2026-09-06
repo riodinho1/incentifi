@@ -20,6 +20,8 @@
   "dependencies": {
     "@stripe/react-stripe-js": "4.0.2",
     "@supabase/supabase-js": "^2.57.4",
+    "@uniswap/v4-core": "^1.0.2",
+    "@uniswap/v4-periphery": "^1.0.3",
     "buffer": "^6.0.3",
     "firebase": "^12.7.0",
     "i18next": "^25.3.2",

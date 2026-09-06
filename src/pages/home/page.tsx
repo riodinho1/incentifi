@@ -26,6 +26,7 @@ import {
 import WalletButton from '../../components/WalletButton';
 import { EVM_CHAIN_NAME } from '../../lib/evmNetwork';
 import { supabase } from '../../lib/supabase';
+import { getUnifiedMarketState } from '../../lib/swap';
 
 type TokenItem = {
   id: string;
@@ -81,6 +82,8 @@ const HomePage = () => {
   const [howModalOpen, setHowModalOpen] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
+
     const fetchTokens = async () => {
       try {
         const [tokensRes, snapshotsRes] = await Promise.all([
@@ -97,11 +100,26 @@ const HomePage = () => {
           }
         }
 
+        // Tokens with no row here fall through to the live on-chain fallback
+        // below — currently every V4-launched token, since
+        // token_market_snapshots_evm is written exclusively by
+        // scripts/evm-indexer.mjs, which only knows about the V3 factory/curves
+        // (see src/lib/bondingCurveV4.ts's header comment — extending that
+        // worker to also index V4 hook state is real backend work, tracked
+        // separately, not done here). Without this fallback, any V4 token
+        // shows a static, never-updating $5,000 placeholder forever, since
+        // `snap` here is permanently undefined for it.
+        const mintsNeedingLiveFallback: string[] = [];
+
         const tenMinutes = 10 * 60 * 1000;
         const tokensList = ((tokensRes.data || []).map((row: Record<string, unknown>) => {
           const createdAt = row.created_at || new Date();
           const mint = String(row.mint_address || '').toLowerCase();
           const snap = snapshotsByMint.get(mint);
+
+          if (!snap && mint) {
+            mintsNeedingLiveFallback.push(mint);
+          }
 
           // Calculate real Pump.fun market cap: 1,000,000,000 tokens * price (or initial $5,000)
           const priceEth = snap ? Number(snap.price_eth || 0) : 0;
@@ -126,6 +144,45 @@ const HomePage = () => {
 
         setTokens(tokensList);
 
+        // Live fallback, second pass: fetch real on-chain state for whichever
+        // tokens above had no indexed snapshot (V3 tokens should always have
+        // one; in practice this is V4 tokens today). Runs after the initial
+        // render so the snapshot-covered majority isn't held up waiting on
+        // extra RPC calls, and merges in per-token as each resolves rather
+        // than replacing the whole list at once.
+        if (mintsNeedingLiveFallback.length > 0) {
+          const results = await Promise.allSettled(
+            mintsNeedingLiveFallback.map(async (mint) => {
+              const market = await getUnifiedMarketState(mint);
+              return { mint, market };
+            })
+          );
+
+          if (cancelled) return;
+
+          const liveByMint = new Map<string, { priceEth: number; marketCapUsd: number }>();
+          for (const result of results) {
+            if (result.status === 'fulfilled' && result.value.market.marketCapUsd > 0) {
+              liveByMint.set(result.value.mint, {
+                priceEth: result.value.market.priceEth,
+                marketCapUsd: result.value.market.marketCapUsd,
+              });
+            } else if (result.status === 'rejected') {
+              console.warn('Live market-state fallback failed for a token with no indexed snapshot:', result.reason);
+            }
+          }
+
+          if (liveByMint.size > 0) {
+            setTokens((prev) =>
+              prev.map((token) => {
+                const mint = String(token.mint_address || '').toLowerCase();
+                const live = liveByMint.get(mint);
+                return live ? { ...token, priceEth: live.priceEth, marketCapUsd: live.marketCapUsd } : token;
+              })
+            );
+          }
+        }
+
       } catch (err) {
         console.error('Supabase fetch error:', err);
       }
@@ -133,7 +190,10 @@ const HomePage = () => {
 
     fetchTokens();
     const interval = setInterval(fetchTokens, 30000);
-    return () => clearInterval(interval);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, []);
 
   const filteredTokens = useMemo(() => {
