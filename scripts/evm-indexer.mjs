@@ -93,7 +93,12 @@ const ERC20_SYMBOL_ABI = parseAbi(['function symbol() view returns (string)']);
 const INCENTIFI_BONDING_CURVE_FACTORY = (process.env.VITE_INCENTIFI_BONDING_CURVE_FACTORY || '0xa0143de84fba1753b887e4e32941e4fb342e473f');
 const LOSS_REWARD_POOL = (process.env.VITE_LOSS_REWARD_POOL || '0x697bda9db5a297a9cd9ed969bbf2549d0527dcdf');
 const INCENTIFI_SWAP_ROUTER = (process.env.VITE_INCENTIFI_SWAP_ROUTER || '0x4c1f4197b5eebb6cc15c37e053f963a56787575e');
-const INCENTIFI_V4_FACTORY = (process.env.VITE_INCENTIFI_V4_FACTORY || '0xdEca2efDB578B6E5F298885b97F64d52f92f5Aa9');
+// The IncentifiV4HookGenericSell factory (see src/lib/uniswapAddresses.ts for the
+// full provenance). Discovery watches THIS factory's TokenLaunched events only:
+// tokens on the previous factory (0xdEca2efD… — TESTTT, TESST, TESTING) are
+// deliberately no longer refreshed here, matching the site's single-factory
+// resolution; their last token_market_snapshots_evm rows simply stop updating.
+const INCENTIFI_V4_FACTORY = (process.env.VITE_INCENTIFI_V4_FACTORY || '0x4166418Ceec501f6d4F6D1fb279d23e7fDD259d0');
 
 // Reference ETH/USD used for price_usd — kept numerically identical to
 // src/lib/bondingCurve.ts's REFERENCE_ETH_USD (also 2500) so V3 and V4 rows in
