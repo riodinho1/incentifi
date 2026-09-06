@@ -14,3 +14,24 @@ coverage/
 artifacts/
 cache/
 typechain-types/
+
+# Local-only deployment result written by scripts/deploy-v3-fixed-factory-and-router.ts
+scripts/.v3-deployment-result.json
+# Local-only resumable run state written by scripts/verify-v3-fix-mainnet.ts
+scripts/.v3-verify-state.json
+# Local-only deployment result/state written by scripts/deploy-v4-hook-production-mainnet.ts
+scripts/.v4-hook-deployment-result.json
+scripts/.v4-hook-deployment-state.json
+# Local-only resumable run state written by scripts/verify-v4-hook-production-mainnet.ts
+scripts/.v4-verify-state.json
+# Local-only deployment result/state written by scripts/deploy-v4-hook-production-logic-test-mainnet.ts
+scripts/.v4-logic-test-deployment-result.json
+scripts/.v4-logic-test-deployment-state.json
+# Local-only resumable run state written by scripts/verify-v4-hook-production-logic-test-mainnet.ts
+scripts/.v4-logic-test-verify-state.json
+# Local-only deployment result/state written by scripts/deploy-v4-hook-no-postgrad-fee-mainnet.ts
+scripts/.v4-no-postgrad-fee-deployment-result.json
+scripts/.v4-no-postgrad-fee-deployment-state.json
+# Local-only deployment result/state written by scripts/deploy-v4-hook-generic-sell-mainnet.ts
+scripts/.v4-generic-sell-deployment-result.json
+scripts/.v4-generic-sell-deployment-state.json
