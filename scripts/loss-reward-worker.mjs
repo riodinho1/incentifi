@@ -11,6 +11,7 @@ import {
   concat,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { createServer as createViteServer } from 'vite';
 import fs from 'fs';
 
 // ============================================================================
@@ -316,10 +317,43 @@ export function hashLeaf(tokenAddress, epochId, claimant, amountWei) {
   return keccak256(innerHash);
 }
 
+// V4 price logic is NOT reimplemented here. src/lib/bondingCurveV4.ts's fetchV4CurveState()
+// is the single, already-verified implementation (hook.curveStates(poolId) virtual-reserve
+// math pre-graduation; StateView.getSlot0(poolId) post-graduation) that the site and
+// scripts/evm-indexer.mjs both read from, so this worker loads that same TypeScript module
+// through Vite's SSR loader exactly the way the indexer already does — one price formula for
+// the whole app to drift out of sync with, not two. The Vite server is created lazily, once
+// per process (a one-time startup cost for a long-running worker), never per call.
+let v4ViteServerPromise = null;
+let v4ModulePromise = null;
+async function getV4Module() {
+  if (!v4ModulePromise) {
+    v4ViteServerPromise = createViteServer({ server: { middlewareMode: true, watch: null, hmr: false }, appType: 'custom', logLevel: 'warn' });
+    v4ModulePromise = v4ViteServerPromise.then((viteServer) => viteServer.ssrLoadModule('/src/lib/bondingCurveV4.ts'));
+    v4ModulePromise.catch(() => {
+      // Don't cache a failed load — the next price lookup retries it.
+      v4ModulePromise = null;
+      v4ViteServerPromise = null;
+    });
+  }
+  return v4ModulePromise;
+}
+
+/** Tears down the lazily-created Vite server (tests only — lets the process exit cleanly). */
+export async function closeV4Module() {
+  if (!v4ViteServerPromise) return;
+  const viteServer = await v4ViteServerPromise.catch(() => null);
+  v4ViteServerPromise = null;
+  v4ModulePromise = null;
+  if (viteServer) await viteServer.close();
+}
+
 /**
  * Resolves the authoritative benchmark price for a token:
- * - If PRE-GRADUATION: Queries the Incentifi Bonding Curve getCurrentPrice() (or reserve calculation).
- * - If GRADUATED: Queries the canonical Uniswap V3 Pool 30-minute TWAP (with slot0 fallback).
+ * - V3 PRE-GRADUATION: Queries the Incentifi Bonding Curve getCurrentPrice() (or reserve calculation).
+ * - V3 GRADUATED: Queries the canonical Uniswap V3 Pool 30-minute TWAP (with slot0 fallback).
+ * - V4 (no V3 curve registered for the token): fetchV4CurveState() — hook.curveStates(poolId)
+ *   pre-graduation, StateView.getSlot0(poolId) post-graduation (see getV4Module above).
  */
 export async function getTokenBenchmarkPriceEth(tokenAddress) {
   const token = getAddress(tokenAddress);
@@ -430,6 +464,29 @@ export async function getTokenBenchmarkPriceEth(tokenAddress) {
     }
   }
 
+  // V4: the V3 factory knows nothing about this token (no curve registered). A V4 token has
+  // no per-token curve contract at all — its state lives in the shared hook, keyed by poolId
+  // — so without this branch every V4 epoch is skipped as invalid_price even once Fix 1 has
+  // populated holder_cost_basis for it.
+  if (!curveAddr || curveAddr === '0x0000000000000000000000000000000000000000') {
+    try {
+      const v4 = await getV4Module();
+      if (await v4.isV4LaunchedToken(token)) {
+        const state = await v4.fetchV4CurveState(token);
+        if (state.currentPriceEth > 0) {
+          return {
+            priceEth: state.currentPriceEth,
+            isGraduated: Boolean(state.graduated),
+            source: state.graduated ? 'v4_stateview_slot0' : 'v4_hook_curve',
+          };
+        }
+        console.warn(`[V4 PRICE] ${token} is V4-launched but resolved to a zero price (initialized=${state.initialized}, graduated=${state.graduated}).`);
+      }
+    } catch (err) {
+      console.error(`[V4 PRICE ERROR] Could not resolve V4 price for ${token}:`, err.message);
+    }
+  }
+
   return { priceEth: 0, isGraduated: isGrad, source: 'unknown' };
 }
 
@@ -537,7 +594,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
       console.log(`[EPOCH WORKER] No valid benchmark price for ${token}. Skipping epoch.`);
       return { skipped: true, reason: 'invalid_price' };
     }
-    console.log(`[PRICE BENCHMARK] ${priceRes.isGraduated ? 'Graduated (Uniswap V3)' : 'Pre-Graduation (Bonding Curve)'} Price: ${benchmarkPriceEth.toExponential(6)} ETH per token (Source: ${priceRes.source})`);
+    console.log(`[PRICE BENCHMARK] ${priceRes.isGraduated ? 'Graduated' : 'Pre-Graduation'} Price: ${benchmarkPriceEth.toExponential(6)} ETH per token (Source: ${priceRes.source})`);
 
     // 3. Reconcile On-Chain vs Database Epoch State
     const { data: latestDbEpoch, error: dbEpochErr } = await supabase
