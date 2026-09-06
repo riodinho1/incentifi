@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node test/loss-reward-audit.test.mjs && node test/worker-hardening.test.mjs && node test/session-daemon.test.mjs && node test/symbol-registry.test.mjs && node test/bonding-curve-v3-harness.test.mjs && node test/comprehensive-bonding-curve.test.mjs && node test/fee-on-transfer-accounting.test.mjs && node test/graduation-price-continuity.test.mjs && node test/creator-pull-payment.test.mjs && node test/indexer-freshness-gate.test.mjs && node test/integration-layer.test.mjs",
+    "test": "node test/loss-reward-audit.test.mjs && node test/worker-hardening.test.mjs && node test/session-daemon.test.mjs && node test/symbol-registry.test.mjs && node test/bonding-curve-v3-harness.test.mjs && node test/comprehensive-bonding-curve.test.mjs && node test/fee-on-transfer-accounting.test.mjs && node test/graduation-price-continuity.test.mjs && node test/creator-pull-payment.test.mjs && node test/indexer-freshness-gate.test.mjs && node test/underwater-requalification.test.mjs && node test/integration-layer.test.mjs",
     "daemon": "node scripts/daemon.mjs",
     "test:v4-replay": "node test/v4-trade-replay.test.mjs",
     "test:fork": "hardhat test nodejs --network robinhoodFork",
