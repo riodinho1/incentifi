@@ -38,29 +38,38 @@ export const INCENTIFI_BONDING_CURVE_FACTORY = String(
 
 // V4: new token launches go through this factory/router/hook instead of the V3
 // ones above (which remain here, unchanged, so already-launched V3 tokens stay
-// tradeable). This is IncentifiV4HookNoPostGradFee — the core, already
-// real-mainnet-proven bonding-curve/graduation logic at full production
-// economics ($5,000 launch / $69,000 graduation), wired to the real production
-// LossRewardPool — WITHOUT the newer afterSwap post-graduation fee mechanism
-// (that 6-flag hook remains deployed and paused pending funding). Once a token
-// launched here graduates, its pool trades with zero Incentifi protocol fee —
-// deliberate, not a bug: see contracts/v4/IncentifiV4HookNoPostGradFee.sol's
-// header comment. Independently verified on-chain (code, cross-wiring,
-// deployer, lossRewardPool == real production pool, GRADUATION_ETH_TARGET ==
-// full production value) before this address was ever used here.
+// tradeable). This is IncentifiV4HookGenericSell — IncentifiV4HookNoPostGradFee's
+// exact bonding-curve/graduation logic at full production economics ($5,000
+// launch / $69,000 graduation), wired to the real production LossRewardPool,
+// no fee of any kind once graduated — PLUS the claims-based sell fix: a
+// pre-graduation sell receives tokens as ERC-6909 claims instead of a physical
+// take(), so generic V4 routers and third-party bots (which settle AFTER
+// swap()) can sell, not only IncentifiV4Router. Root cause, fix rationale and
+// the fork-test evidence: contracts/v4/IncentifiV4HookGenericSell.sol's header.
+// Independently verified on-chain after deployment (flag bits 0x2888,
+// deployer, lossRewardPool == real production pool, GRADUATION_ETH_TARGET /
+// VIRTUAL_ETH == production values, exact 4-flag permission set, and the
+// factory/hook/router cross-wiring) before these addresses were used here.
+//
+// The PREVIOUS hook (IncentifiV4HookNoPostGradFee, 0x5bBcf2CD…) and its factory
+// (0xdEca2efD…) / router (0x0666399…) stay live on-chain. Tokens launched on
+// them (TESTTT, TESST, TESTING) are permanently bound to that hook — a pool's
+// hook address is immutable — and are deliberately NOT resolved by this site
+// any more (a single-factory lookup was chosen over multi-factory support;
+// they were test tokens). Their pools remain tradeable via the old router.
 export const INCENTIFI_V4_FACTORY = String(
-  import.meta.env.VITE_INCENTIFI_V4_FACTORY || '0xdEca2efDB578B6E5F298885b97F64d52f92f5Aa9'
+  import.meta.env.VITE_INCENTIFI_V4_FACTORY || '0x4166418Ceec501f6d4F6D1fb279d23e7fDD259d0'
 ).trim() as `0x${string}`;
 
 export const INCENTIFI_V4_ROUTER = String(
-  import.meta.env.VITE_INCENTIFI_V4_ROUTER || '0x0666399367fa585d672BF793158b35290b7F4082'
+  import.meta.env.VITE_INCENTIFI_V4_ROUTER || '0x762b4D9e514e4B19E54E99b62E7b731CE37FF1E6'
 ).trim() as `0x${string}`;
 
 // The shared hook every V4-launched token's pool uses. Not a per-token
 // contract (unlike the V3 bonding curve) — there is no "curve address" for a
 // V4 token; its state lives in this hook's own curveStates(poolId) mapping.
 export const INCENTIFI_V4_HOOK = String(
-  import.meta.env.VITE_INCENTIFI_V4_HOOK || '0x5bBcf2CDAAA00c285eEc903AA1E2aB9142782888'
+  import.meta.env.VITE_INCENTIFI_V4_HOOK || '0xC5Ef9Cb8c95cd8540E71b6D4c00a90257625a888'
 ).trim() as `0x${string}`;
 
 // Canonical Uniswap Permit2 + UniversalRouter deployments on Robinhood Chain mainnet.
