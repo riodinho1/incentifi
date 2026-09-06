@@ -50,7 +50,15 @@ function jsonResponse(status, body) {
 // so this mock can never again be bypassed by an unexpected env var.
 const REST_PATH_MARKER = '/rest/v1/';
 
-export function createSupabaseRestMock(supabaseUrl, passthroughFetch = globalThis.fetch) {
+// `upsertKeys` maps table name -> the column(s) PostgREST would treat as the conflict
+// target for that table (its primary key), so a POST carrying
+// `Prefer: resolution=merge-duplicates` (supabase-js `.upsert()`) MERGES into the existing
+// row instead of appending a duplicate — required by scripts/evm-indexer.mjs, whose
+// processBuyTrade/processSellTrade upsert holder_cost_basis and token_candles_1m
+// repeatedly and then re-read them with `.maybeSingle()`. An explicit `?on_conflict=`
+// query param (supabase-js `{ onConflict }`) takes precedence when present. Tables not
+// listed here keep the original append behaviour.
+export function createSupabaseRestMock(supabaseUrl, passthroughFetch = globalThis.fetch, { upsertKeys = {} } = {}) {
   const restBase = new URL('/rest/v1/', supabaseUrl);
   const tables = new Map();
   const counters = new Map();
@@ -167,7 +175,18 @@ export function createSupabaseRestMock(supabaseUrl, passthroughFetch = globalThi
       const bodyText = typeof init.body === 'string' ? init.body : await new Response(init.body).text();
       const parsed = JSON.parse(bodyText);
       const items = Array.isArray(parsed) ? parsed : [parsed];
+      const onConflictParam = u.searchParams.get('on_conflict');
+      const mergeKeys = prefer.includes('resolution=merge-duplicates')
+        ? (onConflictParam ? onConflictParam.split(',') : upsertKeys[tableName]) || null
+        : null;
       const inserted = items.map((item) => {
+        if (mergeKeys) {
+          const existing = rows.find((r) => mergeKeys.every((k) => normalize(r[k]) === normalize(item[k])));
+          if (existing) {
+            Object.assign(existing, item);
+            return existing;
+          }
+        }
         const row = { ...item };
         if (tableName === 'reward_epochs' && row.epoch_id === undefined) row.epoch_id = nextId(tableName);
         if (tableName === 'epoch_holder_rewards' && row.id === undefined) row.id = nextId(tableName);

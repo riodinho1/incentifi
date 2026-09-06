@@ -87,6 +87,23 @@ const LOSS_POOL_ABI = parseAbi([
 // mechanism (see discoverV4TokensInRange below), not just a convenience.
 const V4_FACTORY_ABI = parseAbi([
   'event TokenLaunched(address indexed token, address indexed creator, bytes32 poolId)',
+  // The shared hook every pool launched by this factory is bound to (a public immutable on
+  // IncentifiV4Factory). Read from-chain once rather than carried as a second hardcoded
+  // address here, so the factory stays the single source of truth for "which hook".
+  'function hook() view returns (address)',
+]);
+// The hook's own trade events, one shared contract for every V4 pool (hence the poolId
+// filter in indexV4TradesInRange). Field semantics — verified against the emit sites in
+// contracts/v4/IncentifiV4HookGenericSell.sol, not assumed:
+//   * `trader` is tx.origin, so it is the end wallet even when the swap was routed through
+//     a third-party bot contract or UniversalRouter — exactly what holder_cost_basis needs.
+//   * `ethIn` is GROSS ETH in (creator + loss-pool fee still included), `ethOut` is NET ETH
+//     to the seller (fees already removed): the same semantics as V3's
+//     TokensPurchased.ethInGross / TokensSold.netEthOut, so processBuyTrade and
+//     processSellTrade below apply to V4 unchanged.
+const V4_HOOK_TRADE_EVENTS = parseAbi([
+  'event Bought(bytes32 indexed poolId, address indexed trader, uint256 ethIn, uint256 tokensOut, uint256 creatorFee, uint256 lossPoolFee)',
+  'event Sold(bytes32 indexed poolId, address indexed trader, uint256 tokensIn, uint256 ethOut, uint256 creatorFee, uint256 lossPoolFee)',
 ]);
 const ERC20_SYMBOL_ABI = parseAbi(['function symbol() view returns (string)']);
 
@@ -500,6 +517,25 @@ async function getV4Module() {
 
 // lowercase token address -> symbol, for every V4 token discovered so far this process.
 const v4TokenSymbolCache = new Map();
+// lowercase poolId (bytes32 hex) -> lowercase token address, for the same tokens. The hook's
+// Bought/Sold events identify the pool, not the token, so this is how a trade log is mapped
+// back to the token whose trades/candles/cost-basis rows it belongs in.
+const v4PoolIdToToken = new Map();
+
+let v4HookAddressPromise = null;
+async function getV4HookAddress() {
+  if (!v4HookAddressPromise) {
+    v4HookAddressPromise = client
+      .readContract({ address: getAddress(INCENTIFI_V4_FACTORY), abi: V4_FACTORY_ABI, functionName: 'hook' })
+      .then((addr) => getAddress(addr))
+      .catch((err) => {
+        // Don't cache a failure — let the next tick re-read it.
+        v4HookAddressPromise = null;
+        throw err;
+      });
+  }
+  return v4HookAddressPromise;
+}
 // Block through which V4 TokenLaunched events have been scanned. Starts unset until
 // discoverV4TokensInRange's one-time historical catch-up (see runIndexer) has run, so the
 // per-tick incremental scan below never fires against an unpopulated cache.
@@ -549,7 +585,8 @@ export async function discoverV4TokensInRange(fromBlock, toBlock, { chunkSize = 
           functionName: 'symbol',
         });
         v4TokenSymbolCache.set(tokenAddr, symbol);
-        console.log(`[V4 DISCOVERY] Found V4 token ${symbol} (${tokenAddr}) launched at block ${log.blockNumber}`);
+        v4PoolIdToToken.set(log.args.poolId.toLowerCase(), tokenAddr);
+        console.log(`[V4 DISCOVERY] Found V4 token ${symbol} (${tokenAddr}) launched at block ${log.blockNumber}, poolId ${log.args.poolId}`);
       } catch (err) {
         console.warn(`[V4 DISCOVERY] Could not read symbol() for newly-discovered V4 token ${tokenAddr}: ${err.message}`);
       }
@@ -557,6 +594,49 @@ export async function discoverV4TokensInRange(fromBlock, toBlock, { chunkSize = 
 
     from = to + 1n;
   }
+}
+
+/**
+ * Indexes every Bought/Sold the shared V4 hook emitted in [fromBlock, toBlock] for the V4
+ * tokens discovered so far, feeding each one into the SAME processBuyTrade/processSellTrade
+ * the V3 curve-event loop uses — so V4 tokens get token_trades_evm, token_candles_1m and
+ * holder_cost_basis rows in exactly the shape the chart, Recent Trades and the loss-reward
+ * worker already read. One getLogs on the hook per call (the hook is one contract for every
+ * pool), filtered client-side by discovered poolId, so this stays one RPC call per tick no
+ * matter how many V4 tokens exist. Callers pass a window already capped to this RPC's
+ * 5,000-block getLogs range (the poller's own chunking). Returns the number of matched logs.
+ */
+export async function indexV4TradesInRange(fromBlock, toBlock) {
+  if (v4PoolIdToToken.size === 0 || fromBlock > toBlock) return 0;
+  const hookAddress = await getV4HookAddress();
+  const logs = await getLogsWithRetry({
+    address: hookAddress,
+    events: V4_HOOK_TRADE_EVENTS,
+    fromBlock,
+    toBlock,
+  });
+
+  let matched = 0;
+  for (const log of logs) {
+    const tokenAddr = v4PoolIdToToken.get(log.args.poolId.toLowerCase());
+    // A pool this process never discovered (e.g. a token from another factory bound to the
+    // same hook) — not ours to index.
+    if (!tokenAddr) continue;
+    const symbol = v4TokenSymbolCache.get(tokenAddr);
+    const a = log.args;
+    const creatorFee = Number(a.creatorFee) / 1e18;
+    const lossPoolFee = Number(a.lossPoolFee) / 1e18;
+    const blockTime = await getBlockTimeIso(log.blockNumber);
+    const tradeId = `${log.transactionHash}:${log.logIndex ?? 0}`;
+
+    if (log.eventName === 'Bought') {
+      await processBuyTrade(tokenAddr, symbol, a.trader, Number(a.tokensOut) / 1e18, Number(a.ethIn) / 1e18, creatorFee, lossPoolFee, tradeId, log.blockNumber, blockTime);
+    } else {
+      await processSellTrade(tokenAddr, symbol, a.trader, Number(a.tokensIn) / 1e18, Number(a.ethOut) / 1e18, creatorFee, lossPoolFee, tradeId, log.blockNumber, blockTime);
+    }
+    matched += 1;
+  }
+  return matched;
 }
 
 /**
@@ -687,6 +767,16 @@ export async function runIndexer() {
           console.warn('[V4] Discovery/snapshot pass failed this tick (will retry next tick):', err.message);
         }
       }
+
+      // V4 trades for this tick's window — the same [fromBlock, toBlock] the V3 curve-event
+      // loop below indexes, so "Indexed through block N" in the heartbeat means the same
+      // thing for both, and startup recovery (resuming from the newest token_trades_evm row)
+      // covers V4 too. Deliberately OUTSIDE the warn-only try/catch above: a failure here
+      // must reach the outer catch so lastPolledBlock does NOT advance and this window is
+      // retried next tick — the guarantee V3 trades already have. A snapshot can afford to
+      // be a tick late; a skipped trade window would be lost for good, and holder_cost_basis
+      // would be silently wrong for the loss-reward worker.
+      await indexV4TradesInRange(fromBlock, toBlock);
 
       // 1. Fetch active tokens
       const { data: tokens, error: tokensErr } = await supabase.from('tokens').select('mint_address, symbol');
