@@ -272,7 +272,17 @@ describe('IncentifiV4HookGenericSell fork test (real CREATE2 deploy, generic sel
     // ------------------------------------------------------------------------
     // 6. post-graduation generic SELL — ZERO_DELTA pass-through regression
     // ------------------------------------------------------------------------
-    console.log('\n=== 6. post-graduation generic SELL (pass-through) ===');
+    // ------------------------------------------------------------------------
+    // 6. post-graduation: BOTH behaviors together. The generic caller must still
+    //    be able to sell AND buy (ZERO_DELTA pass-through), and — the
+    //    NoPostGradFee half of this hook — NO Incentifi fee of any kind may be
+    //    taken on either trade: LossRewardPool deposits and the creator's
+    //    pull-payment balance must be exactly unchanged across both.
+    // ------------------------------------------------------------------------
+    console.log('\n=== 6. post-graduation generic SELL + BUY: pass-through AND zero fee ===');
+    const pgPoolBefore = await lossPool.read.totalDeposited([token.address]);
+    const pgCreatorBefore = await hook.read.creatorBalances([creator.account.address]);
+
     const pgBal = await token.read.balanceOf([buyer2.account.address]);
     const pgSell = pgBal / 10n;
     assert.ok(pgSell > 0n);
@@ -284,7 +294,21 @@ describe('IncentifiV4HookGenericSell fork test (real CREATE2 deploy, generic sel
     });
     assert.equal(pg.status, 'success');
     assert.equal(pgBal - (await token.read.balanceOf([buyer2.account.address])), pgSell);
-    console.log('post-graduation generic sell OK.');
+    assert.equal(await lossPool.read.totalDeposited([token.address]), pgPoolBefore, 'post-graduation SELL must deposit NOTHING to the LossRewardPool');
+    assert.equal(await hook.read.creatorBalances([creator.account.address]), pgCreatorBefore, 'post-graduation SELL must accrue NO creator fee');
+    console.log('post-graduation generic sell OK — pool deposit delta 0, creator fee delta 0.');
+
+    const pgBuyWei = parseEther('0.05');
+    const pgBuyBalBefore = await token.read.balanceOf([buyer.account.address]);
+    const pgb = await publicClient.waitForTransactionReceipt({
+      hash: await bot.write.swap([poolKey, true, pgBuyWei, 0n], { account: buyer.account, value: pgBuyWei }),
+    });
+    assert.equal(pgb.status, 'success');
+    assert.ok((await token.read.balanceOf([buyer.account.address])) > pgBuyBalBefore, 'post-graduation generic buy must deliver tokens');
+    assert.equal(await lossPool.read.totalDeposited([token.address]), pgPoolBefore, 'post-graduation BUY must deposit NOTHING to the LossRewardPool');
+    assert.equal(await hook.read.creatorBalances([creator.account.address]), pgCreatorBefore, 'post-graduation BUY must accrue NO creator fee');
+    console.log('post-graduation generic buy OK — pool deposit delta 0, creator fee delta 0.');
+    console.log('PASS: both fixes hold together — generic trading works post-graduation with zero Incentifi fee.');
 
     console.log('\n=== RESULT: IncentifiV4HookGenericSell — generic sells work pre- AND post-graduation; claims accounting holds through buys and graduation ===');
   });
