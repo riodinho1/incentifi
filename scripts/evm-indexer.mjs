@@ -249,6 +249,13 @@ export async function aggregateCandle1m(symbol, mintAddress, priceEth, volumeEth
   }
 }
 
+// "Fully exited" tolerance for processBuyTrade's re-qualification rule. Balances are tracked
+// as JS Numbers (wei / 1e18), so a wallet that bought twice and sold the exact wei sum can be
+// left holding a ~1e-9-token float residue rather than exactly 0; treating anything up to
+// one-millionth of a token (1e12 wei on an 18-decimal token — real positions are millions of
+// tokens) as exited keeps such a wallet from being locked out of re-qualification forever.
+export const FULL_EXIT_DUST_TOKENS = 1e-6;
+
 /**
  * Process a Buy trade on bonding curve.
  */
@@ -291,6 +298,16 @@ export async function processBuyTrade(tokenAddress, symbol, trader, amountToken,
   const newBalance = prevBalance + amountToken;
   const newCostBasis = newBalance > 0 ? newInvested / newBalance : 0;
 
+  // Disqualification survives a buy unless the position was FULLY exited first. An
+  // underwater sell (processSellTrade) marks the wallet is_underwater_seller; a buy while
+  // still holding part of that position must not clear it — otherwise a dust-sized re-buy
+  // after a partial loss-sale re-qualifies the very position the sell disqualified (the
+  // loss-reward worker would then pay 10% of that retained position's unrealized loss).
+  // A wallet that sold EVERYTHING and comes back is a fresh entry and starts clean.
+  const fullyExited = prevBalance <= FULL_EXIT_DUST_TOKENS;
+  const isUnderwaterSeller = Boolean(existing?.is_underwater_seller) && !fullyExited;
+  const isEligible = fullyExited ? true : (existing ? Boolean(existing.is_eligible) && !isUnderwaterSeller : true);
+
   // 3. Upsert holder state
   const { error: upsertHolderErr } = await supabase.from('holder_cost_basis').upsert({
     token_address: token,
@@ -298,8 +315,8 @@ export async function processBuyTrade(tokenAddress, symbol, trader, amountToken,
     token_balance: newBalance,
     total_invested_eth: newInvested,
     avg_cost_basis_eth: newCostBasis,
-    is_eligible: true,
-    is_underwater_seller: false,
+    is_eligible: isEligible,
+    is_underwater_seller: isUnderwaterSeller,
     last_updated_at: new Date().toISOString(),
   });
 

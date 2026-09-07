@@ -155,13 +155,13 @@ console.log('');
 // ---------------------------------------------------------------------------
 // 5. holder_cost_basis (cost-basis display + loss-reward eligibility), re-derived here
 //    independently from the fixture using the rule processBuyTrade/processSellTrade
-//    actually implement (unchanged by Fix 1 — V4 trades flow through the same V3 code):
-//    buys add GROSS eth to invested; a sell below avg cost basis flags the wallet
-//    (is_eligible=false, is_underwater_seller=true); and a subsequent BUY resets both flags
-//    (processBuyTrade upserts is_eligible:true / is_underwater_seller:false
-//    unconditionally). That last clause is the existing, deployed behaviour, reproduced
-//    here rather than endorsed — whether a re-buy should re-qualify an underwater seller is
-//    a loss-reward design question, not an indexing one.
+//    implement: buys add GROSS eth to invested; a sell below avg cost basis flags the wallet
+//    (is_eligible=false, is_underwater_seller=true); and a subsequent BUY clears those flags
+//    ONLY if the position had been fully exited first (balance <= FULL_EXIT_DUST_TOKENS) —
+//    a buy while still holding part of a disqualified position keeps it disqualified (see
+//    test/underwater-requalification.test.mjs for the partial-sell cases). Every one of W1's
+//    disqualifying sells on TESTINGG was a FULL exit, so W1's re-buys are fresh entries and
+//    W1 legitimately ends re-qualified here.
 // ---------------------------------------------------------------------------
 console.log('Testing [5/7] holder_cost_basis is reconstructed per wallet from the replayed trades...');
 const expectedHolders = new Map();
@@ -171,11 +171,11 @@ for (const f of FIXTURE) {
   const tokens = Number(f.tokens);
   const eth = Number(f.eth);
   if (f.side === 'buy') {
+    const fullyExited = h.balance <= 1e-6; // FULL_EXIT_DUST_TOKENS
     h.invested += eth;
     h.balance += tokens;
     h.basis = h.balance > 0 ? h.invested / h.balance : 0;
-    h.eligible = true;
-    h.underwaterSeller = false;
+    if (fullyExited) { h.eligible = true; h.underwaterSeller = false; }
   } else {
     const price = eth / tokens;
     const underwater = price < h.basis;
@@ -195,11 +195,14 @@ const sells = trades.filter((t) => t.side === 'sell');
 assert.deepEqual(sells.map((t) => t.is_underwater_sale), [true, true, false, true], 'is_underwater_sale per sell row');
 console.log('  ✓ is_underwater_sale per sell = [true, true, false, true] (sell #7 was profitable, correctly not flagged)');
 
-// Hardcoded end-states, for the same reason as above: W1's buy #5 came AFTER its two
-// underwater sells and its final sell #7 was profitable, so under the deployed rule W1 ends
-// re-qualified; W2's only sell (#8) was underwater and nothing followed, so W2 stays flagged.
-assert.equal(expectedHolders.get(W1).eligible, true, 'fixture-derived: W1 ends eligible (re-qualified by buy #5)');
-assert.equal(expectedHolders.get(W1).underwaterSeller, false, 'fixture-derived: W1 underwater flag reset by buy #5');
+// Hardcoded end-states, for the same reason as above: W1's sells #2 and #4 were underwater
+// but each sold the ENTIRE balance (2,420,055.51 -> 0; 9,615,470.80 -> 0), so buys #3 and #5
+// were fresh entries after full exits and legitimately re-qualify; sell #7 was profitable.
+// W2's only sell (#8) was underwater and nothing followed, so W2 stays flagged.
+const w1BalanceBeforeBuy5 = (() => { let b = 0; for (const f of FIXTURE.slice(0, 4)) if (f.wallet === W1) b = f.side === 'buy' ? b + Number(f.tokens) : Math.max(0, b - Number(f.tokens)); return b; })();
+assert.equal(w1BalanceBeforeBuy5, 0, 'fixture fact: W1 had fully exited before buy #5 (so this fixture exercises the full-exit branch, not the partial-sell one)');
+assert.equal(expectedHolders.get(W1).eligible, true, 'fixture-derived: W1 ends eligible (fresh entry after a full exit)');
+assert.equal(expectedHolders.get(W1).underwaterSeller, false, 'fixture-derived: W1 underwater flag cleared by the full-exit re-entry');
 assert.equal(expectedHolders.get(W2).eligible, false, 'fixture-derived: W2 ends ineligible');
 assert.equal(expectedHolders.get(W2).underwaterSeller, true, 'fixture-derived: W2 flagged underwater');
 
