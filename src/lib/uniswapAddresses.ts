@@ -166,7 +166,23 @@ export const ROBINHOOD_STOCK_FACTORY = String(
   import.meta.env.VITE_ROBINHOOD_STOCK_FACTORY || '0x4783C67b63dE2B358Ac5951a7D41F47A38F3C046'
 ).trim() as `0x${string}`;
 
-/** Robinhood's public asset list (names, logos, ACTIVE status). Filtering only — the chain decides validity. */
+/**
+ * Robinhood's public asset list (names, ACTIVE status). ENRICHMENT ONLY — the chain decides validity.
+ * The browser cannot read it directly: api.robinhood.com sends no Access-Control-Allow-Origin header
+ * (fetch fails with "TypeError: Failed to fetch"), so the frontend prefers ROBINHOOD_ASSETS_PROXY_URL
+ * (the loss-reward gateway's GET /assets) and falls back to this URL, then to on-chain checks alone.
+ */
 export const ROBINHOOD_ASSETS_API_URL = String(
   import.meta.env.VITE_ROBINHOOD_ASSETS_API_URL || 'https://api.robinhood.com/rhj/assets'
 ).trim();
+
+/** Same-origin-friendly proxy for the asset list: `<gateway>/assets`. Empty when no Supabase URL / gateway is configured. */
+export const ROBINHOOD_ASSETS_PROXY_URL = (() => {
+  const explicit = String(import.meta.env.VITE_ROBINHOOD_ASSETS_PROXY_URL || '').trim();
+  if (explicit) return explicit.replace(/\/$/, '');
+  const gateway = String(import.meta.env.VITE_LOSS_REWARD_GATEWAY_URL || '').trim().replace(/\/$/, '');
+  if (gateway) return `${gateway}/assets`;
+  const supabaseUrl = String(import.meta.env.VITE_SUPABASE_URL || '').trim().replace(/\/$/, '');
+  if (supabaseUrl) return `${supabaseUrl}/functions/v1/loss-reward-gateway/assets`;
+  return '';
+})();

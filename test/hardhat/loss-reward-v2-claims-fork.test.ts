@@ -238,11 +238,22 @@ describe('LossRewardPoolV2 rollout: V1 + V2 claims in one session, stock payout,
       assert.equal(by.ETH.enabled, true);
       assert.equal(by.AAPL.enabled, true, 'AAPL: active + canonical + route on V2');
       assert.equal(by.TSLA.enabled, false);
-      assert.match(by.TSLA.reason, /not enabled on the reward pool/, 'TSLA: canonical but no route configured');
+      assert.match(by.TSLA.reason, /isSelectableAsset\(\) is false/, 'TSLA: canonical but no route configured on this V2 -> the on-chain reason, named');
       assert.equal(by.NVDA.enabled, false);
-      assert.match(by.NVDA.reason, /not listed as active/);
-      const apiDown = await m.rewardAssets.getRewardAssetOptions({ flagEnabled: true, legibleEnabled: true, fetchActive: async () => { throw new Error('down'); } });
-      assert.ok(apiDown.filter((o: any) => o.symbol !== 'ETH').every((o: any) => !o.enabled), 'API down -> no stock enabled');
+      assert.match(by.NVDA.reason, /isSelectableAsset\(\) is false/, 'NVDA: on-chain check fails first (no route), so the API status is not even consulted');
+      // Robinhood list unreachable (the production symptom: no CORS headers) -> the chain decides
+      const warnings: string[] = [];
+      const apiDown = await m.rewardAssets.getRewardAssetOptions({ flagEnabled: true, legibleEnabled: true, fetchActive: async () => { throw new TypeError('Failed to fetch'); }, warn: (w: string) => warnings.push(w) });
+      const downBy = Object.fromEntries(apiDown.map((o: any) => [o.symbol, o]));
+      assert.equal(downBy.AAPL.enabled, true, 'API unreachable -> AAPL (passes StockFactory + isSelectableAsset on the real fork) is ENABLED');
+      assert.match(downBy.AAPL.note, /asset list unreachable/);
+      assert.equal(downBy.TSLA.enabled, false); assert.match(downBy.TSLA.reason, /isSelectableAsset/);
+      assert.equal(downBy.NVDA.enabled, false); assert.match(downBy.NVDA.reason, /isSelectableAsset/);
+      assert.equal(warnings.length, 1); assert.match(warnings[0], /unreachable \(Failed to fetch\)/, 'the warning carries the actual fetch error');
+      // API reachable and says AAPL is NOT active -> disabled with that reason even though the chain passes
+      const inactive = await m.rewardAssets.getRewardAssetOptions({ flagEnabled: true, legibleEnabled: true, fetchActive: async () => new Map<string, `0x${string}`>([['TSLA', TSLA]]) });
+      const inBy = Object.fromEntries(inactive.map((o: any) => [o.symbol, o]));
+      assert.equal(inBy.AAPL.enabled, false); assert.match(inBy.AAPL.reason, /does not mark this asset ACTIVE/);
       console.log(`  flag off: ${off.map((o: any) => o.symbol).join(',')} | flag on: ${on.map((o: any) => `${o.symbol}${o.enabled ? '' : '(x)'}`).join(' ')}  OK`);
 
       // ============================================================================
@@ -255,9 +266,9 @@ describe('LossRewardPoolV2 rollout: V1 + V2 claims in one session, stock payout,
       const uOpts = await u.rewardAssets.getRewardAssetOptions({ flagEnabled: true, legibleEnabled: true, fetchActive: fakeApi });
       const uBy = Object.fromEntries(uOpts.map((o: any) => [o.symbol, o]));
       assert.ok(uOpts.filter((o: any) => o.symbol !== 'ETH').every((o: any) => !o.enabled), 'no stock can be enabled without V2');
-      assert.match(uBy.AAPL.reason, /V2 not configured/, 'AAPL is canonical + listed, blocked only by the missing V2 address');
+      assert.match(uBy.AAPL.reason, /V2 not configured/, 'AAPL is canonical, blocked only by the missing V2 address');
       assert.match(uBy.TSLA.reason, /V2 not configured/);
-      assert.match(uBy.NVDA.reason, /not listed as active/, 'NVDA is unlisted in this fixture, so that reason comes first');
+      assert.match(uBy.NVDA.reason, /V2 not configured/, 'on-chain reasons come before the API status, so NVDA (unlisted in this fixture) reports V2 too');
       await assert.rejects(
         u.lossReward.claimBatchRewards(TOKEN_ETH, HOLDER, [{ id: 9, epochId: 9, epochNumber: 3, finalRewardEth: 0.01, amountWei: parseEther('0.01').toString(), merkleProof: [], poolAddress: V2 }]),
         /not configured for|LossRewardPoolV2 address not set/

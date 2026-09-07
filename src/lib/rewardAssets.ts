@@ -6,6 +6,7 @@ import {
   LEGIBLE_LAUNCH_ENABLED,
   ROBINHOOD_STOCK_FACTORY,
   ROBINHOOD_ASSETS_API_URL,
+  ROBINHOOD_ASSETS_PROXY_URL,
   UNISWAP_QUOTER_V2,
   WETH_ADDRESS,
 } from './uniswapAddresses';
@@ -14,10 +15,13 @@ import {
 // Loss-reward payout assets (docs/LOSS_REWARD_ASSET_DESIGN.md §B2/§B7).
 //
 // The creator picks the asset ONCE at launch; LossRewardPoolV2.rewardAsset(token) is the source
-// of truth. The launch dropdown is built from Robinhood's public asset list (ACTIVE filter,
-// names) but an option is only ENABLED after the on-chain checks the pool itself performs:
-// StockFactory round-trip (uid() -> tokenAddress(uid) == address) and isSelectableAsset() on the
-// V2 pool. Stock balances and quotes are RAW ERC-20 amounts; Robinhood's app shows
+// of truth. An option is ENABLED by the on-chain checks the pool itself performs — StockFactory
+// round-trip (uid() -> tokenAddress(uid) == address) and isSelectableAsset() on the V2 pool (route
+// enabled, registry round-trip, asset not paused). Robinhood's public asset list is an OPTIONAL
+// ENRICHMENT: when reachable and it marks an asset not ACTIVE (or at another address) the option is
+// disabled and says so; when unreachable (api.robinhood.com sends no CORS headers, so a direct
+// browser fetch always fails — the gateway's GET /assets proxy is tried first) the on-chain result
+// stands and a console warning is logged. Stock balances and quotes are RAW ERC-20 amounts; Robinhood's app shows
 // raw × uiMultiplier() / 1e18, so every displayed stock figure goes through toDisplayShares().
 // Every function here is a no-op / ETH when LOSS_REWARD_POOL_V2 is unset.
 // ----------------------------------------------------------------------------
@@ -56,15 +60,26 @@ export type RewardAssetOption = {
   symbol: string;
   address: `0x${string}`;
   enabled: boolean;
-  /** Why the option is greyed out (only when !enabled). */
+  /** Why the option is greyed out (only when !enabled) — names the failed check. */
   reason?: string;
+  /** Caveat on an ENABLED option (e.g. the Robinhood list was unreachable, so only the chain vouched). */
+  note?: string;
 };
 
-/** ACTIVE Robinhood stock tokens on this chain, symbol -> checksummed address. */
-export async function fetchActiveStockAssets(fetchImpl: typeof fetch = fetch): Promise<Map<string, `0x${string}`>> {
-  const res = await fetchImpl(ROBINHOOD_ASSETS_API_URL, { headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`asset list HTTP ${res.status}`);
-  const json: any = await res.json();
+export type AssetListStatus = {
+  reachable: boolean;
+  /** Which URL answered: the gateway proxy or api.robinhood.com directly. */
+  source?: 'proxy' | 'direct';
+  /** The actual fetch error(s) when unreachable, e.g. "proxy: HTTP 404; direct: TypeError: Failed to fetch". */
+  error?: string;
+};
+
+export type AssetListResult = { active: Map<string, `0x${string}`>; source: 'proxy' | 'direct' };
+
+const ASSET_LIST_TIMEOUT_MS = 8_000;
+
+/** Parses either the raw Robinhood payload or the gateway proxy's slimmed copy (same field names). */
+export function parseActiveStockAssets(json: any): Map<string, `0x${string}`> {
   const assets: any[] = Array.isArray(json) ? json : json?.assets || [];
   const out = new Map<string, `0x${string}`>();
   for (const a of assets) {
@@ -78,6 +93,52 @@ export async function fetchActiveStockAssets(fetchImpl: typeof fetch = fetch): P
     }
   }
   return out;
+}
+
+const gatewayHeaders = (): Record<string, string> => {
+  const h: Record<string, string> = { Accept: 'application/json' };
+  const anon = String((import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '').trim();
+  if (anon) h.apikey = anon; // Supabase edge functions expect the anon key on every call
+  return h;
+};
+
+async function fetchJsonWithTimeout(fetchImpl: typeof fetch, url: string, headers: Record<string, string>): Promise<any> {
+  const signal = typeof AbortSignal !== 'undefined' && typeof (AbortSignal as any).timeout === 'function' ? (AbortSignal as any).timeout(ASSET_LIST_TIMEOUT_MS) : undefined;
+  const res = await fetchImpl(url, { headers, signal });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+/**
+ * ACTIVE Robinhood stock tokens on this chain, symbol -> checksummed address, and which source
+ * answered. Tries the gateway proxy first (same CORS policy as the rest of the gateway), then the
+ * direct URL (works from node / same-origin setups, fails in browsers). Throws with BOTH errors when
+ * neither answers — the caller treats that as "list unavailable", never as "asset inactive".
+ */
+export async function fetchActiveStockAssetList(fetchImpl: typeof fetch = fetch, urls: { proxyUrl?: string; directUrl?: string } = {}): Promise<AssetListResult> {
+  const proxyUrl = urls.proxyUrl ?? ROBINHOOD_ASSETS_PROXY_URL;
+  const directUrl = urls.directUrl ?? ROBINHOOD_ASSETS_API_URL;
+  const errors: string[] = [];
+  if (proxyUrl) {
+    try {
+      return { active: parseActiveStockAssets(await fetchJsonWithTimeout(fetchImpl, proxyUrl, gatewayHeaders())), source: 'proxy' };
+    } catch (err: any) {
+      errors.push(`proxy ${proxyUrl}: ${err?.name && err.name !== 'Error' ? `${err.name}: ` : ''}${err?.message || err}`);
+    }
+  }
+  if (directUrl) {
+    try {
+      return { active: parseActiveStockAssets(await fetchJsonWithTimeout(fetchImpl, directUrl, { Accept: 'application/json' })), source: 'direct' };
+    } catch (err: any) {
+      errors.push(`direct ${directUrl}: ${err?.name && err.name !== 'Error' ? `${err.name}: ` : ''}${err?.message || err}`);
+    }
+  }
+  throw new Error(errors.length ? errors.join('; ') : 'no asset list URL configured');
+}
+
+/** Back-compat: the ACTIVE map only (throws when unreachable). */
+export async function fetchActiveStockAssets(fetchImpl: typeof fetch = fetch): Promise<Map<string, `0x${string}`>> {
+  return (await fetchActiveStockAssetList(fetchImpl)).active;
 }
 
 /** The pool's own canonical check: uid() -> StockFactory.tokenAddress(uid) == asset. */
@@ -105,48 +166,80 @@ export type RewardAssetOptionDeps = {
   flagEnabled?: boolean;
   legibleEnabled?: boolean;
   v2Configured?: boolean;
-  fetchActive?: () => Promise<Map<string, `0x${string}`>>;
+  /** Returns the ACTIVE map, or throws when the list is unreachable. */
+  fetchActive?: () => Promise<Map<string, `0x${string}`> | AssetListResult>;
   canonical?: (asset: `0x${string}`) => Promise<boolean>;
   selectable?: (asset: `0x${string}`) => Promise<boolean>;
+  /** Console sink for the "asset list unreachable" warning (tests). */
+  warn?: (message: string) => void;
 };
 
+export const REASON_NOT_CANONICAL = 'failed on-chain check: StockFactory round-trip (not a canonical Robinhood stock token)';
+export const REASON_V2_NOT_CONFIGURED = 'reward pool V2 not configured';
+export const REASON_NOT_SELECTABLE = 'failed on-chain check: isSelectableAsset() is false on the reward pool (route disabled, registry mismatch, or asset paused)';
+export const REASON_API_INACTIVE = 'Robinhood asset list does not mark this asset ACTIVE';
+export const REASON_API_ADDRESS_DIFFERS = 'Robinhood asset list shows a different address for this symbol';
+export const NOTE_API_UNREACHABLE = 'Robinhood asset list unreachable; enabled on the on-chain checks alone';
+
 /**
- * Options for the launch dropdown. ETH is always first and always enabled. Each stock is enabled
- * only when ALL of: listed ACTIVE by Robinhood at the address we know, canonical per the
- * StockFactory round-trip, and selectable on the configured V2 pool. With the flag off (or the
- * legible launch path off) the list is ETH only — the caller renders the ETH-only control.
+ * Options for the launch dropdown plus the asset-list status. ETH is always first and always
+ * enabled. Each stock is judged by the ON-CHAIN checks first (authoritative: StockFactory
+ * round-trip, V2 configured, isSelectableAsset()); a failure disables it and the reason names the
+ * check. The Robinhood list is consulted only when it was reachable: an asset it does not mark
+ * ACTIVE (or lists at another address) is disabled with that reason. When the list is unreachable
+ * every asset that passed the chain is ENABLED with a `note`, and one console warning carries the
+ * actual fetch error. With the flag off (or the legible launch path off) the list is ETH only.
  */
-export async function getRewardAssetOptions(deps: RewardAssetOptionDeps = {}): Promise<RewardAssetOption[]> {
+export async function getRewardAssetOptionsWithStatus(deps: RewardAssetOptionDeps = {}): Promise<{ options: RewardAssetOption[]; assetList: AssetListStatus }> {
   const flagEnabled = deps.flagEnabled ?? STOCK_REWARDS_ENABLED;
   const legibleEnabled = deps.legibleEnabled ?? LEGIBLE_LAUNCH_ENABLED;
   const v2Configured = deps.v2Configured ?? isV2Configured();
+  const warn = deps.warn ?? ((m: string) => console.warn(m));
   const eth: RewardAssetOption = { symbol: 'ETH', address: ETH_ASSET, enabled: true };
-  if (!flagEnabled || !legibleEnabled) return [eth];
+  if (!flagEnabled || !legibleEnabled) return { options: [eth], assetList: { reachable: false, error: 'not consulted (dropdown hidden)' } };
 
-  let active = new Map<string, `0x${string}`>();
-  let apiFailed = false;
+  let active: Map<string, `0x${string}`> | null = null;
+  let assetList: AssetListStatus;
   try {
-    active = await (deps.fetchActive ?? fetchActiveStockAssets)();
-  } catch {
-    apiFailed = true;
+    const res = await (deps.fetchActive ?? fetchActiveStockAssetList)();
+    if (res instanceof Map) {
+      active = res;
+      assetList = { reachable: true };
+    } else {
+      active = res.active;
+      assetList = { reachable: true, source: res.source };
+    }
+  } catch (err: any) {
+    const message = String(err?.message || err);
+    assetList = { reachable: false, error: message };
+    warn(`[reward assets] Robinhood asset list unreachable (${message}). Enabling stock options on the on-chain checks alone (StockFactory round-trip + isSelectableAsset on the reward pool). api.robinhood.com sends no CORS headers, so a direct browser fetch always fails; configure the gateway's GET /assets proxy (VITE_ROBINHOOD_ASSETS_PROXY_URL or VITE_SUPABASE_URL) for the ACTIVE filter.`);
   }
   const canonical = deps.canonical ?? isCanonicalStock;
   const selectable = deps.selectable ?? isSelectableOnPool;
 
   const options: RewardAssetOption[] = [eth];
   for (const [symbol, address] of Object.entries(STOCK_REWARD_CANDIDATES)) {
-    const opt: RewardAssetOption = { symbol, address, enabled: false };
-    const listed = active.get(symbol);
-    if (apiFailed) opt.reason = 'Robinhood asset list unavailable';
-    else if (!listed) opt.reason = 'not listed as active by Robinhood';
-    else if (listed.toLowerCase() !== address.toLowerCase()) opt.reason = 'address differs from the known canonical token';
-    else if (!(await canonical(address))) opt.reason = 'not a canonical Robinhood stock token';
-    else if (!v2Configured) opt.reason = 'reward pool V2 not configured';
-    else if (!(await selectable(address))) opt.reason = 'not enabled on the reward pool';
-    else opt.enabled = true;
+    const opt: RewardAssetOption = { symbol, address: address as `0x${string}`, enabled: false };
+    if (!(await canonical(address as `0x${string}`))) opt.reason = REASON_NOT_CANONICAL;
+    else if (!v2Configured) opt.reason = REASON_V2_NOT_CONFIGURED;
+    else if (!(await selectable(address as `0x${string}`))) opt.reason = REASON_NOT_SELECTABLE;
+    else if (active) {
+      const listed = active.get(symbol);
+      if (!listed) opt.reason = REASON_API_INACTIVE;
+      else if (listed.toLowerCase() !== address.toLowerCase()) opt.reason = REASON_API_ADDRESS_DIFFERS;
+      else opt.enabled = true;
+    } else {
+      opt.enabled = true;
+      opt.note = NOTE_API_UNREACHABLE;
+    }
     options.push(opt);
   }
-  return options;
+  return { options, assetList };
+}
+
+/** Options only (see getRewardAssetOptionsWithStatus). */
+export async function getRewardAssetOptions(deps: RewardAssetOptionDeps = {}): Promise<RewardAssetOption[]> {
+  return (await getRewardAssetOptionsWithStatus(deps)).options;
 }
 
 export type TokenRewardAsset = {
