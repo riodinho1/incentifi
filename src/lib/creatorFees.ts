@@ -1,8 +1,10 @@
 import { encodeFunctionData, parseAbi, getAddress, formatEther } from 'viem';
 import { publicClient, getEvmProvider, ensureEvmChain, waitForTransactionReceipt } from './evmNetwork';
-import { INCENTIFI_V4_HOOK } from './uniswapAddresses';
+import { INCENTIFI_V4_HOOK, INCENTIFI_LEGIBLE_HOOK } from './uniswapAddresses';
 import { getBondingCurveAddress } from './bondingCurve';
 import { isV4LaunchedToken, getV4PoolKey, computeV4PoolId } from './bondingCurveV4';
+import { getLegiblePoolKey } from './legiblePool';
+import { resolveTokenVenue } from './tokenVenue';
 
 // ----------------------------------------------------------------------------
 // Creator fees are PULL payments on both venues, bound to msg.sender:
@@ -29,7 +31,10 @@ const CREATOR_FEES_ABI = parseAbi([
 
 export type CreatorFeeSource =
   | { kind: 'v3'; contract: `0x${string}`; scope: 'token' }
-  | { kind: 'v4'; contract: `0x${string}`; scope: 'creator' };
+  // V4: the hook the token's pool is bound to — the legible hook (PR #17) or the previous
+  // GenericSell hook. Both expose the same creatorBalances/claimCreatorFees surface; each keeps
+  // its own global-per-creator balance, so a creator with tokens on both claims on both.
+  | { kind: 'v4'; contract: `0x${string}`; scope: 'creator'; venue: 'legible' | 'v4-generic' };
 
 export type CreatorFeeStatus = {
   source: CreatorFeeSource;
@@ -51,7 +56,11 @@ export async function resolveCreatorFeeSource(tokenAddress: string): Promise<Cre
   const token = getAddress(tokenAddress);
   const curve = await getBondingCurveAddress(token);
   if (curve) return { kind: 'v3', contract: getAddress(curve), scope: 'token' };
-  if (await isV4LaunchedToken(token)) return { kind: 'v4', contract: getAddress(INCENTIFI_V4_HOOK), scope: 'creator' };
+  const venue = await resolveTokenVenue(token);
+  if (venue === 'legible') return { kind: 'v4', contract: getAddress(INCENTIFI_LEGIBLE_HOOK), scope: 'creator', venue: 'legible' };
+  if (venue === 'v4-generic' || (await isV4LaunchedToken(token))) {
+    return { kind: 'v4', contract: getAddress(INCENTIFI_V4_HOOK), scope: 'creator', venue: 'v4-generic' };
+  }
   return null;
 }
 
@@ -71,7 +80,7 @@ export async function fetchCreatorFeeStatus(tokenAddress: string, walletAddress:
       (await publicClient.readContract({ address: source.contract, abi: CREATOR_FEES_ABI, functionName: 'creator' } as any)) as string
     );
   } else {
-    const poolId = computeV4PoolId(await getV4PoolKey(token));
+    const poolId = computeV4PoolId(source.venue === 'legible' ? await getLegiblePoolKey(token) : await getV4PoolKey(token));
     const state = (await publicClient.readContract({
       address: source.contract,
       abi: CREATOR_FEES_ABI,

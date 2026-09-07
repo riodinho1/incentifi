@@ -9,7 +9,13 @@ import {
   waitForTransactionReceipt,
 } from './evmNetwork';
 import { INCENTIFI_LAUNCH_TOKEN_BYTECODE } from './incentifiLaunchTokenBytecode';
-import { INCENTIFI_V4_FACTORY, INCENTIFI_V4_HOOK } from './uniswapAddresses';
+import { INCENTIFI_V4_FACTORY, INCENTIFI_V4_HOOK,
+  INCENTIFI_LEGIBLE_FACTORY,
+  INCENTIFI_LEGIBLE_HOOK,
+  UNISWAP_V4_POOL_MANAGER,
+  LEGIBLE_LAUNCH_ENABLED,
+} from './uniswapAddresses';
+import { primeTokenVenue } from './tokenVenue';
 
 export type CreateEvmTokenProgressCallback = (
   step: number,
@@ -40,6 +46,18 @@ const FACTORY_V4_ABI = parseAbi([
   'function launchToken(address token) returns (bytes32 poolId)',
   'function isLaunched(address token) view returns (bool)',
 ]);
+
+// Legible factory (PR #17): the launch names the loss-reward payout asset. address(0) = ETH,
+// the only option today; a stock address becomes selectable once LossRewardPoolV2 (PR #18) is
+// live and the hook is re-pointed at it — the factory reverts StockRewardsNotAvailable until then.
+const FACTORY_LEGIBLE_ABI = parseAbi([
+  'function launchToken(address token, address rewardAsset) returns (bytes32 poolId)',
+  'function isLaunched(address token) view returns (bool)',
+]);
+const ETH_REWARD_ASSET = '0x0000000000000000000000000000000000000000' as const;
+
+/** Which launch path a NEW token takes. Flag-gated; existing tokens are never affected. */
+export const getLaunchVenue = (): 'legible' | 'v4-generic' => (LEGIBLE_LAUNCH_ENABLED ? 'legible' : 'v4-generic');
 
 const strip0x = (value: string) => value.replace(/^0x/i, '');
 
@@ -87,6 +105,9 @@ export const createEvmToken = async (_provider: any, input: CreateEvmTokenInput)
   const name = input.tokenName.trim().slice(0, 32);
   const symbol = input.tokenSymbol.trim().toUpperCase().slice(0, 10);
   const onProgress = input.onProgress;
+  const launchVenue = getLaunchVenue();
+  const factoryAddress = launchVenue === 'legible' ? INCENTIFI_LEGIBLE_FACTORY : INCENTIFI_V4_FACTORY;
+  const hookAddress = launchVenue === 'legible' ? INCENTIFI_LEGIBLE_HOOK : INCENTIFI_V4_HOOK;
 
   // --------------------------------------------------------------------------
   // STEP 1/3: Deploy ERC-20 Token (1B Fixed Supply)
@@ -130,7 +151,7 @@ export const createEvmToken = async (_provider: any, input: CreateEvmTokenInput)
   const approveData = encodeFunctionData({
     abi: ERC20_APPROVE_ABI,
     functionName: 'approve',
-    args: [INCENTIFI_V4_FACTORY, TOTAL_SUPPLY],
+    args: [factoryAddress, TOTAL_SUPPLY],
   });
 
   const approveTxHash = await provider.request({
@@ -157,18 +178,17 @@ export const createEvmToken = async (_provider: any, input: CreateEvmTokenInput)
     `Please confirm the final transaction to deploy and activate the bonding curve on Robinhood Chain.`
   );
 
-  const launchData = encodeFunctionData({
-    abi: FACTORY_V4_ABI,
-    functionName: 'launchToken',
-    args: [tokenAddress],
-  });
+  const launchData =
+    launchVenue === 'legible'
+      ? encodeFunctionData({ abi: FACTORY_LEGIBLE_ABI, functionName: 'launchToken', args: [tokenAddress, ETH_REWARD_ASSET] })
+      : encodeFunctionData({ abi: FACTORY_V4_ABI, functionName: 'launchToken', args: [tokenAddress] });
 
   const launchTxHash = await provider.request({
     method: 'eth_sendTransaction',
     params: [
       {
         from: account,
-        to: INCENTIFI_V4_FACTORY,
+        to: factoryAddress,
         data: launchData,
       },
     ],
@@ -191,7 +211,7 @@ export const createEvmToken = async (_provider: any, input: CreateEvmTokenInput)
 
   const isLaunchedRes = await provider.request({
     method: 'eth_call',
-    params: [{ to: INCENTIFI_V4_FACTORY, data: isLaunchedData }, 'latest'],
+    params: [{ to: factoryAddress, data: isLaunchedData }, 'latest'],
   });
 
   if (BigInt(isLaunchedRes || '0x0') !== 1n) {
@@ -201,7 +221,7 @@ export const createEvmToken = async (_provider: any, input: CreateEvmTokenInput)
   const balanceData = encodeFunctionData({
     abi: ERC20_APPROVE_ABI,
     functionName: 'balanceOf',
-    args: [INCENTIFI_V4_HOOK],
+    args: [hookAddress],
   });
 
   const balRes = await provider.request({
@@ -210,11 +230,24 @@ export const createEvmToken = async (_provider: any, input: CreateEvmTokenInput)
   });
 
   const hookTokenBalance = BigInt(balRes || '0x0');
-  if (hookTokenBalance !== TOTAL_SUPPLY) {
+  if (launchVenue === 'legible') {
+    // The legible hook seeds a REAL pool: ~787.7M tokens sit in the PoolManager as the curve
+    // position and ~212.3M stay on the hook as the graduation reserve. Verify the split adds up
+    // to the whole supply rather than expecting everything on the hook.
+    const pmBalanceData = encodeFunctionData({ abi: ERC20_APPROVE_ABI, functionName: 'balanceOf', args: [UNISWAP_V4_POOL_MANAGER] });
+    const pmRes = await provider.request({ method: 'eth_call', params: [{ to: tokenAddress, data: pmBalanceData }, 'latest'] });
+    const poolManagerBalance = BigInt(pmRes || '0x0');
+    if (hookTokenBalance + poolManagerBalance !== TOTAL_SUPPLY || poolManagerBalance === 0n) {
+      throw new Error(
+        `Legible pool seeding verification failed: hook holds ${hookTokenBalance} and the PoolManager ${poolManagerBalance}; together they must equal the ${TOTAL_SUPPLY} supply with a nonzero curve position.`
+      );
+    }
+  } else if (hookTokenBalance !== TOTAL_SUPPLY) {
     throw new Error(
       `Bonding curve token balance verification failed: expected ${TOTAL_SUPPLY} tokens on the hook, but found ${hookTokenBalance}.`
     );
   }
+  primeTokenVenue(tokenAddress, launchVenue);
 
   return {
     mint: tokenAddress,
@@ -223,12 +256,16 @@ export const createEvmToken = async (_provider: any, input: CreateEvmTokenInput)
     // dedicated address. Left null (not omitted) so callers see explicitly
     // that this field doesn't apply anymore, rather than reading undefined.
     curveAddress: null as `0x${string}` | null,
-    hookAddress: INCENTIFI_V4_HOOK,
+    hookAddress,
+    /** 'legible' (real V4 pool, flag on) or 'v4-generic' (previous path, flag off). */
+    venue: launchVenue,
+    /** Loss-reward payout asset chosen at launch. ETH is the only option today. */
+    lossRewardAsset: 'ETH' as const,
     creatorAddress: account,
     chain: EVM_CHAIN_NAME,
     txExplorer: EVM_TX_URL(deployTxHash),
     explorer: EVM_ADDRESS_URL(tokenAddress),
-    curveExplorer: EVM_ADDRESS_URL(INCENTIFI_V4_HOOK),
+    curveExplorer: EVM_ADDRESS_URL(hookAddress),
     launchPayment: null,
   };
 };

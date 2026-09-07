@@ -13,6 +13,7 @@ import {
 import { privateKeyToAccount } from 'viem/accounts';
 import { createServer as createViteServer } from 'vite';
 import fs from 'fs';
+import { isLegibleToken, fetchLegibleState } from './lib/legiblePool.mjs';
 
 // ============================================================================
 // CRASH-RECOVERY & IDEMPOTENCY MATRIX
@@ -383,6 +384,22 @@ export async function closeV4Module() {
 export async function getTokenBenchmarkPriceEth(tokenAddress) {
   const token = getAddress(tokenAddress);
   const factory = getAddress(INCENTIFI_FACTORY_ADDRESS);
+
+  // LEGIBLE POOL (PR #17): a real V4 pool, so the benchmark is the pool's own slot0 price —
+  // before AND after graduation (the curve IS the pool; there is no separate virtual-reserve
+  // regime to read). One cheap factory read decides; the older paths below are untouched.
+  try {
+    if (await isLegibleToken(publicClient, token)) {
+      const state = await fetchLegibleState(publicClient, token);
+      if (state.currentPriceEth > 0) {
+        return { priceEth: state.currentPriceEth, isGraduated: state.graduated, source: 'v4_legible_slot0' };
+      }
+      console.warn(`[LEGIBLE PRICE] ${token} is legible-launched but slot0 resolved to a zero price (initialized=${state.initialized}, graduated=${state.graduated}).`);
+      return { priceEth: 0, isGraduated: state.graduated, source: 'unknown' };
+    }
+  } catch (err) {
+    console.warn(`[LEGIBLE PRICE] Could not read the legible factory/pool for ${token} (falling through to the older paths): ${err.message}`);
+  }
 
   let isGrad = false;
   let curveAddr = '0x0000000000000000000000000000000000000000';

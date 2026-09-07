@@ -38,6 +38,7 @@ import {
   fetchEvmTrades,
 } from '../../lib/marketData';
 import { buyToken, sellToken, getUnifiedMarketState, type UnifiedMarketState } from '../../lib/swap';
+import { quoteLegibleBuy, quoteLegibleBuyExactTokens, quoteLegibleSell } from '../../lib/legiblePool';
 import { fetchPoolHistory } from '../../lib/poolHistory';
 import { fetchChatMessages, postChatMessage, type ChatMessage } from '../../lib/chat';
 import { getWalletAccount, subscribeWalletAccount } from '../../lib/walletAccount';
@@ -594,7 +595,7 @@ const TokenPreviewPage = () => {
   const displaySymbol = onchainMintInfo.symbol || tokenData?.tokenSymbol || '';
 
   // Derived Live Quotes for Buy & Sell
-  const buyQuote = useMemo(() => {
+  const curveBuyQuote = useMemo(() => {
     if (unifiedMarket?.isGraduated) {
       if (buyMode === 'payEth') {
         const ethNum = Number(buyAmountEth) || 0;
@@ -736,7 +737,7 @@ const TokenPreviewPage = () => {
     }
   }, [buyMode, buyAmountEth, buyAmountToken, unifiedMarket, slippage]);
 
-  const sellQuote = useMemo(() => {
+  const curveSellQuote = useMemo(() => {
     const tokensNum = Number(sellAmountToken);
     if (!Number.isFinite(tokensNum) || tokensNum <= 0) {
       return {
@@ -812,6 +813,112 @@ const TokenPreviewPage = () => {
       };
     }
   }, [sellAmountToken, unifiedMarket, slippage]);
+
+  // ---------------------------------------------------------------------------------------
+  // Legible pools (PR #17): quotes come from Uniswap's V4 Quoter, which simulates the real
+  // swap through the real pool (2% hook fee included), pre- and post-graduation. The curve
+  // formulas above stay in use for V3 and GenericSell tokens, untouched.
+  // ---------------------------------------------------------------------------------------
+  const isLegible = unifiedMarket?.venue === 'legible';
+  const [legibleBuyQuote, setLegibleBuyQuote] = useState<typeof curveBuyQuote | null>(null);
+  const [legibleSellQuote, setLegibleSellQuote] = useState<typeof curveSellQuote | null>(null);
+
+  useEffect(() => {
+    if (!isLegible || !tokenData?.mintAddress) { setLegibleBuyQuote(null); return; }
+    let cancelled = false;
+    const run = async () => {
+      try {
+        if (buyMode === 'payEth') {
+          const ethNum = Number(buyAmountEth);
+          if (!Number.isFinite(ethNum) || ethNum <= 0) { setLegibleBuyQuote(null); return; }
+          const grossEthWei = parseEther(buyAmountEth.trim());
+          const { amount } = await quoteLegibleBuy(tokenData.mintAddress!, grossEthWei);
+          if (cancelled) return;
+          const tokensOutNum = Number(amount) / 1e18;
+          const minTokensOut = (amount * BigInt(Math.round((100 - slippage) * 100))) / 10000n;
+          setLegibleBuyQuote({
+            grossEthWei,
+            grossEthNum: ethNum,
+            tokensOutNum,
+            minTokensOutNum: Number(minTokensOut) / 1e18,
+            creatorFeeEth: ethNum * 0.01,
+            lossPoolFeeEth: ethNum * 0.01,
+            totalFeeEth: ethNum * 0.02,
+            isValid: tokensOutNum > 0,
+            error: null,
+          });
+        } else {
+          const tokensNum = Number(buyAmountToken);
+          if (!Number.isFinite(tokensNum) || tokensNum <= 0) { setLegibleBuyQuote(null); return; }
+          const desiredTokensWei = parseUnits(buyAmountToken.trim(), 18);
+          const { amount: ethInWei } = await quoteLegibleBuyExactTokens(tokenData.mintAddress!, desiredTokensWei);
+          if (cancelled) return;
+          const ethNeeded = Number(ethInWei) / 1e18;
+          setLegibleBuyQuote({
+            grossEthWei: ethInWei,
+            grossEthNum: ethNeeded,
+            tokensOutNum: tokensNum,
+            minTokensOutNum: tokensNum * (1 - slippage / 100),
+            creatorFeeEth: ethNeeded * 0.01,
+            lossPoolFeeEth: ethNeeded * 0.01,
+            totalFeeEth: ethNeeded * 0.02,
+            isValid: ethInWei > 0n,
+            error: null,
+          });
+        }
+      } catch (err: any) {
+        if (cancelled) return;
+        setLegibleBuyQuote({
+          grossEthWei: 0n, grossEthNum: 0, tokensOutNum: 0, minTokensOutNum: 0,
+          creatorFeeEth: 0, lossPoolFeeEth: 0, totalFeeEth: 0, isValid: false,
+          error: err?.shortMessage || err?.message || 'Quote unavailable',
+        });
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [isLegible, tokenData?.mintAddress, buyMode, buyAmountEth, buyAmountToken, slippage]);
+
+  useEffect(() => {
+    if (!isLegible || !tokenData?.mintAddress) { setLegibleSellQuote(null); return; }
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const tokensNum = Number(sellAmountToken);
+        if (!Number.isFinite(tokensNum) || tokensNum <= 0) { setLegibleSellQuote(null); return; }
+        const tokensInWei = parseUnits(sellAmountToken.trim(), 18);
+        const { amount: netEthWei } = await quoteLegibleSell(tokenData.mintAddress!, tokensInWei);
+        if (cancelled) return;
+        const netEthOut = Number(netEthWei) / 1e18;
+        // The 2% hook fee is charged on the gross ETH side of a sell: gross = net / 0.98.
+        const grossEthOut = netEthOut / 0.98;
+        const minEthWei = (netEthWei * BigInt(Math.round((100 - slippage) * 100))) / 10000n;
+        setLegibleSellQuote({
+          tokensInWei,
+          grossEthOut,
+          netEthOut,
+          minEthOut: Number(minEthWei) / 1e18,
+          creatorFeeEth: (grossEthOut - netEthOut) / 2,
+          lossPoolFeeEth: (grossEthOut - netEthOut) / 2,
+          totalFeeEth: grossEthOut - netEthOut,
+          isValid: netEthOut > 0,
+          error: null,
+        });
+      } catch (err: any) {
+        if (cancelled) return;
+        setLegibleSellQuote({
+          tokensInWei: 0n, grossEthOut: 0, netEthOut: 0, minEthOut: 0,
+          creatorFeeEth: 0, lossPoolFeeEth: 0, totalFeeEth: 0, isValid: false,
+          error: err?.shortMessage || err?.message || 'Quote unavailable',
+        });
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [isLegible, tokenData?.mintAddress, sellAmountToken, slippage]);
+
+  const buyQuote = isLegible ? (legibleBuyQuote ?? { ...curveBuyQuote, isValid: false }) : curveBuyQuote;
+  const sellQuote = isLegible ? (legibleSellQuote ?? { ...curveSellQuote, isValid: false }) : curveSellQuote;
 
   // Load Live Market State (Bonding Curve / Uniswap V3) directly from chain
   useEffect(() => {
