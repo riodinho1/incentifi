@@ -1,6 +1,6 @@
 # V4 "Legible Pool" Redesign — Design Doc (pre-Solidity)
 
-**Status:** DRAFT for review. No contracts written yet; this doc is the gate.
+**Status:** Phase 2 implemented in this PR (contracts + Foundry fork suite, 11/11 green on a Robinhood mainnet fork). NOT deployed. Numbers below were corrected from the suite (tickSpacing 10, see §3.1).
 **Goal:** make pre-graduation Incentifi V4 tokens tradable on generic terminals (GMGN, Axiom, DexScreener-fed tools) *without* per-terminal integration, while leaving the loss-reward economics and payout path unchanged.
 
 ---
@@ -27,7 +27,8 @@ Execution and pricing already work for any generic caller — Uniswap's canonica
 ## 3. Design
 
 ### 3.1 Pool
-- `PoolKey { currency0: ETH (address(0)), currency1: token, fee: DYNAMIC_FEE_FLAG (0x800000), tickSpacing: 1, hooks: new hook }`.
+- `PoolKey { currency0: ETH (address(0)), currency1: token, fee: DYNAMIC_FEE_FLAG (0x800000), tickSpacing: 10, hooks: new hook }`.
+- **Why tickSpacing 10, not 1 (found in the fork suite):** a swap that overshoots the curve (a buy larger than what is left, or a sell into an emptied pool) walks the tick bitmap word by word all the way to the caller's price limit, and generic routers pass MIN/MAX. A word spans 256 × tickSpacing ticks: with spacing 1 the graduating buy touched ~4,150 bitmap words ≈ 8.7M gas (measured: 11.6M total). Spacing 10 caps the worst case at ~415 words (< 1M gas) and costs ≤ 0.07% of bound rounding.
 - Initialized at `sqrtPriceX96 = √(5e8)·2⁹⁶ = 1771595571817166965907191352733264` — the exact launch price today's hook uses (tick 200,311.2).
 
 ### 3.2 The curve **is** a real position (mechanism A, not hook deltas)
@@ -37,10 +38,10 @@ The virtual-reserve curve `(VE+E)(VT+T) = K` is a constant-product segment, i.e.
 |---|---|---|
 | Liquidity `L` | **48215215764839215328822** | `√K`, `K = VE·(VT+SUPPLY) = 2.32470703125e45` (exact) |
 | Range (Uniswap price = tokens/ETH) | `[q_g, q₀] = [36,231,884.08, 500,000,000]` | `q₀ = (VT+SUPPLY)/VE`, `q_g = (K/(VE+GRAD_ETH))/(VE+GRAD_ETH)` |
-| Ticks (spacing 1) | **lower 174,064 · upper 200,311** | `log₁.₀₀₀₁(q)`, rounded inward; bound error ≤ 0.008% |
-| Token side at launch (token1) | **787,903,505.843 tokens** | `L(√q₀ − √q_g)` |
-| ETH to traverse (token0) | **5.853863234 ETH** | `L(1/√q_g − 1/√q₀)` = `GRADUATION_ETH_TARGET` exactly |
-| Held back in hook custody | **212,096,494.157 tokens** | `SUPPLY − 787.9M` = exactly the tokens that pair with 5.8539 ETH at `P_g` |
+| Ticks (spacing 10) | **lower 174,070 · upper 200,310** | `log₁.₀₀₀₁(q)`, rounded inward to spacing 10; bound error ≤ 0.07% |
+| Token side at launch (token1) | **787,740,104.72 tokens** | `L(√q_upper − √q_lower)` at the spacing-10 bounds (787,903,505.84 at the exact bounds) |
+| ETH to traverse (token0) | **5.85114 ETH (−0.046% vs 5.853863234)** | `L(1/√q_lower − 1/√q₀)` from the launch price to the spacing-10 lower bound (exact bounds: 5.853863234) |
+| Held back in hook custody | **212,259,895.28 tokens** | `SUPPLY − 787,740,104.72` = the tokens that pair with the raised ETH at `P_g` |
 
 At launch the price sits at the range's upper bound, so the position is 100% token; buys walk the price down through the range converting tokens to ETH inside the position; at the lower bound the position is 100% ETH = graduation. Same numbers as today, but now `getLiquidity > 0`, `Swap` events carry real amounts, and price moves — everything generic infrastructure keys on.
 
@@ -79,7 +80,8 @@ P0 = 2.000000e-9 ETH/token, Pg = 2.760000e-8, ratio 13.8000
 position token1 = 787903505.843  == curve tokens sold to graduation (rel diff 1.5e-16)
 position token0 = 5.853863234 ETH == GRADUATION_ETH_TARGET (rel diff 0)
 hook reserve   = 212096494.157  == tokens pairing 5.853863 ETH at Pg (rel diff 8e-16)
-tick-aligned bounds (spacing 1): [174064, 200311] -> bound price error ≤ 0.0020% / 0.0080%
+tick-aligned bounds (spacing 1 — superseded, see §3.1): [174064, 200311] -> bound price error <= 0.0020% / 0.0080%
+chosen bounds (spacing 10): [174070, 200310] -> bound price error <= 0.068% / 0.012%; overshoot walk <= ~415 bitmap words
 mcap: $5000 at launch, $69000 at graduation
 ```
 
@@ -115,7 +117,7 @@ Hooks are immutable per pool. Ship with `postGradFeePips = 0` and `lpOpen = fals
 
 ## 10. Risks
 - **Settlement inside `afterSwap` during graduation** — heaviest testing; same bug class as the GenericSell fix.
-- **Tick rounding** — bounded at ≤ 0.008%; quantified, not hand-waved.
+- **Tick rounding** — bounded at ≤ 0.07% with tickSpacing 10 (spacing 1 gave ≤ 0.008% but made overshooting swaps walk ~4k bitmap words; see §3.1); quantified, not hand-waved.
 - **Sell-side fee currency** — decision A changes loss-pool funding if "burn" is chosen.
 - **Aggregator behaviour with a dynamic-fee hook** — the whole point of mechanism A is that there is nothing to simulate; still verified empirically in §5, never assumed.
 
