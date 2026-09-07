@@ -46,6 +46,12 @@ const POOL_ABI = parseAbi([
   'function hasClaimed(address token, uint256 epochId, address account) view returns (bool)',
   'function claimReward(address token, uint256 epochId, uint256 amount, bytes32[] calldata merkleProof)',
   'function claimBatch(address token, uint256[] calldata epochIds, uint256[] calldata amounts, bytes32[][] calldata merkleProofs)',
+  // LossRewardPoolV2: the V1 signatures revert UseClaimAs on a stock-configured token, so the
+  // (deprecated) relayer path encodes the V2 signatures. minAssetOut = 0 is safe here only because
+  // the pool enforces its own TWAP floor inside the swap; a wallet-signed claim from the frontend
+  // passes a real quote-derived minAssetOut.
+  'function claimRewardAs(address token, uint256 epochId, uint256 amount, bytes32[] calldata merkleProof, uint256 minAssetOut, uint256 deadline)',
+  'function claimBatchAs(address token, uint256[] calldata epochIds, uint256[] calldata amounts, bytes32[][] calldata merkleProofs, uint256 minAssetOut, uint256 deadline)',
 ]);
 
 const JWT_ISSUER = 'incentifi.finance';
@@ -833,12 +839,14 @@ export async function handleClaim(req: Request): Promise<Response> {
       txHash = await walletClient.writeContract({
         address: getAddress(LOSS_REWARD_POOL_ADDRESS),
         abi: POOL_ABI,
-        functionName: 'claimReward',
+        functionName: 'claimRewardAs',
         args: [
           getAddress(normalizedToken),
           BigInt(row.epochNumber),
           row.amountWei,
           row.merkle_proof as `0x${string}`[],
+          0n,
+          BigInt(Math.floor(Date.now() / 1000) + 600),
         ],
       });
     } else {
@@ -849,8 +857,8 @@ export async function handleClaim(req: Request): Promise<Response> {
       txHash = await walletClient.writeContract({
         address: getAddress(LOSS_REWARD_POOL_ADDRESS),
         abi: POOL_ABI,
-        functionName: 'claimBatch',
-        args: [getAddress(normalizedToken), epochIds, amounts, proofs],
+        functionName: 'claimBatchAs',
+        args: [getAddress(normalizedToken), epochIds, amounts, proofs, 0n, BigInt(Math.floor(Date.now() / 1000) + 600)],
       });
     }
 
