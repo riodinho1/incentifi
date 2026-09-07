@@ -156,8 +156,33 @@ export function evaluateDustGuard(totalDistributedEth, thresholdWei = MIN_EPOCH_
   return { candidateAllocatedWei, isDust: candidateAllocatedWei < thresholdWei };
 }
 
+/**
+ * On-chain balance guard (pure). `holder_cost_basis` is fed by scripts/evm-indexer.mjs and can
+ * lag or miss a sell entirely (2026-09-07: a failed V4 discovery scan left a fully-sold wallet
+ * recorded as holding 18.7M tokens and the worker published 15 epochs against it). The chain
+ * is the authority on what a wallet holds, so every payout is computed on
+ * min(dbBalance, onChainBalance). `invested` is scaled by the SAME ratio — the loss formula
+ * is `invested - balance * price`, so capping balance alone would INFLATE the loss (a zero
+ * balance would pay 10% of everything ever invested); scaling both preserves the recorded
+ * average cost basis and pays only for tokens actually held.
+ */
+export function applyOnChainBalanceCap(holder, onChainBalanceTokens) {
+  const dbBalance = Number(holder.token_balance);
+  const invested = Number(holder.total_invested_eth);
+  if (!Number.isFinite(onChainBalanceTokens) || onChainBalanceTokens < 0) {
+    throw new Error(`[BALANCE GUARD] Invalid on-chain balance for ${holder.wallet_address}: ${onChainBalanceTokens}`);
+  }
+  if (onChainBalanceTokens >= dbBalance) {
+    return { balance: dbBalance, invested, capped: false, dbBalance, onChainBalance: onChainBalanceTokens };
+  }
+  const ratio = dbBalance > 0 ? onChainBalanceTokens / dbBalance : 0;
+  return { balance: onChainBalanceTokens, invested: invested * ratio, capped: true, dbBalance, onChainBalance: onChainBalanceTokens };
+}
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const publicClient = createPublicClient({ transport: http(RPC_URL) });
+
+const ERC20_BALANCE_ABI = parseAbi(['function balanceOf(address account) view returns (uint256)']);
 
 const FACTORY_ABI = parseAbi([
   'function getBondingCurve(address token) view returns (address)',
@@ -683,9 +708,29 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
     const eligibleAllocations = [];
 
     for (const h of holders) {
-      const balance = Number(h.token_balance);
+      // On-chain balance guard — see applyOnChainBalanceCap(). FAIL CLOSED: if the chain can't
+      // be read, this epoch is skipped for this token rather than paid on unverified data.
+      let onChainBalanceTokens;
+      try {
+        const raw = await publicClient.readContract({
+          address: getAddress(token),
+          abi: ERC20_BALANCE_ABI,
+          functionName: 'balanceOf',
+          args: [getAddress(h.wallet_address)],
+        });
+        onChainBalanceTokens = Number(raw) / 1e18;
+      } catch (err) {
+        throw new Error(`[BALANCE GUARD] Could not read on-chain balance for ${h.wallet_address} — refusing to compute epoch on unverified holder data: ${err.message}`);
+      }
+      const capped = applyOnChainBalanceCap(h, onChainBalanceTokens);
+      if (capped.capped) {
+        console.warn(`[BALANCE GUARD] ${h.wallet_address}: DB balance ${capped.dbBalance} > on-chain ${capped.onChainBalance} (indexer lag or a missed sell). Paying on ${capped.balance} only.`);
+      }
+      if (!(capped.balance > 0)) continue;
+
+      const balance = capped.balance;
       const costBasis = Number(h.avg_cost_basis_eth);
-      const invested = Number(h.total_invested_eth);
+      const invested = capped.invested;
       const currentVal = balance * benchmarkPriceEth;
       const unrealizedLoss = Math.max(0, invested - currentVal);
       const theoreticalReward = 0.10 * unrealizedLoss;
@@ -947,9 +992,16 @@ export async function runEpochWorker(options = {}) {
 
   const results = [];
   for (const t of tokens) {
-    if (t.mint_address) {
+    if (!t.mint_address) continue;
+    // Per-token isolation: one token's failure (an RPC read, an unfunded operator wallet, a
+    // revert) must not abort the cycle for every token after it in the list — which is
+    // exactly what happened on 2026-09-06 when the operator ran out of gas.
+    try {
       const res = await executeEpochForToken(t.mint_address, options);
       results.push(res);
+    } catch (err) {
+      console.error(`[EPOCH WORKER] Epoch failed for ${t.mint_address} (continuing with remaining tokens): ${err.message}`);
+      results.push({ tokenAddress: String(t.mint_address).toLowerCase(), skipped: true, reason: 'error', detail: err.message });
     }
   }
   return results;

@@ -703,34 +703,44 @@ export async function updateV4MarketSnapshot(tokenAddress, symbol, fetchV4CurveS
 }
 
 /**
- * Main Indexer Poller Loop
+ * Brings V4 TokenLaunched discovery up to `toBlock`, RESUMABLY: progress is committed to
+ * v4LastScannedBlock after every 5,000-block chunk, so a failure (RPC rate limit, timeout)
+ * retries only the remaining range on the next call instead of restarting from the floor.
+ * Throws on failure — callers decide what that means (see runIndexer / createIndexer).
+ *
+ * Why this replaced the old one-shot startup scan: on 2026-09-07 the daemon restarted while
+ * the RPC was rate-limited, the one-shot scan threw, v4LastScannedBlock stayed null, and the
+ * process silently indexed NO V4 trades for the rest of its life while V3 indexing continued
+ * and the heartbeat stayed "ok" — so the loss-reward worker kept paying a wallet that had
+ * fully sold. V4 discovery is now a hard precondition of every tick (below), never a
+ * best-effort startup step.
  */
-export async function runIndexer() {
-  console.log('--- Starting Incentifi EVM Indexer ---');
-  console.log(`RPC: ${RPC_URL}`);
-  console.log(`Factory: ${INCENTIFI_BONDING_CURVE_FACTORY}`);
-  console.log(`V4 Factory: ${INCENTIFI_V4_FACTORY}`);
+export async function advanceV4Discovery(toBlock) {
+  let from = v4LastScannedBlock === null ? V4_DISCOVERY_FLOOR_BLOCK : v4LastScannedBlock + 1n;
+  while (from <= toBlock) {
+    const to = from + 5000n > toBlock ? toBlock : from + 5000n;
+    await discoverV4TokensInRange(from, to);
+    v4LastScannedBlock = to;
+    from = to + 1n;
+  }
+}
 
+/** True once V4 discovery covers `block` — i.e. V4 trades in windows up to it can be indexed. */
+export function isV4DiscoveryReadyThrough(block) {
+  return v4LastScannedBlock !== null && v4LastScannedBlock >= block;
+}
+
+/**
+ * The indexer's per-tick unit of work, exposed for tests. `tick()` never throws: a failure
+ * is recorded as heartbeat status "error" (which scripts/loss-reward-worker.mjs's freshness
+ * gate treats as NOT fresh, blocking epochs) and the cursor does not advance, so the same
+ * window is retried next tick.
+ */
+export function createIndexer() {
   let lastPolledBlock = 0n;
   const curveAddressCache = new Map();
 
-  // One-time V4 TokenLaunched historical catch-up: without this, the per-tick
-  // incremental scan below (which only ever looks at the current tick's small block
-  // window) would never see a V4 token launched before this process started — there is
-  // no `tokens`-table-style registry this side can fall back on, since the whole point
-  // of event-based discovery is to work independently of that (see the V4 section's
-  // header comment above for why). Runs once, before the poller loop begins.
-  try {
-    const catchupEndBlock = await client.getBlockNumber();
-    console.log(`[V4 DISCOVERY] Running one-time historical catch-up scan (block ${V4_DISCOVERY_FLOOR_BLOCK} → ${catchupEndBlock})...`);
-    await discoverV4TokensInRange(V4_DISCOVERY_FLOOR_BLOCK, catchupEndBlock);
-    v4LastScannedBlock = catchupEndBlock;
-    console.log(`[V4 DISCOVERY] Historical catch-up complete. Found ${v4TokenSymbolCache.size} V4 token(s) so far.`);
-  } catch (err) {
-    console.error('[V4 DISCOVERY] Historical catch-up scan failed — V4 tokens will not be indexed until this succeeds on a future restart:', err.message);
-  }
-
-  setInterval(async () => {
+  async function tick() {
     try {
       const currentBlock = await client.getBlockNumber();
       if (lastPolledBlock === 0n) {
@@ -762,26 +772,28 @@ export async function runIndexer() {
       const CHUNK_SIZE = 5000n;
       const toBlock = currentBlock > fromBlock + CHUNK_SIZE ? fromBlock + CHUNK_SIZE : currentBlock;
 
-      // V4: independent of the `tokens` table (see the V4 section's header comment) and
-      // of whether any V3 tokens exist, so this runs unconditionally every tick, in its
-      // own try/catch so a V4-specific hiccup never blocks V3 indexing for this tick.
-      if (v4LastScannedBlock !== null) {
+      // V4 discovery is a HARD precondition of indexing this window: the poolId cache must
+      // cover [.., toBlock] or a V4 trade in this window would be silently skipped and the
+      // cursor would move past it for good. A failure here throws to the outer catch —
+      // heartbeat "error", cursor unchanged, retried next tick (resumably, see
+      // advanceV4Discovery) — so the loss-reward worker is blocked by its freshness gate for
+      // exactly as long as V4 holder data cannot be trusted.
+      try {
+        await advanceV4Discovery(toBlock);
+      } catch (err) {
+        throw new Error(`V4 discovery not ready (scanned through block ${v4LastScannedBlock ?? 'none yet'}, need ${toBlock}): ${err.message}`);
+      }
+
+      // V4 market snapshots: display-only, so a hiccup here (module load, RPC) is logged and
+      // retried next tick without blocking trade indexing.
+      if (v4TokenSymbolCache.size > 0) {
         try {
-          // Guard against toBlock (bounded by the unrelated V3 cursor's own chunking)
-          // ever being behind v4LastScannedBlock — keeps this cursor monotonic even if
-          // V3's own cursor is temporarily lagging chain head for some other reason.
-          if (toBlock > v4LastScannedBlock) {
-            await discoverV4TokensInRange(v4LastScannedBlock + 1n, toBlock);
-            v4LastScannedBlock = toBlock;
-          }
-          if (v4TokenSymbolCache.size > 0) {
-            const v4Module = await getV4Module();
-            for (const [tokenAddr, symbol] of v4TokenSymbolCache) {
-              await updateV4MarketSnapshot(tokenAddr, symbol, v4Module.fetchV4CurveState);
-            }
+          const v4Module = await getV4Module();
+          for (const [tokenAddr, symbol] of v4TokenSymbolCache) {
+            await updateV4MarketSnapshot(tokenAddr, symbol, v4Module.fetchV4CurveState);
           }
         } catch (err) {
-          console.warn('[V4] Discovery/snapshot pass failed this tick (will retry next tick):', err.message);
+          console.warn('[V4] Snapshot pass failed this tick (will retry next tick):', err.message);
         }
       }
 
@@ -800,9 +812,10 @@ export async function runIndexer() {
       if (tokensErr) {
         throw new Error(`[DB ERROR] Failed to fetch active tokens: ${tokensErr.code} ${tokensErr.message}`);
       }
-      if (!tokens || tokens.length === 0) return;
-
-      for (const t of tokens) {
+      // No early return on an empty registry: the cursor and heartbeat below must still
+      // advance (V4 indexing above is registry-independent, and a V4-only deployment would
+      // otherwise never heartbeat at all).
+      for (const t of tokens || []) {
         if (!t.mint_address) continue;
         const tokenAddr = t.mint_address.toLowerCase();
 
@@ -873,11 +886,45 @@ export async function runIndexer() {
       // Successfully processed all events for range; advance block pointer safely
       lastPolledBlock = toBlock;
       await upsertIndexerHeartbeat('ok', `Indexed through block ${toBlock}`);
+      return { ok: true, indexedThrough: toBlock };
     } catch (err) {
       console.error('Indexer loop error (will retry next interval without advancing block):', err.message);
       await upsertIndexerHeartbeat('error', err.message);
+      return { ok: false, error: err.message, lastPolledBlock };
     }
-  }, EVM_INDEXER_LOOP_MS);
+  }
+
+  return {
+    tick,
+    get lastPolledBlock() {
+      return lastPolledBlock;
+    },
+  };
+}
+
+/**
+ * Main Indexer Poller Loop
+ */
+export async function runIndexer() {
+  console.log('--- Starting Incentifi EVM Indexer ---');
+  console.log(`RPC: ${RPC_URL}`);
+  console.log(`Factory: ${INCENTIFI_BONDING_CURVE_FACTORY}`);
+  console.log(`V4 Factory: ${INCENTIFI_V4_FACTORY}`);
+
+  // Best-effort warm-up of V4 discovery to chain head so the first ticks are fast. NOT
+  // load-bearing: every tick re-runs advanceV4Discovery (resumable) and refuses to index
+  // until discovery covers its window, so a failure here only delays, never disables.
+  try {
+    const head = await client.getBlockNumber();
+    console.log(`[V4 DISCOVERY] Warming up discovery (block ${V4_DISCOVERY_FLOOR_BLOCK} → ${head})...`);
+    await advanceV4Discovery(head);
+    console.log(`[V4 DISCOVERY] Warm-up complete through block ${head}. Found ${v4TokenSymbolCache.size} V4 token(s) so far.`);
+  } catch (err) {
+    console.error(`[V4 DISCOVERY] Warm-up incomplete (scanned through ${v4LastScannedBlock ?? 'none yet'}); every tick will keep retrying and the heartbeat reports "error" until discovery is ready:`, err.message);
+  }
+
+  const indexer = createIndexer();
+  setInterval(() => indexer.tick(), EVM_INDEXER_LOOP_MS);
 }
 
 if (process.argv[1]?.endsWith('evm-indexer.mjs')) {
