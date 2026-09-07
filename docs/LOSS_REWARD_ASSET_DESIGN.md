@@ -1,6 +1,6 @@
 # Creator-selected Loss-Reward payout asset — Design Doc (Phase B, pre-Solidity)
 
-**Status:** architecture proposal. Nothing implemented, nothing deployed. Phase C starts only after this doc is approved.
+**Status:** Phase B approved with three amendments (A, B, C below); **Phase C implemented in this PR**: `LossRewardPoolV2`, `RewardSwapperUniswapV3`, deploy + re-point scripts, 24 fork tests green. **Nothing deployed.** Measured numbers in §C5.
 **Scope:** a new `LossRewardPoolV2` at a new address that pays claims in ETH (as today) or in a creator-selected Robinhood stock token (AAPL, TSLA, NVDA at launch). The loss calculation, epoch/Merkle mechanism, eligibility, leaf format and operator model are **unchanged**. Only what the claimant receives changes.
 **Not in scope:** creator fees (they live in the hook's `creatorBalances`, never touch the pool, and stay ETH — there is no coupling to design), MSFT (deferred: no deep direct WETH pool; the two-hop needs an unaudited third-party hook), any change to PR #17's curve or fee mechanics.
 
@@ -45,7 +45,7 @@ A full stock claim is therefore ≈ **350–360k gas** (baseline + overhead + ad
 | File | Role |
 |---|---|
 | `LossRewardPoolV2.sol` | The pool. V1 surface preserved verbatim + asset config + stock payout with ETH fallback. **Holds only ETH, ever.** |
-| `RewardSwapperUniswapV3.sol` | Stateless swap adapter: wrap → direct `IUniswapV3Pool.swap` with `recipient = claimant` → callback pays WETH. Computes the TWAP reference and enforces the protocol bound. Never holds stock; holds ETH/WETH only inside one call frame. |
+| `RewardSwapperUniswapV3.sol` | Stateless swap adapter: wrap → direct `IUniswapV3Pool.swap` with `recipient = claimant` → callback pays WETH. Computes the TWAP reference; enforces `amountOutMinimum` **inside the swap frame**. Never holds stock; holds ETH/WETH only inside one call frame and asserts a zero residual before returning. **`swap` is callable only by the pool** (`OnlyLossRewardPool`); it has no `receive()`. |
 | `interfaces/ILossRewardPoolV2.sol` | Full ABI (below). |
 | `interfaces/IRewardSwapper.sol` | Adapter ABI (below). |
 | `interfaces/IRobinhoodStock.sol` | Minimal `IStock` (`uid`, `paused`), `IStockFactory` (`tokenAddress`), `IAccessControlsRegistry` (`isBlocked`, `paused`). |
@@ -162,10 +162,14 @@ function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes c
 Order inside `claimBatchAs` (also `claimRewardAs`):
 
 1. `nonReentrant`; `deadline` check (reverts `DeadlineExpired` — the user's own parameter).
-2. For each epoch: `_claimEpoch` exactly as V1 (root exists, not claimed, proof verifies for `msg.sender`), **`hasClaimed = true` here, before any external call**, plus the new per-epoch cap (§B9). Sum → `total`.
+2. For each epoch: `_claimEpoch` exactly as V1 (root exists, not claimed, proof verifies for `msg.sender`), **`hasClaimed = true` and the per-epoch cap are written here, before any external call**. Sum → `total`.
 3. Effects: `totalClaimed[token] += total`.
 4. Decide payout (§B4 pre-checks). ETH path: `call{value: total}` to `msg.sender`, `RewardPaid(token, claimant, total, address(0), 0)`.
-5. Stock path: `swapper.swap{value: total}(asset, pool, minAssetOut, refFloor, msg.sender, deadline)` inside `try/catch`. The adapter wraps `total` to WETH and calls `IUniswapV3Pool.swap(recipient = claimant, zeroForOne = true, amountSpecified = total, sqrtPriceLimit = MIN+1)`. The stock goes **from the Uniswap pool straight to the claimant**; neither the pool nor the adapter ever holds it. On success: `RewardPaid(token, claimant, total, asset, assetOut)`.
+5. Stock path: `swapper.swap{value: total}(asset, pool, amountOutMinimum, msg.sender, deadline)` inside `try/catch`, with `amountOutMinimum = max(userMin, protocolFloor)` (§B4). The adapter wraps `total` to WETH and calls `IUniswapV3Pool.swap(recipient = claimant, zeroForOne = true, amountSpecified = total, sqrtPriceLimit = MIN+1)`. The stock goes **from the Uniswap pool straight to the claimant**; neither the pool nor the adapter ever holds it. On success: `RewardPaid(token, claimant, total, asset, assetOut)`.
+
+**Amendment C — the minimum applies to the batch total.** `minStockRewardWei` is compared against the summed `total` of the claim, never per epoch, so a user can combine several small epochs in one `claimBatchAs` to reach a stock payout (tested: three 0.001 ETH epochs — one alone pays ETH as `BelowMinimum`, two together pay AAPL).
+
+**Amendment B — V1 signatures on a stock token.** `claimReward` / `claimBatch` (no `minAssetOut`, no `deadline`) **revert `UseClaimAs()`** when the effective payout is a stock. They still work, and pay ETH, when the effective payout is ETH anyway: the token is ETH, `forceEthPayout` was applied, or the batch total is below `minStockRewardWei`. Stated in `ILossRewardPoolV2` and tested. The legacy relayer path in the gateway now encodes `claimBatchAs` (it remains deprecated: the pool binds `claimant = msg.sender`).
 
 **Economics, stated in the contract NatSpec, the design doc and the UI:** *your ETH allocation is spent buying the selected stock at the moment you claim; you receive whatever it buys.* There is no dollar-value promise, no oracle price, no shortfall liability, no top-up. The reward amount in the Merkle leaf is and stays ETH-denominated. If the stock cannot be delivered you receive the ETH instead.
 
@@ -176,35 +180,44 @@ Order inside `claimBatchAs` (also `claimRewardAs`):
 
 Incentives first: at claim time **the caller is the beneficiary**. A user-supplied `minAssetOut` is aligned (unlike `convert()` in PR #17, where the caller was not the beneficiary), so it is the primary protection. The protocol bound exists only to stop a buggy or hostile frontend from passing `minAssetOut = 0`.
 
+**Amendment A — bound enforcement is inside the swap, because delivery to the claimant is irreversible.** Exactly:
+
+- Before the swap the pool reads `refOut = swapper.referenceOut(pool, twapWindow, total)` and derives `protocolFloor = refOut × (1 − maxDeviationBps / 10 000)`.
+- The swap is called with **`amountOutMinimum = max(userMin, protocolFloor)`**. The adapter checks the delivered amount against it *inside the swap frame*: a shortfall reverts the frame with `InsufficientOutput(out, min)`, which unwinds the Uniswap transfer to the claimant. Nothing has moved when the pool catches it.
+- If the adapter reverts with `InsufficientOutput`: **if `protocolFloor > userMin` the protocol was the binding bound → ETH fallback (`BelowProtocolBound`); otherwise the user's bound was binding → the claim reverts (`MinOutNotMet(out, userMin)`)**. The two are distinguishable by construction and both are tested on the same manipulated pool state.
+- Any *other* revert from the adapter/pool/token (paused mid-flight, blocked pool, callback failure) → ETH fallback (`SwapFailed`, revert data attached). This is the one refinement to the amendment as written: a non-output failure is never turned into a claim revert on the user, because "a reward must never be stuck".
+- **No post-swap outcome check can trigger a fallback**: once the adapter returns, stock has moved. Post-swap checks only assert invariants — the adapter reverts `ResidualBalance` if it holds any WETH or ETH after the swap (an impossible state, hence a revert not a fallback).
+- **The ETH for the swap is passed as `msg.value` in the same adapter call that swaps.** Nothing is transferred to the adapter in a prior call, so a caught revert returns the ETH to the pool atomically and the fallback pays it out. The adapter has no `receive()`; bare ETH to it reverts.
+
 1. **Required `minAssetOut` and `deadline`.** The frontend derives `minAssetOut` from a fresh QuoterV2 quote on the configured route × (1 − user slippage, default 1%), `deadline = now + 10 min`. Failure of *this* bound reverts the whole claim (`MinOutNotMet`) — the user's choice; nothing is consumed and they retry.
-2. **Protocol sanity bound: the V3 pool's own TWAP.** `refOut = ethIn × price(meanTick over twapWindow)` from `pool.observe([window, 0])`; the executed output must satisfy `assetOut ≥ refOut × (1 − maxDeviationBps/10 000)`. Failure is *the protocol's* choice and goes to the ETH fallback (`BelowProtocolBound`), not a revert. **Proposed defaults: window 1800 s, tolerance 300 bps, per asset, owner-tunable.** Justification:
+2. **Protocol sanity bound: the V3 pool's own TWAP.** `refOut = ethIn × price(meanTick over twapWindow)` from `pool.observe([window, 0])` (V3 rounding); enforced through `amountOutMinimum` as above. **Defaults: window 1800 s, tolerance 300 bps, per asset, owner-tunable (window ≥ 300 s, tolerance ≤ 2 000 bps enforced by the contract).** Justification:
    - *Why the pool's TWAP and not Chainlink:* the stock feeds go 65 h stale over weekends (measured) while the pools trade 24/7; a hard Chainlink bound would fall back to ETH every weekend. The pool's TWAP tracks the venue the claim actually executes on.
-   - *Why 30 min:* Robinhood Chain has a single sequencer, no MEV auction and ~10 blocks/s, so a spot or 1-block reference is trivially manipulable in one transaction. Moving a 30-min TWAP by 3% requires holding the pool ≥ 3% off for a large fraction of 1800 s against arbitrage from the far deeper USDG pools ($1.6M AAPL, $1.5M TSLA, $6.3M NVDA) — capital ≈ pool depth × deviation, exposed for 30 min, to skim ≤ 3% of one user's reward. All three pools carry ≥ 6 h of observations today (TSLA 13 h at cardinality 300), so 1800 s is available with > 10× margin; if `observe` ever reverts `OLD`, the adapter retries a 600 s window and, failing that, reports `available = false` → ETH fallback (`ReferenceUnavailable`).
-   - *Why 3%:* it must exceed LP fee (0.05–0.30%) + measured impact (≤ 0.05% at 0.5 ETH) + the drift a legitimate claim can see over the window. Regular-session 30-min moves for AAPL/NVDA are typically well under 1%; TSLA can exceed 3% on news days, in which case the claim pays ETH — a safe outcome, not a loss. Tighter bounds cost users stock payouts on ordinary volatility; looser bounds shift more of the manipulation budget to the attacker. 3% is the point where the attacker's edge is smaller than a one-block sandwich would already be *without* any TWAP on a 5-block-lag arb.
-   - *Chainlink as an extra check only when fresh:* if `updatedAt` is within 3600 s and the L2 sequencer-uptime feed reports up, the adapter additionally requires the TWAP-implied USD price to be within 500 bps of the feed (USD via the ETH/USD feed, same freshness rule). Stale → skipped, never a hard block.
-3. **Liquidity check before attempting:** `pool.liquidity() > 0` and `refOut > 0`; otherwise ETH fallback (`NoLiquidity`) with no swap attempted.
+   - *Why 30 min:* Robinhood Chain has a single sequencer, no MEV auction and ~10 blocks/s, so a spot or 1-block reference is trivially manipulable in one transaction. Moving a 30-min TWAP by 3% requires holding the pool ≥ 3% off for a large fraction of 1800 s against arbitrage from the far deeper USDG pools ($1.6M AAPL, $1.5M TSLA, $6.3M NVDA) — capital ≈ pool depth × deviation, exposed for 30 min, to skim ≤ 3% of one user's reward. All three pools carry ≥ 6 h of observations today (TSLA 13 h at cardinality 300), so 1800 s is available with > 10× margin; if `observe` reverts `OLD`, the adapter retries a 600 s window and, failing that, reports `available = false` → ETH fallback (`ReferenceUnavailable`). The fork test that pushes the AAPL pool with a 60 ETH buy inside one block confirms the TWAP does not move within that block.
+   - *Why 3%:* it must exceed LP fee (0.05–0.30%) + measured impact (≤ 0.05% at 0.5 ETH) + the drift a legitimate claim can see over the window. Regular-session 30-min moves for AAPL/NVDA are typically well under 1%; TSLA can exceed 3% on news days, in which case the claim pays ETH — a safe outcome, not a loss. Tighter bounds cost users stock payouts on ordinary volatility; looser bounds shift more of the manipulation budget to the attacker.
+   - *Chainlink as an extra check only when fresh:* deferred to a later adapter version. The interface allows it (`referenceOut` is the adapter's), and it would apply only when `updatedAt` is within 3600 s and the L2 sequencer feed reports up; never a hard block.
+3. **Liquidity check before attempting:** `swapper.poolLiquidity(pool) > 0` and `refOut > 0`; otherwise ETH fallback (`NoLiquidity`) with no swap attempted.
 4. **Cheap pre-checks before the swap** (~15k gas): registry round-trip, `asset.paused()` (covers token *and* global pause), `registry.isBlocked(claimant)`. Any failure → ETH fallback without a wasted swap.
-5. **Minimum reward size for stock payout.** Marginal cost of the stock path ≈ 275k gas ≈ 0.000085 ETH at today's 0.305 gwei. Rule: *the marginal cost must not exceed 5% of the reward* ⇒ `minStockRewardWei = 20 × 275 000 × gasPrice`. **Default 0.002 ETH (≈ $5 at $2,493/ETH)**, owner-tunable with `MinStockRewardUpdated`; batches are summed first, so the threshold applies to the whole claim. Below it the claim pays ETH directly (`BelowMinimum`). Stated plainly: with the current reward magnitudes on this launchpad (the last TESTINGG claim was 0.00012 ETH) most claims will land under this threshold and pay ETH; the stock path is for positions where the reward is worth the swap.
-6. **`nonReentrant`, checks-effects-interactions, `hasClaimed` before any external call** (§B3). The adapter has no storage; the only re-entrant surfaces are the claimant's `receive()` on the ETH path (blocked by the guard) and the V3 callback (adapter checks `msg.sender == pool` and pays WETH only).
+5. **Minimum reward size for stock payout.** Measured on the fork (§C5): a one-epoch AAPL claim costs 352,223 gas against 120,144 for the same ETH claim — **≈ 232k gas of stock-path overhead**, ≈ 0.00007 ETH at today's 0.305 gwei. Rule: *the marginal cost must not exceed 5% of the reward* ⇒ `minStockRewardWei = 20 × 232 000 × gasPrice` ≈ 0.0014 ETH today. **Default 0.002 ETH (≈ $5)**, owner-tunable with `MinStockRewardUpdated`; applies to the batch total (Amendment C). Below it the claim pays ETH directly (`BelowMinimum`). Stated plainly: with the current reward magnitudes on this launchpad (the last TESTINGG claim was 0.00012 ETH) most claims will land under this threshold and pay ETH; the stock path is for positions where the reward is worth the swap.
+6. **`nonReentrant`, checks-effects-interactions, `hasClaimed` before any external call** (§B3). The adapter has no storage beyond the in-flight pool address; the only re-entrant surfaces are the claimant's `receive()` on the ETH path (blocked by the guard, tested both propagated and swallowed) and the V3 callback (adapter checks `msg.sender == pool` and pays WETH only).
 
 ## B5. Fallback — a reward must never be stuck
 
-Every stock-path failure pays the ETH allocation instead and emits `RewardPaidInEthFallback(claimant, token, asset, reason, data)`:
+Every stock-path failure pays the ETH allocation instead and emits `RewardPaidInEthFallback(claimant, token, asset, reason, data)` followed by `RewardPaid(token, claimant, total, address(0), 0)`:
 
 | Reason | When | Swap attempted? |
 |---|---|---|
 | `ForcedEth` | owner used `forceEthPayout(token)` | no |
+| `BelowMinimum` | batch `total < minStockRewardWei` (V1 signatures allowed here) | no |
 | `AssetDisabled` | route disabled/missing | no |
 | `RegistryMismatch` | `uid()` reverted or `tokenAddress(uid) != asset` at claim time | no |
-| `AssetPaused` | `asset.paused()` | no |
+| `AssetPaused` | `asset.paused()` (token or global) | no |
 | `ClaimantBlocked` | `registry.isBlocked(claimant)` — a transfer to them would revert | no |
 | `NoLiquidity` | `liquidity() == 0` or `refOut == 0` | no |
 | `ReferenceUnavailable` | TWAP `observe` reverted at both windows | no |
-| `BelowMinimum` | `total < minStockRewardWei` | no |
-| `BelowProtocolBound` | executed output under the TWAP floor (swap reverted and unwound) | yes |
+| `BelowProtocolBound` | `InsufficientOutput` with the protocol floor binding (swap reverted and unwound) | yes |
 | `SwapFailed` | any other revert from the adapter/pool/token (`data` = revert bytes) | yes |
 
-Two deliberate exceptions bubble up instead of falling back: `MinOutNotMet` (the user's own bound) and `DeadlineExpired`. The `try/catch` distinguishes them by revert selector. Because the whole swap runs in the adapter's frame, a revert unwinds the WETH wrap too; the pool's ETH is untouched and is then paid out directly.
+Three things bubble up instead of falling back, all the user's own: `MinOutNotMet` (their bound was binding), `DeadlineExpired`, and `UseClaimAs` (wrong signature for a stock token). Because the whole swap runs in the adapter's frame, a revert unwinds the WETH wrap too; the pool's ETH is untouched and is then paid out directly.
 
 ## B6. Migration
 
@@ -256,24 +269,46 @@ V1 keeps its ETH (0.0222 ETH today) and its published epochs; **no funds move be
 
 ## B10. Test plan (Phase C, Foundry, Robinhood mainnet fork, real registry/factory/pools)
 
-| Case | Setup / assertion |
+Foundry, Robinhood mainnet fork, real StockFactory / access registry / stock tokens / Uniswap V3 pools. `test/foundry/LossRewardPoolV2.t.sol` (21) + `test/foundry/LossRewardPoolV2Hook.t.sol` (3, wired to the PR #17 hook/factory/converter). **24/24 passing.**
+
+| Case | Test | Result |
+|---|---|---|
+| ETH reward byte-for-byte unchanged | `test_EthClaim_ParityWithV1` — V1 and V2 side by side, identical `RewardClaimed` topics+data, balances, counters; V1 signatures | pass |
+| AAPL reward: claim receives AAPL, ETH consumed | `test_StockClaim_AAPL` | pass |
+| TSLA on another token, same block, no cross-contamination | `test_TwoAssets_SameBlock_NoCrossContamination` | pass |
+| Creator ETH unaffected | `test_HookFeesFundV2_StockClaim_CreatorEthUntouched` (hook `creatorBalances` before/after, then pulled) | pass |
+| Non-setter / non-creator cannot set; A's creator cannot set B's | `test_SetRewardAsset_Authorisation`, `test_FactoryLaunchWithRewardAsset_AgainstV2_SetsIt` | pass |
+| Arbitrary / non-registry address rejected (asset and route) | `test_NonRegistryAssetRejected` | pass |
+| Registry-valid at launch, invalid at claim → ETH fallback + event | `test_RegistryInvalidAtClaim_FallsBackToEth` | pass |
+| Below user minOut → revert; below protocol bound → fallback; distinguishable | `test_UserBoundBinding_RevertsMinOutNotMet`, `test_ProtocolBoundBinding_FallsBack_and_UserBoundStillReverts` (60 ETH push inside the block) | pass |
+| Paused stock → fallback (and not selectable) | `test_PausedAtClaim_FallsBackToEth` | pass |
+| Empty / thin liquidity → fallback, no swap | `test_ThinLiquidity_FallsBackWithoutSwapping` | pass |
+| Claimant blocked → fallback | `test_ClaimantBlocked_FallsBackToEth` | pass |
+| Route disabled → fallback | `test_AssetDisabled_FallsBack` | pass |
+| Batch below min → ETH; batch above min → stock; mixed epochs | `test_MinimumReward_BatchTotal` | pass |
+| V1 signature on stock token reverts; on ETH / forced / below-min pays ETH | `test_V1Signatures_OnStockToken`, `test_EthClaim_ParityWithV1` | pass |
+| Reentrancy: propagated → claim reverts; swallowed → paid once | `test_Reentrancy_RevertsAndNeverDoublePays` | pass |
+| `forceEthPayout`: works, emits, owner-only, irreversible | `test_ForceEthPayout` | pass |
+| Accounting: paid + swapped + remaining == deposited, per token, mixed batch | `test_Accounting_MixedBatch` (6 claims, 3 tokens, 2 users, one fallback) | pass |
+| Adapter holds zero after every path | `assertNoCustody()` in every stock-path test (success, fallback, revert) | pass |
+| Per-epoch cap: a root over-committing an epoch cannot drain | `test_EpochOverClaimed_PerTokenAccountingIsEnforced` | pass |
+| Bare ETH rejected (pool and adapter); deadline; adapter entrypoint pool-only | `test_BareEthRejected`, `test_DeadlineExpired`, `test_AdapterSwapOnlyByPool` | pass |
+| Factory launch with rewardAsset: against V2 sets it (and surfaces V2's rejection); against V1 reverts | `test_FactoryLaunchWithRewardAsset_AgainstV2_SetsIt`, `…_AgainstV1_Reverts` | pass |
+| Deploy script runs with an EOA sender | `forge script script/DeployLossRewardPoolV2.s.sol --sender 0x1111…` dry run (no broadcast): routes validated against the live V3 factory, all three assets selectable | pass |
+
+## C5. Measured numbers (Phase C, Robinhood fork, block ≈ 56.87M)
+
+| Measurement | Value |
 |---|---|
-| ETH reward unchanged | V1 and V2 side by side, identical roots/leaves/proofs; identical events, `hasClaimed`, counters, balance deltas |
-| AAPL reward | claim receives AAPL in the claimant's wallet, ETH allocation consumed, pool/adapter hold 0 AAPL, `RewardPaid` fields |
-| TSLA on another token, same block | two tokens, two assets, claims in one block: no cross-contamination of counters or assets |
-| Creator ETH unaffected | hook `creatorBalances` identical before/after every claim |
-| Authorisation | non-setter `setRewardAsset` reverts; second write reverts; factory-level: only the launcher can pick, creator of A cannot touch B |
-| Non-registry address | counterfeit AAPL and an EOA rejected at selection (`AssetNotSelectable`) |
-| Valid at launch, invalid at claim | `vm.mockCall` on `paused()` / `tokenAddress()` → ETH fallback + event with reason |
-| Below `minAssetOut` | reverts `MinOutNotMet`, `hasClaimed` unchanged |
-| Below protocol bound | same-block price move so output < TWAP floor while `minOut = 0` → ETH fallback `BelowProtocolBound` |
-| Paused stock | mocked `paused()` true → fallback |
-| Empty / thin liquidity | mocked `liquidity()` 0 → fallback `NoLiquidity`, no swap |
-| Below minimum reward | `total < minStockRewardWei` → direct ETH, `BelowMinimum` |
-| Reentrancy | claimant contract re-enters on `receive()` and via a hostile callback → reverts, single payment |
-| `forceEthPayout` | works, emits, owner-only, irreversible |
-| Accounting | mixed batch of ETH and stock claims across tokens: Σ ETH paid + Σ ETH spent on swaps + remaining == Σ deposited per token; contract balance invariant |
-| Gas | measured per claim type, written back into this doc (C5) |
+| `claimBatchAs`, 1 epoch, empty proof, **AAPL** payout (pre-checks + TWAP + wrap + swap + delivery) | **352,223 gas** |
+| `claimBatchAs`, 1 epoch, empty proof, **ETH** payout | **120,144 gas** |
+| Stock-path overhead | **≈ 232k gas** ≈ 0.00007 ETH at 0.305 gwei (L1 data component 0) |
+| V1 `claimReward`, 1 epoch, empty proof (baseline) | 82,421 gas |
+| 0.05 ETH → AAPL via the 0.05% pool (probe, direct swap) | 0.38881 AAPL raw (× uiMultiplier 1.000566 for display) |
+| Same-block 60 ETH push on the AAPL/WETH pool | 30-min TWAP reference unchanged to the wei; spot output fell below the 3% floor → `BelowProtocolBound` fallback |
+| `minStockRewardWei` default | 0.002 ETH (5%-rule value today ≈ 0.0014 ETH) |
+
+Slippage observed per asset in the suite (0.05–0.07 ETH claims, quiet pool): AAPL, TSLA, NVDA deliveries all above 99% of the TWAP-implied output (the user `minOut` used in `test_StockClaim_AAPL` is 99% of the reference and is met).
 
 ## B11. Risks and what is not verified
 
