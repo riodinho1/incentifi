@@ -23,7 +23,8 @@ interface ILossRewardPoolV2 {
         RegistryMismatch,     // uid()/tokenAddress() round-trip failed at claim time
         AssetPaused,          // asset.paused() (token or global)
         ClaimantBlocked,      // registry.isBlocked(claimant): a transfer to them would revert
-        NoLiquidity,          // pool has no in-range liquidity / reference is zero
+        NoLiquidity,          // EMPTY pool: zero in-range liquidity, or a zero reference. Thin (but nonzero)
+                              // liquidity is not caught here; it surfaces in-swap as BelowProtocolBound.
         ReferenceUnavailable, // TWAP could not be read
         BelowMinimum,         // batch total below minStockRewardWei
         BelowProtocolBound,   // swap reverted InsufficientOutput and the protocol floor was binding

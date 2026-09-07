@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import {
   createPublicClient,
+  parseAbiItem,
   createWalletClient,
   http,
   parseAbi,
@@ -99,6 +100,9 @@ const OPERATOR_PRIVATE_KEY = process.env.OPERATOR_PRIVATE_KEY || '';
 const LOSS_REWARD_POOL_ADDRESS = process.env.VITE_LOSS_REWARD_POOL || '0x697bda9db5a297a9cd9ed969bbf2549d0527dcdf';
 const INCENTIFI_FACTORY_ADDRESS = process.env.VITE_INCENTIFI_BONDING_CURVE_FACTORY || '0xa0143de84fba1753b887e4e32941e4fb342e473f';
 const ALERT_WEBHOOK_URL = process.env.ALERT_WEBHOOK_URL || '';
+// LossRewardPoolV2 (creator-selected stock payouts). Optional until V2 is deployed; when set, the
+// worker polls RewardPaidInEthFallback on every run — see monitorFallbackEvents() below.
+const LOSS_REWARD_POOL_V2_ADDRESS = process.env.LOSS_REWARD_POOL_V2_ADDRESS || '';
 const WORKER_NAME = 'loss-reward-worker';
 
 /**
@@ -1021,7 +1025,86 @@ export async function runEpochWorker(options = {}) {
       results.push({ tokenAddress: String(t.mint_address).toLowerCase(), skipped: true, reason: 'error', detail: err.message });
     }
   }
+  // V2 fallback-rate monitor (no-op until LOSS_REWARD_POOL_V2_ADDRESS is set). Runs after the
+  // epochs so a monitoring failure can never delay a payout.
+  if (!options.skipFallbackMonitor) await monitorFallbackEvents(options.fallbackMonitor || {});
   return results;
+}
+
+// ---------------------------------------------------------------------------------------------
+// LossRewardPoolV2 fallback monitor.
+//
+// A stock claim that cannot deliver the stock pays ETH instead and emits
+// RewardPaidInEthFallback(claimant, token, asset, reason, data). That is the ONLY signal of an
+// adapter bug, a drained route, or a paused asset: no transaction fails, every user simply gets
+// ETH. So the worker polls the event on every run and alerts on any reason that is not expected
+// in normal operation (ForcedEth = owner decision, BelowMinimum = small claim, by design).
+// ---------------------------------------------------------------------------------------------
+export const FALLBACK_REASONS = [
+  'ForcedEth', 'AssetDisabled', 'RegistryMismatch', 'AssetPaused', 'ClaimantBlocked',
+  'NoLiquidity', 'ReferenceUnavailable', 'BelowMinimum', 'BelowProtocolBound', 'SwapFailed',
+];
+export const EXPECTED_FALLBACK_REASONS = new Set(['ForcedEth', 'BelowMinimum']);
+const FALLBACK_EVENT = parseAbiItem(
+  'event RewardPaidInEthFallback(address indexed claimant, address indexed token, address indexed asset, uint8 reason, bytes data)'
+);
+/** Default look-back when there is no cursor yet: ~5 minutes at ~10 blocks/s, one worker cadence. */
+export const FALLBACK_LOOKBACK_BLOCKS = 3000n;
+let fallbackCursorBlock = null;
+
+/**
+ * Pure: folds RewardPaidInEthFallback logs into counts per reason. Exported for unit tests.
+ */
+export function summarizeFallbackEvents(logs) {
+  const byReason = {};
+  const tokens = new Set();
+  const claimants = new Set();
+  let alertable = 0;
+  for (const log of logs || []) {
+    const idx = Number(log.args?.reason ?? -1);
+    const name = FALLBACK_REASONS[idx] ?? `Unknown(${idx})`;
+    byReason[name] = (byReason[name] || 0) + 1;
+    if (log.args?.token) tokens.add(String(log.args.token).toLowerCase());
+    if (log.args?.claimant) claimants.add(String(log.args.claimant).toLowerCase());
+    if (!EXPECTED_FALLBACK_REASONS.has(name)) alertable++;
+  }
+  return { total: (logs || []).length, alertable, byReason, tokens: [...tokens], claimants: claimants.size };
+}
+
+/**
+ * Polls RewardPaidInEthFallback on LossRewardPoolV2 since the last run and alerts on unexpected
+ * reasons. No-op until LOSS_REWARD_POOL_V2_ADDRESS is configured. Never throws into the epoch
+ * loop: monitoring must not be able to stop payouts.
+ *   options.client  — viem public client (default: the worker's)
+ *   options.alert   — alert sink (default: sendAlert)
+ *   options.address — pool address (default: env)
+ *   options.fromBlock / options.toBlock — override the cursor (tests)
+ */
+export async function monitorFallbackEvents(options = {}) {
+  const address = options.address ?? LOSS_REWARD_POOL_V2_ADDRESS;
+  if (!address) return { skipped: true, reason: 'LOSS_REWARD_POOL_V2_ADDRESS not set' };
+  const client = options.client ?? publicClient;
+  const alert = options.alert ?? sendAlert;
+  try {
+    const latest = options.toBlock ?? (await client.getBlockNumber());
+    let fromBlock = options.fromBlock ?? fallbackCursorBlock;
+    if (fromBlock == null) fromBlock = latest > FALLBACK_LOOKBACK_BLOCKS ? latest - FALLBACK_LOOKBACK_BLOCKS : 0n;
+    if (fromBlock > latest) return { skipped: true, reason: 'cursor ahead of head', fromBlock, toBlock: latest };
+    const logs = await client.getLogs({ address: getAddress(address), event: FALLBACK_EVENT, fromBlock, toBlock: latest });
+    const summary = summarizeFallbackEvents(logs);
+    fallbackCursorBlock = latest + 1n;
+    if (summary.total > 0) {
+      const line = Object.entries(summary.byReason).map(([k, v]) => `${k}=${v}`).join(', ');
+      console.log(`[FALLBACK MONITOR] ${summary.total} RewardPaidInEthFallback in blocks ${fromBlock}-${latest} (${line}); tokens: ${summary.tokens.join(',')}`);
+      if (summary.alertable > 0) {
+        await alert(`LossRewardPoolV2 paid ${summary.alertable} stock claim(s) in ETH for an UNEXPECTED reason in blocks ${fromBlock}-${latest}: ${line}. Tokens: ${summary.tokens.join(',')}. Check the adapter/route/asset state before the next epoch.`);
+      }
+    }
+    return { ...summary, fromBlock, toBlock: latest };
+  } catch (err) {
+    console.warn(`[FALLBACK MONITOR] could not read RewardPaidInEthFallback logs: ${err.message}`);
+    return { skipped: true, reason: 'error', detail: err.message };
+  }
 }
 
 // Backward-compatible alias

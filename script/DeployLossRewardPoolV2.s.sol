@@ -47,7 +47,14 @@ contract DeployLossRewardPoolV2 is Script {
         _route(pool, address(swapper), AAPL, AAPL_WETH_POOL, 500);
         _route(pool, address(swapper), TSLA, TSLA_WETH_POOL, 3000);
         _route(pool, address(swapper), NVDA, NVDA_WETH_POOL, 500);
-        if (assetSetter != address(0)) pool.setAssetSetter(assetSetter, true);
+        if (assetSetter != address(0)) {
+            pool.setAssetSetter(assetSetter, true);
+        } else {
+            // RUNBOOK: without an authorised setter EVERY stock-asset launch reverts NotAssetSetter
+            // (ETH launches still work). Call pool.setAssetSetter(<legible factory>, true) before
+            // opening launches, or re-run with ASSET_SETTER set.
+            console2.log("WARNING: ASSET_SETTER unset - stock-asset launches will revert NotAssetSetter until setAssetSetter(<legible factory>, true) is called");
+        }
         pool.setMinStockReward(minStockRewardWei);
         vm.stopBroadcast();
 
