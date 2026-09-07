@@ -479,11 +479,12 @@ contract LossRewardPoolV2Test is V2Base {
         pool.depositReward{value: 1 ether}(tokenAapl);
         publish1(tokenAapl, 1, user, 0.05 ether);
         publish1(tokenAapl, 2, user, 0.05 ether);
-        (, uint256 floor) = protocolFloorFor(AAPL_POOL, 0.05 ether);
+        (uint256 refBefore, uint256 floor) = protocolFloorFor(AAPL_POOL, 0.05 ether);
 
         _manipulateAapl(60 ether); // spot now well below the TWAP-implied output
-        (uint256 refAfter,) = swapper.referenceOut(AAPL_POOL, 1800, 0.05 ether);
-        assertApproxEqAbs(refAfter, floor * 10_000 / 9_700, 1, "TWAP unchanged within the block");
+        (uint256 refAfter, bool okAfter) = swapper.referenceOut(AAPL_POOL, 1800, 0.05 ether);
+        assertTrue(okAfter);
+        assertEq(refAfter, refBefore, "the contract's own TWAP reference is unchanged within the block");
 
         // protocol floor binding (userMin = 0, a buggy frontend): fallback, not a revert
         uint256 before = user.balance;

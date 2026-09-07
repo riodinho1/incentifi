@@ -190,12 +190,12 @@ Incentives first: at claim time **the caller is the beneficiary**. A user-suppli
 - **The ETH for the swap is passed as `msg.value` in the same adapter call that swaps.** Nothing is transferred to the adapter in a prior call, so a caught revert returns the ETH to the pool atomically and the fallback pays it out. The adapter has no `receive()`; bare ETH to it reverts.
 
 1. **Required `minAssetOut` and `deadline`.** The frontend derives `minAssetOut` from a fresh QuoterV2 quote on the configured route × (1 − user slippage, default 1%), `deadline = now + 10 min`. Failure of *this* bound reverts the whole claim (`MinOutNotMet`) — the user's choice; nothing is consumed and they retry.
-2. **Protocol sanity bound: the V3 pool's own TWAP.** `refOut = ethIn × price(meanTick over twapWindow)` from `pool.observe([window, 0])` (V3 rounding); enforced through `amountOutMinimum` as above. **Defaults: window 1800 s, tolerance 300 bps, per asset, owner-tunable (window ≥ 300 s, tolerance ≤ 2 000 bps enforced by the contract).** Justification:
+2. **Protocol sanity bound: the V3 pool's own TWAP.** `refOut = (ethIn − ethIn × feeTier) × price(meanTick over twapWindow)` from `pool.observe([window, 0])` (V3 rounding) — **net of the pool's fee tier** (review note 1), so `maxDeviationBps` measures impact + drift only and means what it says: a 3% tolerance on the 0.30% TSLA pool tolerates 3% of impact, not 2.7%. Enforced through `amountOutMinimum` as above. **Defaults: window 1800 s, tolerance 300 bps, per asset, owner-tunable (window ≥ 300 s, tolerance ≤ 2 000 bps enforced by the contract).** Justification:
    - *Why the pool's TWAP and not Chainlink:* the stock feeds go 65 h stale over weekends (measured) while the pools trade 24/7; a hard Chainlink bound would fall back to ETH every weekend. The pool's TWAP tracks the venue the claim actually executes on.
    - *Why 30 min:* Robinhood Chain has a single sequencer, no MEV auction and ~10 blocks/s, so a spot or 1-block reference is trivially manipulable in one transaction. Moving a 30-min TWAP by 3% requires holding the pool ≥ 3% off for a large fraction of 1800 s against arbitrage from the far deeper USDG pools ($1.6M AAPL, $1.5M TSLA, $6.3M NVDA) — capital ≈ pool depth × deviation, exposed for 30 min, to skim ≤ 3% of one user's reward. All three pools carry ≥ 6 h of observations today (TSLA 13 h at cardinality 300), so 1800 s is available with > 10× margin; if `observe` reverts `OLD`, the adapter retries a 600 s window and, failing that, reports `available = false` → ETH fallback (`ReferenceUnavailable`). The fork test that pushes the AAPL pool with a 60 ETH buy inside one block confirms the TWAP does not move within that block.
    - *Why 3%:* it must exceed LP fee (0.05–0.30%) + measured impact (≤ 0.05% at 0.5 ETH) + the drift a legitimate claim can see over the window. Regular-session 30-min moves for AAPL/NVDA are typically well under 1%; TSLA can exceed 3% on news days, in which case the claim pays ETH — a safe outcome, not a loss. Tighter bounds cost users stock payouts on ordinary volatility; looser bounds shift more of the manipulation budget to the attacker.
    - *Chainlink as an extra check only when fresh:* deferred to a later adapter version. The interface allows it (`referenceOut` is the adapter's), and it would apply only when `updatedAt` is within 3600 s and the L2 sequencer feed reports up; never a hard block.
-3. **Liquidity check before attempting:** `swapper.poolLiquidity(pool) > 0` and `refOut > 0`; otherwise ETH fallback (`NoLiquidity`) with no swap attempted.
+3. **Empty-pool check before attempting:** `swapper.poolLiquidity(pool) > 0` and `refOut > 0`; otherwise ETH fallback (`NoLiquidity`) with no swap attempted. This is an *empty-pool* check, not a depth check (review note 2): in-range liquidity of 1 wei passes it. **Thin liquidity is caught inside the swap** — the executed output falls under the TWAP floor and the claim falls back as `BelowProtocolBound`. A pre-swap depth check would cost a full quote simulation (≈ the swap's own gas) for a case the in-swap bound already handles, so it is deliberately not done.
 4. **Cheap pre-checks before the swap** (~15k gas): registry round-trip, `asset.paused()` (covers token *and* global pause), `registry.isBlocked(claimant)`. Any failure → ETH fallback without a wasted swap.
 5. **Minimum reward size for stock payout.** Measured on the fork (§C5): a one-epoch AAPL claim costs 352,223 gas against 120,144 for the same ETH claim — **≈ 232k gas of stock-path overhead**, ≈ 0.00007 ETH at today's 0.305 gwei. Rule: *the marginal cost must not exceed 5% of the reward* ⇒ `minStockRewardWei = 20 × 232 000 × gasPrice` ≈ 0.0014 ETH today. **Default 0.002 ETH (≈ $5)**, owner-tunable with `MinStockRewardUpdated`; applies to the batch total (Amendment C). Below it the claim pays ETH directly (`BelowMinimum`). Stated plainly: with the current reward magnitudes on this launchpad (the last TESTINGG claim was 0.00012 ETH) most claims will land under this threshold and pay ETH; the stock path is for positions where the reward is worth the swap.
 6. **`nonReentrant`, checks-effects-interactions, `hasClaimed` before any external call** (§B3). The adapter has no storage beyond the in-flight pool address; the only re-entrant surfaces are the claimant's `receive()` on the ETH path (blocked by the guard, tested both propagated and swallowed) and the V3 callback (adapter checks `msg.sender == pool` and pays WETH only).
@@ -212,7 +212,7 @@ Every stock-path failure pays the ETH allocation instead and emits `RewardPaidIn
 | `RegistryMismatch` | `uid()` reverted or `tokenAddress(uid) != asset` at claim time | no |
 | `AssetPaused` | `asset.paused()` (token or global) | no |
 | `ClaimantBlocked` | `registry.isBlocked(claimant)` — a transfer to them would revert | no |
-| `NoLiquidity` | `liquidity() == 0` or `refOut == 0` | no |
+| `NoLiquidity` | **empty pool**: `liquidity() == 0` or `refOut == 0` (thin-but-nonzero liquidity surfaces as `BelowProtocolBound` instead) | no |
 | `ReferenceUnavailable` | TWAP `observe` reverted at both windows | no |
 | `BelowProtocolBound` | `InsufficientOutput` with the protocol floor binding (swap reverted and unwound) | yes |
 | `SwapFailed` | any other revert from the adapter/pool/token (`data` = revert bytes) | yes |
@@ -282,7 +282,7 @@ Foundry, Robinhood mainnet fork, real StockFactory / access registry / stock tok
 | Registry-valid at launch, invalid at claim → ETH fallback + event | `test_RegistryInvalidAtClaim_FallsBackToEth` | pass |
 | Below user minOut → revert; below protocol bound → fallback; distinguishable | `test_UserBoundBinding_RevertsMinOutNotMet`, `test_ProtocolBoundBinding_FallsBack_and_UserBoundStillReverts` (60 ETH push inside the block) | pass |
 | Paused stock → fallback (and not selectable) | `test_PausedAtClaim_FallsBackToEth` | pass |
-| Empty / thin liquidity → fallback, no swap | `test_ThinLiquidity_FallsBackWithoutSwapping` | pass |
+| Empty pool → fallback, no swap; thin pool → in-swap `BelowProtocolBound` | `test_ThinLiquidity_FallsBackWithoutSwapping`, `test_ProtocolBoundBinding_FallsBack_and_UserBoundStillReverts` | pass |
 | Claimant blocked → fallback | `test_ClaimantBlocked_FallsBackToEth` | pass |
 | Route disabled → fallback | `test_AssetDisabled_FallsBack` | pass |
 | Batch below min → ETH; batch above min → stock; mixed epochs | `test_MinimumReward_BatchTotal` | pass |
@@ -310,10 +310,27 @@ Foundry, Robinhood mainnet fork, real StockFactory / access registry / stock tok
 
 Slippage observed per asset in the suite (0.05–0.07 ETH claims, quiet pool): AAPL, TSLA, NVDA deliveries all above 99% of the TWAP-implied output (the user `minOut` used in `test_StockClaim_AAPL` is 99% of the reference and is met).
 
+## C6. Runbook (things that bite silently if missed)
+
+1. **Authorise the launch factory before opening launches.** After `DeployLossRewardPoolV2`, the pool must have `setAssetSetter(<legible factory>, true)` — via the script's `ASSET_SETTER` env or a separate call. Without it **every stock-asset launch reverts `NotAssetSetter`** (ETH launches still work, so the failure is easy to misread as a frontend bug). The script prints a WARNING when `ASSET_SETTER` is unset. Verify with `pool.assetSetters(factory) == true` before announcing stock rewards.
+2. **Monitor `RewardPaidInEthFallback` in production.** An adapter bug, a route pointing at a drained pool, or a paused stock degrades every stock claim to ETH **without any transaction failing** — the event is the only signal. The worker now polls the event on every run (`monitorFallbackEvents` in `scripts/loss-reward-worker.mjs`, enabled by `LOSS_REWARD_POOL_V2_ADDRESS`) and raises `sendAlert` with a per-reason breakdown whenever new fallbacks appear; `ForcedEth` and `BelowMinimum` are reported but not alerted (they are expected). Treat any `SwapFailed` / `BelowProtocolBound` / `ReferenceUnavailable` burst as an incident.
+3. **Order of operations:** deploy V2 → verify on Blockscout → `setAssetSetter` → DB migration → worker dual-pool env → frontend env → `RepointHookLossRewardPool` last (§B6).
+4. **Do not send bare ETH** to V2 or the adapter: both revert. Funding is `depositReward(token)` only.
+
+## C7. Review log (PR #18 @ ebc920f, PR #17 @ 62f8f32 — approved with five non-blocking notes)
+
+| # | Note | Resolution |
+|---|---|---|
+| 1 | `referenceOut()` ignored the pool fee, so the effective tolerance on TSLA was ~2.7% | **Fixed in code:** the reference is now net of the pool's fee tier (§B4.2); `maxDeviationBps` means what it says |
+| 2 | `poolLiquidity() == 0` is an empty-pool check, not a depth check | **Relabelled** (§B4.3, §B5, interface comment); thin liquidity is handled in-swap as `BelowProtocolBound` — a pre-swap quote would cost as much as the swap |
+| 3 | Same-block manipulation test compared against a parallel recomputation with a 1-wei tolerance | **Fixed in test:** it now asserts the contract's own `referenceOut()` before and after the push are equal to the wei |
+| 4 | Confirm `setAssetRoute()` calls `validateRoute()` and rejects on `false` | **Confirmed and stated** (§B11); tested by the wrong-pool / wrong-fee cases |
+| 5 | Runbook: `setAssetSetter` before any stock launch; monitor the fallback event rate | **Done:** §C6, deploy-script WARNING, worker `monitorFallbackEvents` + alert |
+
 ## B11. Risks and what is not verified
 
 - **Upgradeable counterparties.** StockFactory (UUPS) and every Stock (shared beacon) are upgradeable by Robinhood roles; the registry round-trip and the pause/blocklist semantics are trusted as of today's verified source. The fallback design means an adverse upgrade degrades to ETH payouts, not to stuck rewards.
-- **Owner route power** is bounded to canonical V3 pools by `validateRoute`, but a shallow canonical pool would push claims to the fallback via the TWAP bound; route changes are evented.
+- **Owner route power** is bounded to canonical V3 pools: `setAssetRoute()` calls `IRewardSwapper(route.swapper).validateRoute(asset, pool, fee)` and reverts `InvalidRoute` on `false` (canonical-factory `getPool(WETH, asset, fee) == pool`, `token0 == WETH`, `token1 == asset`), and separately requires the asset to pass the StockFactory round-trip (`AssetNotSelectable`), `twapWindow ≥ 300 s`, `0 < maxDeviationBps ≤ 2 000`, and a deployed swapper. The adapter's `swap()` trusts the stored route on the strength of that check (review note 4; tested by the wrong-pool and wrong-fee cases in `test_NonRegistryAssetRejected`). A shallow canonical pool would push claims to the fallback via the in-swap bound; route changes are evented.
 - **TWAP manipulation** is bounded, not eliminated (§B4). The user's `minAssetOut` is the primary guard.
 - **Not audited:** the `FablesRampETH` hook on the USDG/ETH pool (irrelevant while MSFT is deferred).
 - **Not measured yet:** gas of the full V2 claim with adapter overhead (C5), and behaviour of `observe()` under a burst that fills TSLA's 300-slot ring inside 30 minutes (handled by the 600 s retry and ETH fallback).

@@ -61,13 +61,17 @@ contract RewardSwapperUniswapV3 is IRewardSwapper {
         }
     }
 
+    /// @dev The reference is net of the pool's fee tier, so the pool's `maxDeviationBps` measures
+    ///      price impact + drift only and means what it says (a 0.30% pool with a 3% tolerance
+    ///      tolerates 3% of impact, not 2.7%).
     function referenceOut(address pool, uint32 twapWindow, uint256 ethIn) external view returns (uint256 refOut, bool available) {
         (int24 tick, bool ok) = _meanTick(pool, twapWindow);
         if (!ok && twapWindow > FALLBACK_TWAP_WINDOW) (tick, ok) = _meanTick(pool, FALLBACK_TWAP_WINDOW);
         if (!ok) return (0, false);
         // token1 per token0 = (sqrtP / 2^96)^2 ; WETH is token0, asset is token1.
         uint160 sqrtP = TickMath.getSqrtPriceAtTick(tick);
-        refOut = FullMath.mulDiv(FullMath.mulDiv(ethIn, sqrtP, Q96), sqrtP, Q96);
+        uint256 ethInNetOfFee = ethIn - FullMath.mulDiv(ethIn, IUniswapV3PoolMinimal(pool).fee(), 1_000_000);
+        refOut = FullMath.mulDiv(FullMath.mulDiv(ethInNetOfFee, sqrtP, Q96), sqrtP, Q96);
         available = true;
     }
 
