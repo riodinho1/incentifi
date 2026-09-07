@@ -1,0 +1,29 @@
+# Foundry profile for the V4 legible-pool suite (test/foundry). Mirrors hardhat.config.ts's
+# solc settings so both toolchains build the same bytecode shape (viaIR is required by the
+# V4 hooks' graduation logic — see the comment in hardhat.config.ts).
+[profile.default]
+src = "contracts"
+test = "test/foundry"
+script = "script"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.26"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+via_ir = true
+# Resolve @uniswap/v4-core to the copy vendored INSIDE v4-periphery — the same files the
+# existing hooks import via "@uniswap/v4-periphery/lib/v4-core/..." — so PoolKey/IPoolManager
+# are one type everywhere (BaseHook overrides fail with "types differ" otherwise).
+remappings = [
+  "forge-std/=lib/forge-std/src/",
+  "@uniswap/v4-periphery/=node_modules/@uniswap/v4-periphery/",
+  "@uniswap/v4-core/=node_modules/@uniswap/v4-periphery/lib/v4-core/",
+  "solmate/=node_modules/@uniswap/v4-periphery/lib/v4-core/lib/solmate/",
+  "openzeppelin-contracts/=node_modules/@uniswap/v4-periphery/lib/v4-core/lib/openzeppelin-contracts/",
+  "permit2/=node_modules/@uniswap/v4-periphery/lib/permit2/",
+]
+fs_permissions = []
+
+[rpc_endpoints]
+robinhood = "https://rpc.mainnet.chain.robinhood.com"

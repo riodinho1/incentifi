@@ -62,8 +62,10 @@ export default defineConfig({
   },
   paths: {
     // Scoped away from test/*.mjs (this repo's plain-node JS suite, run via `npm test`)
-    // so Hardhat's node:test runner only ever picks up test/hardhat/**.
-    tests: { nodejs: 'test/hardhat' },
+    // so Hardhat's node:test runner only ever picks up test/hardhat/**. The Solidity-test
+    // path is scoped too: test/foundry/** is the Foundry suite (forge-std, run with
+    // `forge test`), which Hardhat must not try to compile.
+    tests: { nodejs: 'test/hardhat', solidity: 'test/hardhat/solidity' },
   },
   networks: {
     robinhoodFork: {
