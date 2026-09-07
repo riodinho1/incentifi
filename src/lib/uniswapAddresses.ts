@@ -149,3 +149,24 @@ export const UNISWAP_V4_STATE_VIEW = String(
  */
 export const LEGIBLE_LAUNCH_ENABLED =
   String(import.meta.env.VITE_LEGIBLE_LAUNCH_ENABLED || 'false').trim().toLowerCase() === 'true';
+
+// ----------------------------------------------------------------------------
+// LossRewardPoolV2 (PR #22) — creator-selected loss-reward payout asset. NOT deployed yet:
+// there is deliberately NO fallback address. Every V2 code path is a no-op while this is unset
+// (claims go to V1, badges read "ETH", the stock dropdown stays hidden).
+// ----------------------------------------------------------------------------
+export const LOSS_REWARD_POOL_V2 = String(import.meta.env.VITE_LOSS_REWARD_POOL_V2 || '').trim() as `0x${string}` | '';
+
+/** Shows the real stock dropdown on the launch page (ETH / AAPL / TSLA / NVDA). Default off. */
+export const STOCK_REWARDS_ENABLED =
+  String(import.meta.env.VITE_STOCK_REWARDS_ENABLED || 'false').trim().toLowerCase() === 'true';
+
+/** Robinhood's on-chain asset registry (StockFactory, UUPS proxy) — the canonical-token check. */
+export const ROBINHOOD_STOCK_FACTORY = String(
+  import.meta.env.VITE_ROBINHOOD_STOCK_FACTORY || '0x4783C67b63dE2B358Ac5951a7D41F47A38F3C046'
+).trim() as `0x${string}`;
+
+/** Robinhood's public asset list (names, logos, ACTIVE status). Filtering only — the chain decides validity. */
+export const ROBINHOOD_ASSETS_API_URL = String(
+  import.meta.env.VITE_ROBINHOOD_ASSETS_API_URL || 'https://api.robinhood.com/rhj/assets'
+).trim();

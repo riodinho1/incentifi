@@ -11,6 +11,7 @@ import {
   formatEther,
 } from 'npm:viem@2.55.2';
 import { privateKeyToAccount } from 'npm:viem@2.55.2/accounts';
+import { planClaimTransactions, poolAddressForRow } from './claim-plan.mjs';
 
 // ----------------------------------------------------------------------------
 // CORS & Configuration
@@ -40,6 +41,37 @@ if (!SESSION_SECRET) {
 
 const RPC_URL = Deno.env.get('RPC_URL') || Deno.env.get('VITE_EVM_RPC_URL') || Deno.env.get('EVM_RPC_URL') || 'https://rpc.mainnet.chain.robinhood.com';
 const LOSS_REWARD_POOL_ADDRESS = Deno.env.get('LOSS_REWARD_POOL_ADDRESS') || Deno.env.get('VITE_LOSS_REWARD_POOL') || '0x697bda9db5a297a9cd9ed969bbf2549d0527dcdf';
+// LossRewardPoolV2 — no fallback: not deployed yet. While unset, every epoch is a V1 epoch and a
+// row tagged with any other pool is refused rather than guessed.
+const LOSS_REWARD_POOL_V2_ADDRESS = Deno.env.get('LOSS_REWARD_POOL_V2_ADDRESS') || '';
+
+/**
+ * epoch_holder_rewards joined to reward_epochs, including the per-epoch pool_address
+ * (supabase/loss_reward_v2_migration.sql). If that migration has not been applied PostgREST
+ * rejects the column, so retry without it: every row is then a V1 epoch by definition.
+ */
+async function selectClaimRows(supabase: any, token: string, wallet: string) {
+  const build = (withPool: boolean) =>
+    supabase
+      .from('epoch_holder_rewards')
+      .select(`
+          id,
+          epoch_id,
+          final_reward_eth,
+          merkle_proof,
+          claimed,
+          reward_epochs!inner (
+            epoch_number,
+            status${withPool ? ',\n            pool_address' : ''}
+          )
+        `)
+      .eq('token_address', token)
+      .eq('wallet_address', wallet)
+      .eq('claimed', false);
+  let res = await build(true);
+  if (res.error && /pool_address|column/i.test(res.error.message || '')) res = await build(false);
+  return res;
+}
 const OPERATOR_PRIVATE_KEY = Deno.env.get('OPERATOR_PRIVATE_KEY') || '';
 
 const POOL_ABI = parseAbi([
@@ -508,22 +540,7 @@ export async function handleQuery(req: Request): Promise<Response> {
         .eq('token_address', normalizedToken)
         .eq('wallet_address', callerWallet)
         .maybeSingle(),
-      supabase
-        .from('epoch_holder_rewards')
-        .select(`
-          id,
-          epoch_id,
-          final_reward_eth,
-          merkle_proof,
-          claimed,
-          reward_epochs!inner (
-            epoch_number,
-            status
-          )
-        `)
-        .eq('token_address', normalizedToken)
-        .eq('wallet_address', callerWallet)
-        .eq('claimed', false),
+      selectClaimRows(supabase, normalizedToken, callerWallet),
     ]);
 
     const costBasisData = costBasisRes.data;
@@ -558,6 +575,7 @@ export async function handleQuery(req: Request): Promise<Response> {
       for (const d of candidateRows) {
         const epochNumber = Number(d.reward_epochs?.epoch_number || d.epoch_id);
         const epochStatus = d.reward_epochs?.status || 'published';
+        const poolAddress = poolAddressForRow(d, { v1: LOSS_REWARD_POOL_ADDRESS });
         const rawRewardEthStr = String(d.final_reward_eth || '0');
         let amountWei = '0';
         try {
@@ -575,14 +593,16 @@ export async function handleQuery(req: Request): Promise<Response> {
             finalRewardEth: Number(d.final_reward_eth || 0),
             amountWei,
             merkleProof: Array.isArray(d.merkle_proof) ? d.merkle_proof : [],
+            poolAddress,
           });
         } else {
           // Published epoch: verify on-chain hasClaimed status
           let onchainClaimed = false;
 
           try {
+            // hasClaimed lives on the pool the epoch was published on (V1 or V2).
             onchainClaimed = await publicClient.readContract({
-              address: getAddress(LOSS_REWARD_POOL_ADDRESS),
+              address: getAddress(poolAddress),
               abi: POOL_ABI,
               functionName: 'hasClaimed',
               args: [getAddress(normalizedToken), BigInt(epochNumber), getAddress(callerWallet)],
@@ -605,6 +625,7 @@ export async function handleQuery(req: Request): Promise<Response> {
               finalRewardEth: Number(d.final_reward_eth || 0),
               amountWei,
               merkleProof: Array.isArray(d.merkle_proof) ? d.merkle_proof : [],
+              poolAddress,
             });
           }
         }
@@ -693,22 +714,7 @@ export async function handleClaim(req: Request): Promise<Response> {
   const supabase = getServiceClient();
 
   // 1. Retrieve all candidate unclaimed epoch records for caller and token
-  const { data: rawRows, error: fetchErr } = await supabase
-    .from('epoch_holder_rewards')
-    .select(`
-      id,
-      epoch_id,
-      final_reward_eth,
-      merkle_proof,
-      claimed,
-      reward_epochs!inner (
-        epoch_number,
-        status
-      )
-    `)
-    .eq('token_address', normalizedToken)
-    .eq('wallet_address', callerWallet)
-    .eq('claimed', false);
+  const { data: rawRows, error: fetchErr } = await selectClaimRows(supabase, normalizedToken, callerWallet);
 
   if (fetchErr) {
     console.error('Failed to fetch epoch holder rewards for claim:', fetchErr);
@@ -756,15 +762,16 @@ export async function handleClaim(req: Request): Promise<Response> {
     const epochNumber = Number(row.reward_epochs?.epoch_number || row.epoch_id);
     let onchainClaimed = false;
 
+    const rowPool = poolAddressForRow(row, { v1: LOSS_REWARD_POOL_ADDRESS });
     try {
       onchainClaimed = await publicClient.readContract({
-        address: getAddress(LOSS_REWARD_POOL_ADDRESS),
+        address: getAddress(rowPool),
         abi: POOL_ABI,
         functionName: 'hasClaimed',
         args: [getAddress(normalizedToken), BigInt(epochNumber), getAddress(callerWallet)],
       });
     } catch (err: any) {
-      console.error(`RPC error: failed to verify hasClaimed for epoch ${epochNumber}:`, err);
+      console.error(`RPC error: failed to verify hasClaimed for epoch ${epochNumber} on ${rowPool}:`, err);
       // FAIL CLOSED: Do not assume unclaimed, do not submit claim batch, do not alter DB for this epoch
       return new Response(
         JSON.stringify({
@@ -832,87 +839,92 @@ export async function handleClaim(req: Request): Promise<Response> {
     transport: http(RPC_URL),
   });
 
-  let txHash: `0x${string}`;
+  // 3b. One transaction per pool: V1 epochs -> claimReward/claimBatch on V1 (the V1 ABI has no
+  //     *As variants), V2 epochs -> claimRewardAs/claimBatchAs on V2. Rows are marked claimed per
+  //     pool right after that pool's receipt, so a V2 failure never un-records a V1 success.
+  let plans;
   try {
-    if (claimableRows.length === 1) {
-      const row = claimableRows[0];
-      txHash = await walletClient.writeContract({
-        address: getAddress(LOSS_REWARD_POOL_ADDRESS),
-        abi: POOL_ABI,
-        functionName: 'claimRewardAs',
-        args: [
-          getAddress(normalizedToken),
-          BigInt(row.epochNumber),
-          row.amountWei,
-          row.merkle_proof as `0x${string}`[],
-          0n,
-          BigInt(Math.floor(Date.now() / 1000) + 600),
-        ],
-      });
-    } else {
-      const epochIds = claimableRows.map((r) => BigInt(r.epochNumber));
-      const amounts = claimableRows.map((r) => r.amountWei);
-      const proofs = claimableRows.map((r) => r.merkle_proof as `0x${string}`[]);
-
-      txHash = await walletClient.writeContract({
-        address: getAddress(LOSS_REWARD_POOL_ADDRESS),
-        abi: POOL_ABI,
-        functionName: 'claimBatchAs',
-        args: [getAddress(normalizedToken), epochIds, amounts, proofs, 0n, BigInt(Math.floor(Date.now() / 1000) + 600)],
-      });
-    }
-
-    // 4. Wait for on-chain transaction receipt confirmation
-    const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
-    if (receipt.status !== 'success') {
-      throw new Error(`Transaction reverted on-chain (status: ${receipt.status})`);
-    }
+    plans = planClaimTransactions(claimableRows, {
+      v1: LOSS_REWARD_POOL_ADDRESS,
+      v2: LOSS_REWARD_POOL_V2_ADDRESS || null,
+      token: getAddress(normalizedToken),
+    });
   } catch (err: any) {
-    console.error('Relayer claim execution failed:', err);
+    console.error('Relayer claim planning failed:', err);
+    return new Response(JSON.stringify({ error: `Cannot plan claim: ${err.message}` }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
 
-    if (err.message?.includes('AlreadyClaimed')) {
-      const claimableIds = claimableRows.map((r) => r.id);
-      await supabase
-        .from('epoch_holder_rewards')
-        .update({ claimed: true, claimed_at: new Date().toISOString() })
-        .in('id', claimableIds);
+  const txHashes: `0x${string}`[] = [];
+  const epochsClaimed: number[] = [];
+  let totalClaimedWei = 0n;
+  for (const plan of plans) {
+    let txHash: `0x${string}`;
+    try {
+      txHash = await walletClient.writeContract({
+        address: getAddress(plan.pool),
+        abi: POOL_ABI,
+        functionName: plan.functionName as any,
+        args: plan.args as any,
+      });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+      if (receipt.status !== 'success') {
+        throw new Error(`Transaction reverted on-chain (status: ${receipt.status})`);
+      }
+    } catch (err: any) {
+      console.error(`Relayer claim execution failed on ${plan.version} ${plan.pool}:`, err);
+
+      if (err.message?.includes('AlreadyClaimed')) {
+        await supabase
+          .from('epoch_holder_rewards')
+          .update({ claimed: true, claimed_at: new Date().toISOString() })
+          .in('id', plan.rowIds);
+        continue;
+      }
 
       return new Response(
         JSON.stringify({
-          success: true,
-          txHash: null,
-          claimedEth: '0',
-          alreadyClaimed: true,
-          message: 'Rewards were already claimed on-chain.',
+          error: `On-chain claim execution failed on ${plan.version}: ${err.message}`,
+          txHashes,
+          epochsClaimed,
         }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    return new Response(
-      JSON.stringify({ error: `On-chain claim execution failed: ${err.message}` }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    // ONLY AFTER on-chain confirmation, mark this pool's rows claimed via service_role
+    await supabase
+      .from('epoch_holder_rewards')
+      .update({ claimed: true, claimed_at: new Date().toISOString() })
+      .in('id', plan.rowIds);
+    txHashes.push(txHash);
+    epochsClaimed.push(...plan.epochNumbers);
+    totalClaimedWei += claimableRows.filter((r) => plan.rowIds.includes(r.id)).reduce((acc, r) => acc + r.amountWei, 0n);
   }
 
-  // 5. ONLY AFTER on-chain confirmation, mark claimed in DB via service_role
-  const claimedIds = claimableRows.map((r) => r.id);
-  const totalClaimedWei = claimableRows.reduce((acc, r) => acc + r.amountWei, 0n);
-
-  await supabase
-    .from('epoch_holder_rewards')
-    .update({
-      claimed: true,
-      claimed_at: new Date().toISOString(),
-    })
-    .in('id', claimedIds);
+  if (txHashes.length === 0) {
+    return new Response(
+      JSON.stringify({
+        success: true,
+        txHash: null,
+        txHashes: [],
+        claimedEth: '0',
+        alreadyClaimed: true,
+        message: 'Rewards were already claimed on-chain.',
+      }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
 
   return new Response(
     JSON.stringify({
       success: true,
-      txHash,
+      txHash: txHashes[0],
+      txHashes,
       claimedEth: formatEther(totalClaimedWei),
-      epochsClaimed: claimableRows.map((r) => r.epochNumber),
+      epochsClaimed,
     }),
     { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
   );

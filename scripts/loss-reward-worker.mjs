@@ -103,6 +103,10 @@ const ALERT_WEBHOOK_URL = process.env.ALERT_WEBHOOK_URL || '';
 // LossRewardPoolV2 (creator-selected stock payouts). Optional until V2 is deployed; when set, the
 // worker polls RewardPaidInEthFallback on every run — see monitorFallbackEvents() below.
 const LOSS_REWARD_POOL_V2_ADDRESS = process.env.LOSS_REWARD_POOL_V2_ADDRESS || '';
+// Dual-pool mode (docs/LOSS_REWARD_ASSET_DESIGN.md section B6). V1 is the live pool every token
+// has been funded into so far; V2 is LossRewardPoolV2. Until LOSS_REWARD_POOL_V2_ADDRESS is set
+// every path below behaves exactly as before (V1 only).
+const LOSS_REWARD_POOL_V1_ADDRESS = LOSS_REWARD_POOL_ADDRESS;
 const WORKER_NAME = 'loss-reward-worker';
 
 /**
@@ -218,6 +222,62 @@ const POOL_ABI = parseAbi([
 
 // In-process lock tracker to prevent concurrent execution on the same token
 const activeTokenLocks = new Set();
+
+/**
+ * Drain-then-switch, PER TOKEN (section B6). Which pool this token's NEXT epoch is published on:
+ *   - V2 not configured                          -> V1 (today's behaviour, unchanged)
+ *   - V1 unallocated >= this epoch's demand      -> V1 (V1 can still fund a whole epoch: keep draining it)
+ *   - V1 unallocated >= dust but < demand, V2 set -> V2 (V1's remainder is smaller than one epoch; it
+ *                                                    is picked up by a later, smaller epoch rather
+ *                                                    than parking this one as pending_funding forever)
+ *   - V1 unallocated < dust                      -> V2
+ * The demand-aware rule is what makes "drain" safe for tokens whose hook has been re-pointed to
+ * V2: V1 receives no new deposits for them, so an underfunded epoch published there would never
+ * resolve. Pending epochs keep the pool they were recorded on (reward_epochs.pool_address).
+ * Never throws: an RPC failure reading V1 falls back to V1 (the status quo).
+ */
+export async function resolveEpochPool(tokenAddress, demandWei = 0n, options = {}) {
+  const v1 = options.v1 ?? LOSS_REWARD_POOL_V1_ADDRESS;
+  const v2 = options.v2 ?? LOSS_REWARD_POOL_V2_ADDRESS;
+  const dustWei = options.dustWei ?? MIN_EPOCH_PAYOUT_WEI;
+  const client = options.client ?? publicClient;
+  if (!v2) return { address: v1, version: 'v1', reason: 'v2_not_configured', v1UnallocatedWei: null };
+  let v1UnallocatedWei;
+  try {
+    v1UnallocatedWei = BigInt(
+      await client.readContract({ address: getAddress(v1), abi: POOL_ABI, functionName: 'getUnallocatedBalance', args: [getAddress(tokenAddress)] })
+    );
+  } catch (err) {
+    console.warn(`[POOL SELECT] Could not read V1 unallocated balance for ${tokenAddress} (${err.message}); staying on V1.`);
+    return { address: v1, version: 'v1', reason: 'v1_read_failed', v1UnallocatedWei: null };
+  }
+  const demand = BigInt(demandWei || 0n);
+  if (v1UnallocatedWei >= dustWei && (demand === 0n || v1UnallocatedWei >= demand)) {
+    return { address: v1, version: 'v1', reason: 'v1_can_fund', v1UnallocatedWei };
+  }
+  return { address: v2, version: 'v2', reason: v1UnallocatedWei < dustWei ? 'v1_drained' : 'v1_below_demand', v1UnallocatedWei };
+}
+
+/**
+ * reward_epochs insert that tolerates a not-yet-applied migration: if PostgREST rejects the
+ * pool_address column (supabase/loss_reward_v2_migration.sql not run), retry without it and warn
+ * once. The gateway treats a null pool_address as V1, which is what an un-migrated deployment is.
+ */
+let warnedPoolAddressColumn = false;
+async function insertRewardEpoch(row, select = null) {
+  let q = supabase.from('reward_epochs').insert(row);
+  let res = select ? await q.select(select).single() : await q;
+  if (res.error && row.pool_address !== undefined && /pool_address|column/i.test(res.error.message || '')) {
+    if (!warnedPoolAddressColumn) {
+      console.warn('[DB] reward_epochs.pool_address is missing — apply supabase/loss_reward_v2_migration.sql. Inserting without it (readers treat null as V1).');
+      warnedPoolAddressColumn = true;
+    }
+    const { pool_address, ...rest } = row;
+    q = supabase.from('reward_epochs').insert(rest);
+    res = select ? await q.select(select).single() : await q;
+  }
+  return res;
+}
 
 async function sendAlert(message) {
   console.error(`[ALERT] ${WORKER_NAME}: ${message}`);
@@ -581,32 +641,53 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
     // 1b. Check & Resolve Prior Pending Funding Epochs (FIFO)
     if (!dryRun && OPERATOR_PRIVATE_KEY && LOSS_REWARD_POOL_ADDRESS) {
       try {
-        const { data: pendingEpochs } = await supabase
+        // pool_address may not exist before the V2 migration: select it defensively.
+        let pendingRes = await supabase
           .from('reward_epochs')
-          .select('epoch_id, epoch_number, total_distributed_eth, merkle_root, status')
+          .select('epoch_id, epoch_number, total_distributed_eth, merkle_root, status, pool_address')
           .eq('token_address', token)
           .eq('status', 'pending_funding')
           .order('epoch_number', { ascending: true });
+        if (pendingRes.error && /pool_address|column/i.test(pendingRes.error.message || '')) {
+          pendingRes = await supabase
+            .from('reward_epochs')
+            .select('epoch_id, epoch_number, total_distributed_eth, merkle_root, status')
+            .eq('token_address', token)
+            .eq('status', 'pending_funding')
+            .order('epoch_number', { ascending: true });
+        }
+        const pendingEpochs = pendingRes.data;
 
         if (pendingEpochs && pendingEpochs.length > 0) {
-          const currentPoolWei = await publicClient.readContract({
-            address: getAddress(LOSS_REWARD_POOL_ADDRESS),
-            abi: POOL_ABI,
-            functionName: 'getUnallocatedBalance',
-            args: [getAddress(token)],
-          });
-          let currentPoolEth = Number(currentPoolWei) / 1e18;
+          // A pending epoch is funded from the pool it was RECORDED on (null = V1, pre-migration
+          // rows). Balances are read once per pool and drawn down as epochs are published.
+          const poolBalanceEth = new Map();
+          const balanceFor = async (poolAddr) => {
+            const key = poolAddr.toLowerCase();
+            if (!poolBalanceEth.has(key)) {
+              const wei = await publicClient.readContract({
+                address: getAddress(poolAddr),
+                abi: POOL_ABI,
+                functionName: 'getUnallocatedBalance',
+                args: [getAddress(token)],
+              });
+              poolBalanceEth.set(key, Number(wei) / 1e18);
+            }
+            return poolBalanceEth.get(key);
+          };
 
           for (const pending of pendingEpochs) {
+            const pendingPool = pending.pool_address || LOSS_REWARD_POOL_V1_ADDRESS;
+            let currentPoolEth = await balanceFor(pendingPool);
             const requiredEth = Number(pending.total_distributed_eth || 0);
             if (currentPoolEth >= requiredEth && requiredEth > 0) {
-              console.log(`[PENDING EPOCH RESOLUTION] Pool funded (${currentPoolEth.toFixed(6)} ETH >= ${requiredEth.toFixed(6)} ETH). Publishing Epoch #${pending.epoch_number}...`);
+              console.log(`[PENDING EPOCH RESOLUTION] Pool ${pendingPool} funded (${currentPoolEth.toFixed(6)} ETH >= ${requiredEth.toFixed(6)} ETH). Publishing Epoch #${pending.epoch_number}...`);
               const account = privateKeyToAccount(OPERATOR_PRIVATE_KEY);
               const walletClient = createWalletClient({ account, transport: http(RPC_URL) });
               const totalAllocatedWei = BigInt(Math.round(requiredEth * 1e18));
 
               const txHash = await walletClient.writeContract({
-                address: getAddress(LOSS_REWARD_POOL_ADDRESS),
+                address: getAddress(pendingPool),
                 abi: POOL_ABI,
                 functionName: 'setEpochMerkleRoot',
                 args: [getAddress(token), BigInt(pending.epoch_number), pending.merkle_root, totalAllocatedWei],
@@ -618,8 +699,9 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
                   .from('reward_epochs')
                   .update({ status: 'published', onchain_tx_hash: txHash })
                   .eq('epoch_id', pending.epoch_id);
-                console.log(`[PENDING EPOCH PUBLISHED] Epoch #${pending.epoch_number} now published & claimable (Tx: ${txHash}).`);
+                console.log(`[PENDING EPOCH PUBLISHED] Epoch #${pending.epoch_number} now published & claimable on ${pendingPool} (Tx: ${txHash}).`);
                 currentPoolEth -= requiredEth;
+                poolBalanceEth.set(pendingPool.toLowerCase(), currentPoolEth);
               }
             } else {
               console.log(`[PENDING EPOCH REMAINS] Epoch #${pending.epoch_number} requires ${requiredEth.toFixed(6)} ETH, pool has ${currentPoolEth.toFixed(6)} ETH.`);
@@ -658,18 +740,26 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
     const latestDbEpochNumber = latestDbEpoch?.epoch_number || 0;
     const candidateEpochNumber = latestDbEpochNumber + 1;
 
-    // Check on-chain root for candidate epoch
+    // Check on-chain root for candidate epoch — on EVERY pool this worker can publish to, since a
+    // crash between publish and DB persistence could have left it on either (State 3 below).
     let onchainCandidateRoot = '0x0000000000000000000000000000000000000000000000000000000000000000';
-    try {
-      const root = await publicClient.readContract({
-        address: getAddress(LOSS_REWARD_POOL_ADDRESS),
-        abi: POOL_ABI,
-        functionName: 'epochMerkleRoots',
-        args: [getAddress(token), BigInt(candidateEpochNumber)],
-      });
-      onchainCandidateRoot = root;
-    } catch (err) {
-      console.warn(`[ON-CHAIN READ WARNING] Could not read candidate epoch root on-chain: ${err.message}`);
+    let onchainCandidatePool = null;
+    for (const poolAddr of [LOSS_REWARD_POOL_V1_ADDRESS, LOSS_REWARD_POOL_V2_ADDRESS].filter(Boolean)) {
+      try {
+        const root = await publicClient.readContract({
+          address: getAddress(poolAddr),
+          abi: POOL_ABI,
+          functionName: 'epochMerkleRoots',
+          args: [getAddress(token), BigInt(candidateEpochNumber)],
+        });
+        if (root && root !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
+          onchainCandidateRoot = root;
+          onchainCandidatePool = poolAddr;
+          break;
+        }
+      } catch (err) {
+        console.warn(`[ON-CHAIN READ WARNING] Could not read candidate epoch root on ${poolAddr}: ${err.message}`);
+      }
     }
 
     const isCandidatePublishedOnchain = Boolean(
@@ -696,7 +786,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
     if (!holders || holders.length === 0) {
       console.log(`[EPOCH WORKER] No eligible underwater holders for ${token}.`);
       if (!dryRun && !isCandidatePublishedOnchain) {
-        await supabase.from('reward_epochs').insert({
+        await insertRewardEpoch({
           token_address: token,
           epoch_number: candidateEpochNumber,
           pool_price_eth: benchmarkPriceEth,
@@ -707,6 +797,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
           total_distributed_eth: 0,
           merkle_root: '0x0000000000000000000000000000000000000000000000000000000000000000',
           status: 'completed_empty',
+          pool_address: (await resolveEpochPool(token, 0n)).address.toLowerCase(),
         });
       }
       return {
@@ -772,12 +863,21 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
     console.log(`[DEMAND] Eligible Underwater Holders: ${eligibleAllocations.length}`);
     console.log(`[DEMAND] Total Theoretical Reward Demand: ${totalTheoreticalDemandEth.toFixed(10)} ETH`);
 
-    // 6. Query On-Chain Available Pool Balance
+    // 6. Choose the pool for THIS epoch (drain V1, then switch to V2 — see resolveEpochPool) and
+    //    query its available balance. If the candidate epoch already exists on-chain (crash
+    //    recovery), the pool that holds it wins.
+    const demandWei = BigInt(Math.round(totalTheoreticalDemandEth * 1e18));
+    const epochPool = onchainCandidatePool
+      ? { address: onchainCandidatePool, version: onchainCandidatePool.toLowerCase() === (LOSS_REWARD_POOL_V2_ADDRESS || '').toLowerCase() ? 'v2' : 'v1', reason: 'already_on_chain' }
+      : await resolveEpochPool(token, demandWei);
+    const EPOCH_POOL_ADDRESS = epochPool.address;
+    console.log(`[POOL SELECT] Epoch #${candidateEpochNumber} -> ${epochPool.version.toUpperCase()} ${EPOCH_POOL_ADDRESS} (${epochPool.reason}${epochPool.v1UnallocatedWei != null ? `, V1 unallocated ${(Number(epochPool.v1UnallocatedWei) / 1e18).toFixed(6)} ETH` : ''})`);
+
     let availablePoolEth = 0;
-    if (LOSS_REWARD_POOL_ADDRESS) {
+    if (EPOCH_POOL_ADDRESS) {
       try {
         const balanceWei = await publicClient.readContract({
-          address: getAddress(LOSS_REWARD_POOL_ADDRESS),
+          address: getAddress(EPOCH_POOL_ADDRESS),
           abi: POOL_ABI,
           functionName: 'getUnallocatedBalance',
           args: [getAddress(token)],
@@ -791,7 +891,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
       availablePoolEth = totalTheoreticalDemandEth;
     }
 
-    console.log(`[POOL BUDGET] Available Unallocated ETH: ${availablePoolEth.toFixed(6)} ETH`);
+    console.log(`[POOL BUDGET] Available Unallocated ETH on ${epochPool.version.toUpperCase()}: ${availablePoolEth.toFixed(6)} ETH`);
 
     // 7. Calculate Proportional Scaling Factor & Mode
     // When pool is underfunded, 100% full theoretical rewards and proofs are preserved as pending_funding
@@ -810,7 +910,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
     if (!isCandidatePublishedOnchain && isDust) {
       console.log(`[DUST GUARD] Candidate Epoch #${candidateEpochNumber} total payout (${candidateAllocatedWei.toString()} wei) is below the minimum payout threshold (${MIN_EPOCH_PAYOUT_WEI.toString()} wei, ${eligibleAllocations.length} eligible holder(s)). Skipping Merkle tree construction, on-chain submission, and cost-basis depletion — recording as completed_dust instead.`);
       if (!dryRun) {
-        await supabase.from('reward_epochs').insert({
+        await insertRewardEpoch({
           token_address: token,
           epoch_number: candidateEpochNumber,
           pool_price_eth: benchmarkPriceEth,
@@ -821,6 +921,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
           total_distributed_eth: totalDistributedEth,
           merkle_root: '0x0000000000000000000000000000000000000000000000000000000000000000',
           status: 'completed_dust',
+          pool_address: EPOCH_POOL_ADDRESS.toLowerCase(),
         });
       }
       return {
@@ -882,7 +983,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
     let onchainTxHash = null;
     let epochStatus = 'published';
 
-    if (!dryRun && !isCandidatePublishedOnchain && OPERATOR_PRIVATE_KEY && LOSS_REWARD_POOL_ADDRESS) {
+    if (!dryRun && !isCandidatePublishedOnchain && OPERATOR_PRIVATE_KEY && EPOCH_POOL_ADDRESS) {
       if (!isUnderfunded) {
         try {
           const account = privateKeyToAccount(OPERATOR_PRIVATE_KEY);
@@ -892,10 +993,10 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
           });
 
           const totalAllocatedWei = BigInt(Math.round(totalDistributedEth * 1e18));
-          console.log(`[ON-CHAIN] Submitting setEpochMerkleRoot for Epoch #${candidateEpochNumber}...`);
+          console.log(`[ON-CHAIN] Submitting setEpochMerkleRoot for Epoch #${candidateEpochNumber} on ${epochPool.version.toUpperCase()} ${EPOCH_POOL_ADDRESS}...`);
 
           onchainTxHash = await walletClient.writeContract({
-            address: getAddress(LOSS_REWARD_POOL_ADDRESS),
+            address: getAddress(EPOCH_POOL_ADDRESS),
             abi: POOL_ABI,
             functionName: 'setEpochMerkleRoot',
             args: [getAddress(token), BigInt(candidateEpochNumber), merkleRoot, totalAllocatedWei],
@@ -924,7 +1025,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
 
     // 12. Database Persistence: reward_epochs & epoch_holder_rewards
     if (!dryRun) {
-      const { data: insertedEpoch, error: insertEpochErr } = await supabase.from('reward_epochs').insert({
+      const { data: insertedEpoch, error: insertEpochErr } = await insertRewardEpoch({
         token_address: token,
         epoch_number: candidateEpochNumber,
         pool_price_eth: benchmarkPriceEth,
@@ -936,7 +1037,8 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
         merkle_root: merkleRoot,
         onchain_tx_hash: onchainTxHash || (isCandidatePublishedOnchain ? latestDbEpoch?.onchain_tx_hash : null),
         status: epochStatus,
-      }).select('epoch_id').single();
+        pool_address: EPOCH_POOL_ADDRESS.toLowerCase(),
+      }, 'epoch_id');
 
       if (insertEpochErr) {
         throw new Error(`[DB ERROR] Failed to insert reward_epochs: ${insertEpochErr.code} ${insertEpochErr.message}`);

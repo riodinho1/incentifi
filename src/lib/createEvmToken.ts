@@ -27,6 +27,12 @@ export type CreateEvmTokenProgressCallback = (
 type CreateEvmTokenInput = {
   tokenName: string;
   tokenSymbol: string;
+  /**
+   * Loss-reward payout asset chosen at launch: address(0) / undefined = ETH, otherwise a Robinhood
+   * stock token accepted by LossRewardPoolV2. Only meaningful on the legible launch path; the
+   * GenericSell path refuses anything but ETH before sending a transaction.
+   */
+  rewardAsset?: string;
   onProgress?: CreateEvmTokenProgressCallback;
 };
 
@@ -106,6 +112,10 @@ export const createEvmToken = async (_provider: any, input: CreateEvmTokenInput)
   const symbol = input.tokenSymbol.trim().toUpperCase().slice(0, 10);
   const onProgress = input.onProgress;
   const launchVenue = getLaunchVenue();
+  const rewardAssetAddress = getAddress(input.rewardAsset && input.rewardAsset !== 'ETH' ? input.rewardAsset : ETH_REWARD_ASSET);
+  if (rewardAssetAddress !== ETH_REWARD_ASSET && launchVenue !== 'legible') {
+    throw new Error('A stock loss-reward asset is only available on the legible launch path (VITE_LEGIBLE_LAUNCH_ENABLED=true).');
+  }
   const factoryAddress = launchVenue === 'legible' ? INCENTIFI_LEGIBLE_FACTORY : INCENTIFI_V4_FACTORY;
   const hookAddress = launchVenue === 'legible' ? INCENTIFI_LEGIBLE_HOOK : INCENTIFI_V4_HOOK;
 
@@ -180,7 +190,7 @@ export const createEvmToken = async (_provider: any, input: CreateEvmTokenInput)
 
   const launchData =
     launchVenue === 'legible'
-      ? encodeFunctionData({ abi: FACTORY_LEGIBLE_ABI, functionName: 'launchToken', args: [tokenAddress, ETH_REWARD_ASSET] })
+      ? encodeFunctionData({ abi: FACTORY_LEGIBLE_ABI, functionName: 'launchToken', args: [tokenAddress, rewardAssetAddress] })
       : encodeFunctionData({ abi: FACTORY_V4_ABI, functionName: 'launchToken', args: [tokenAddress] });
 
   const launchTxHash = await provider.request({
@@ -259,8 +269,8 @@ export const createEvmToken = async (_provider: any, input: CreateEvmTokenInput)
     hookAddress,
     /** 'legible' (real V4 pool, flag on) or 'v4-generic' (previous path, flag off). */
     venue: launchVenue,
-    /** Loss-reward payout asset chosen at launch. ETH is the only option today. */
-    lossRewardAsset: 'ETH' as const,
+    /** Loss-reward payout asset chosen at launch: 'ETH' or the stock token address. */
+    lossRewardAsset: (rewardAssetAddress === ETH_REWARD_ASSET ? 'ETH' : rewardAssetAddress) as string,
     creatorAddress: account,
     chain: EVM_CHAIN_NAME,
     txExplorer: EVM_TX_URL(deployTxHash),

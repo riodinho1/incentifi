@@ -334,3 +334,23 @@ Slippage observed per asset in the suite (0.05–0.07 ETH claims, quiet pool): A
 - **TWAP manipulation** is bounded, not eliminated (§B4). The user's `minAssetOut` is the primary guard.
 - **Not audited:** the `FablesRampETH` hook on the USDG/ETH pool (irrelevant while MSFT is deferred).
 - **Not measured yet:** gas of the full V2 claim with adapter overhead (C5), and behaviour of `observe()` under a burst that fills TSLA's 300-slot ring inside 30 minutes (handled by the 600 s retry and ETH fallback).
+
+## C8. Rollout implementation (Part B — §B6 / §B7 delivered)
+
+**Worker (`scripts/loss-reward-worker.mjs`) — dual-pool, drain-then-switch per token.** `resolveEpochPool(token, demandWei)` decides where the NEXT epoch is published: V2 unset → V1 (status quo); V1 unallocated ≥ this epoch's demand → V1 (keep draining); V1 ≥ dust but < demand → V2 (so a re-pointed token's epoch is never parked as `pending_funding` on a pool that receives no more deposits); V1 < dust → V2; V1 unreadable → V1. Pending-funding epochs are funded from the pool they were recorded on. Crash recovery checks the candidate epoch's root on both pools. Every `reward_epochs` row records `pool_address` (insert retried without the column, with a warning, until the migration is applied). The fallback monitor's alert already goes through the worker's `sendAlert` (`ALERT_WEBHOOK_URL`), the same channel as the freshness-gate alerts.
+
+**Gateway (`supabase/functions/loss-reward-gateway/index.ts` + `claim-plan.mjs`).** `/query` returns `poolAddress` per epoch and reads `hasClaimed` on that pool. The deprecated relayer `/claim` plans one transaction per pool: V1 epochs → `claimReward`/`claimBatch` on V1 (the V1 ABI has no `*As`), V2 epochs → `claimRewardAs`/`claimBatchAs` on V2; rows are marked claimed per pool after that pool's receipt. Rows without `pool_address` are V1; a V2 row with no `LOSS_REWARD_POOL_V2_ADDRESS` is refused. Not deployed by this PR.
+
+**Migration (`supabase/loss_reward_v2_migration.sql`, idempotent).** `reward_epochs.pool_address` (backfilled to V1), `tokens.reward_asset`, `tokens.reward_asset_symbol`.
+
+**Frontend.** `src/lib/rewardAssets.ts`: dropdown options (API `ACTIVE` ∩ StockFactory round-trip ∩ `isSelectableAsset` on V2), `getTokenRewardAsset`, badge text, `toDisplayShares` (raw × `uiMultiplier()` / 1e18), quote-derived `computeMinAssetOut`. `src/lib/lossReward.ts`: claims grouped by `poolAddress`, V1 first with the V1 signatures, then V2 with `claimBatchAs(minAssetOut, deadline)` using the trade panel's slippage. Launch page: real dropdown (ETH/AAPL/TSLA/NVDA) only when `VITE_STOCK_REWARDS_ENABLED=true` **and** the legible launch path is on; the choice is passed to `launchToken(token, asset)` and mirrored to `tokens.reward_asset`. Token page: "Loss Reward: AAPL" badge; claim success copy names the asset and the multiplier. **`LOSS_REWARD_POOL_V2` has no fallback**: while `VITE_LOSS_REWARD_POOL_V2` is unset every V2 path is a no-op (claims go to V1, badge reads ETH, no stock option can be enabled, a V2-tagged epoch is refused rather than guessed).
+
+| Env var | Read by | Default |
+|---|---|---|
+| `VITE_LOSS_REWARD_POOL_V2` | frontend | **none** (unset = V2 paths disabled) |
+| `LOSS_REWARD_POOL_V2_ADDRESS` | worker (dual-pool + fallback monitor), gateway | **none** (unset = V1 only) |
+| `VITE_STOCK_REWARDS_ENABLED` | frontend | `false` |
+| `VITE_ROBINHOOD_STOCK_FACTORY` | frontend | `0x4783C67b63dE2B358Ac5951a7D41F47A38F3C046` |
+| `VITE_ROBINHOOD_ASSETS_API_URL` | frontend | `https://api.robinhood.com/rhj/assets` |
+
+**Rollout order:** apply the migration → deploy worker (V2 unset: unchanged behaviour) → deploy V2 with `DeployLossRewardPoolV2.s.sol` (+ `setAssetSetter(legible factory)`) → set `LOSS_REWARD_POOL_V2_ADDRESS` on the worker and gateway, `VITE_LOSS_REWARD_POOL_V2` on the frontend → re-point the hook (`RepointHookLossRewardPool.s.sol`) → flip `VITE_STOCK_REWARDS_ENABLED=true`.
