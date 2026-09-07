@@ -24,8 +24,15 @@
   the variable. Foundry has no env-var input for a raw key, so the key is on the forge child process's
   command line for the seconds it runs (visible to other processes of YOUR user only). If you would
   rather never have it in a process argument at all: `cast wallet import incentifi-owner --interactive`
-  once (encrypted keystore, prompt is Foundry's own) and pass `-UseKeystore incentifi-owner` to the
-  broadcast steps; the keystore PASSWORD is then what Read-Host -AsSecureString collects.
+  once (encrypted keystore, prompt is Foundry's own) and pass `-UseKeystore incentifi-owner`. The
+  keystore PASSWORD is then what Read-Host -AsSecureString collects; it is written to a temp file
+  readable only by your user (no BOM, no newline), handed to forge as `--password-file <path>`, and
+  the file is deleted afterwards. (forge's ETH_PASSWORD env var is the password FILE PATH, not the
+  password - passing the password through it fails with "Keystore password file does not exist".)
+  `-KeystorePasswordFile <path>` skips the prompt and uses your own file (forge's native mechanism);
+  that file is left alone. With -UseKeystore the DRY-RUN steps unlock the keystore too, so a dry run
+  proves the exact wallet arguments the broadcast will use. Before anything is sent the keystore is
+  unlocked once with `cast wallet address` and must resolve to the hook owner.
 
   Nothing here reads .env.local. Nothing here touches Supabase. The operator (worker) key is not needed.
 
@@ -48,7 +55,8 @@ param(
   [string]$V2 = '',
   [string]$Swapper = '',
   [string]$Rpc = 'https://rpc.mainnet.chain.robinhood.com',
-  [string]$UseKeystore = ''
+  [string]$UseKeystore = '',
+  [string]$KeystorePasswordFile = ''
 )
 
 # 'Continue', not 'Stop': forge/cast write notes to stderr (e.g. "note[multi-contract-file]") and with
@@ -134,24 +142,65 @@ function Get-OwnerKeyPlain() {
   Info "key controls $addr (hook owner) - OK"
   return $plain
 }
-function Get-KeystorePasswordEnv() {
+# Keystore password -> a file only the current user can read, for forge's --password-file.
+# (ETH_PASSWORD is the *file path* variable in forge; there is no env var for the password itself.)
+function New-KeystorePasswordFile() {
+  if ($KeystorePasswordFile -ne '') {
+    if (-not (Test-Path -LiteralPath $KeystorePasswordFile)) { throw "-KeystorePasswordFile '$KeystorePasswordFile' does not exist." }
+    Info "keystore password file: $KeystorePasswordFile (yours; not deleted)"
+    return (Resolve-Path -LiteralPath $KeystorePasswordFile).Path
+  }
   $sec = Read-Host -AsSecureString "Password for Foundry keystore '$UseKeystore' - typed input is hidden"
   $ptr = [Runtime.InteropServices.Marshal]::SecureStringToGlobalAllocUnicode($sec)
-  try { $env:ETH_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringUni($ptr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeGlobalAllocUnicode($ptr) }
+  try { $pw = [Runtime.InteropServices.Marshal]::PtrToStringUni($ptr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeGlobalAllocUnicode($ptr) }
+  if ($pw -eq $null -or $pw.Length -eq 0) { throw 'Empty keystore password. Nothing was sent.' }
+  $path = Join-Path ([IO.Path]::GetTempPath()) ('incentifi-ks-' + [Guid]::NewGuid().ToString('N') + '.pw')
+  # restrict BEFORE writing: owner-only ACL, no inheritance
+  New-Item -ItemType File -Path $path -Force | Out-Null
+  $acl = Get-Acl -LiteralPath $path
+  $acl.SetAccessRuleProtection($true, $false)
+  foreach ($r in @($acl.Access)) { [void]$acl.RemoveAccessRule($r) }
+  $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+  $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($me, 'FullControl', 'Allow')))
+  Set-Acl -LiteralPath $path -AclObject $acl
+  [IO.File]::WriteAllText($path, $pw, (New-Object Text.UTF8Encoding($false)))   # no BOM, no trailing newline
+  $pw = $null
+  $script:tempPasswordFile = $path
+  Info "keystore password written to $path (owner-only ACL; deleted after this step)"
+  return $path
 }
-# Wallet arguments for a broadcasting forge/cast command. Either path yields the same --sender.
+# Wallet arguments for a forge/cast command. Either path resolves to the same --sender ($OWNER) and is
+# refused otherwise. Used by the broadcast steps, and by the dry runs when -UseKeystore is given.
 function Get-WalletArgs() {
   if ($UseKeystore -ne '') {
-    Get-KeystorePasswordEnv
-    return @('--account', $UseKeystore, '--sender', $OWNER)
+    $pwFile = New-KeystorePasswordFile
+    $addr = (& cast wallet address --account $UseKeystore --password-file $pwFile 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not ($addr -match '^0x[0-9a-fA-F]{40}$')) { Clear-Key; throw "Could not unlock keystore '$UseKeystore' with that password: $addr" }
+    if (-not (Same $addr $OWNER)) { Clear-Key; throw "Keystore '$UseKeystore' controls $addr, not the hook owner $OWNER. Nothing was sent." }
+    Info "keystore '$UseKeystore' unlocks to $addr (hook owner) - OK"
+    return @('--account', $UseKeystore, '--password-file', $pwFile, '--sender', $OWNER)
   }
   $script:ownerKeyPlain = Get-OwnerKeyPlain
   return @('--private-key', $script:ownerKeyPlain, '--sender', $OWNER)
 }
 function Clear-Key() {
   if (Get-Variable -Name ownerKeyPlain -Scope Script -ErrorAction SilentlyContinue) { $script:ownerKeyPlain = $null; Remove-Variable -Name ownerKeyPlain -Scope Script -ErrorAction SilentlyContinue }
-  $env:ETH_PASSWORD = $null
+  if (Get-Variable -Name tempPasswordFile -Scope Script -ErrorAction SilentlyContinue) {
+    if ($script:tempPasswordFile -and (Test-Path -LiteralPath $script:tempPasswordFile)) {
+      # overwrite, then delete
+      [IO.File]::WriteAllText($script:tempPasswordFile, ('0' * 64), (New-Object Text.UTF8Encoding($false)))
+      Remove-Item -LiteralPath $script:tempPasswordFile -Force
+      Info "deleted $($script:tempPasswordFile)"
+    }
+    Remove-Variable -Name tempPasswordFile -Scope Script -ErrorAction SilentlyContinue
+  }
   [GC]::Collect()
+}
+# Sender arguments for a simulation: with -UseKeystore the keystore is unlocked exactly as the
+# broadcast will do it (so the dry run tests the wallet path too); otherwise just --sender.
+function Get-DryRunSenderArgs() {
+  if ($UseKeystore -ne '') { return (Get-WalletArgs) }
+  return @('--sender', $OWNER)
 }
 function Confirm-Typed($word, $prompt) {
   $typed = Read-Host "$prompt Type $word to continue"
@@ -293,7 +342,10 @@ switch ($Step) {
     if (-not (Same $script:hookPool $V1)) { Fail "hook already points at $($script:hookPool); stop." ; ExitWithSummary }
     Head "forge script $DEPLOY_SCRIPT (SIMULATION, no --broadcast)"
     Set-DeployEnv
-    $out = & forge script $DEPLOY_SCRIPT --rpc-url $Rpc --sender $OWNER 2>&1 | Out-String
+    $senderArgs = Get-DryRunSenderArgs
+    try {
+      $out = & forge script $DEPLOY_SCRIPT --rpc-url $Rpc @senderArgs 2>&1 | Out-String
+    } finally { Clear-Key }
     Write-Host $out
     if ($LASTEXITCODE -ne 0) { Fail "simulation failed (exit $LASTEXITCODE)" }
     Expect-InOutput $out 'LossRewardPoolV2\s+0x[0-9a-fA-F]{40}' 'logs a LossRewardPoolV2 address'
@@ -373,7 +425,10 @@ switch ($Step) {
     Head "forge script $REPOINT_SCRIPT (SIMULATION, no --broadcast)"
     $env:HOOK = $HOOK; $env:NEW_POOL = $V2
     Info "env: HOOK=$env:HOOK NEW_POOL=$env:NEW_POOL"
-    $out = & forge script $REPOINT_SCRIPT --rpc-url $Rpc --sender $OWNER 2>&1 | Out-String
+    $senderArgs = Get-DryRunSenderArgs
+    try {
+      $out = & forge script $REPOINT_SCRIPT --rpc-url $Rpc @senderArgs 2>&1 | Out-String
+    } finally { Clear-Key }
     Write-Host $out
     if ($LASTEXITCODE -ne 0) { Fail "simulation failed (exit $LASTEXITCODE)" }
     Expect-InOutput $out "lossRewardPool BEFORE\s+$V1" "BEFORE = V1 $V1"
