@@ -1,0 +1,33 @@
+{
+  "transactions": [
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x921d0be20a21e5a687734b4df6302ea55bd168c0",
+      "function": "setLossRewardPool(address)",
+      "functionAbi": "function setLossRewardPool(address newPool)",
+      "arguments": [
+        "0x5d94246CD31064Da02E953DB357F0001F0E9A631"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x921d0be20a21e5a687734b4df6302ea55bd168c0",
+        "gas": "0xabc7",
+        "value": "0x0",
+        "input": "0x7ae6ac7a0000000000000000000000005d94246cd31064da02e953db357f0001f0e9a631",
+        "nonce": "0x127",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    }
+  ],
+  "receipts": [],
+  "libraries": [],
+  "pending": [],
+  "returns": {},
+  "timestamp": 1788815750172,
+  "chain": 4663,
+  "commit": "361c519"
+}
