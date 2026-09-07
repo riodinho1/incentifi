@@ -53,6 +53,7 @@ import {
   type HolderCostBasis,
   type ClaimableRewardsState,
 } from '../../lib/lossReward';
+import { fetchCreatorFeeStatus, claimCreatorFees, type CreatorFeeStatus } from '../../lib/creatorFees';
 import {
   getStoredSession,
   authenticateWallet,
@@ -270,6 +271,12 @@ const TokenPreviewPage = () => {
   const [botSellingStatus, setBotSellingStatus] = useState<ExternalBotSellingStatus | null>(null);
   const [enablingBotSelling, setEnablingBotSelling] = useState(false);
   const [botSellingMsg, setBotSellingMsg] = useState<string | null>(null);
+
+  // Creator fees (pull-payment; V3 curve per token, V4 hook across all of a creator's tokens).
+  // Read live from-chain, claimed by the connected wallet itself — see src/lib/creatorFees.ts.
+  const [creatorFeeStatus, setCreatorFeeStatus] = useState<CreatorFeeStatus | null>(null);
+  const [claimingCreatorFees, setClaimingCreatorFees] = useState(false);
+  const [creatorFeeMsg, setCreatorFeeMsg] = useState<string | null>(null);
 
   // Fetch live ETH/USD price from Coinbase
   useEffect(() => {
@@ -1973,6 +1980,84 @@ const TokenPreviewPage = () => {
     </div>
   );
 
+  const loadCreatorFeeStatus = async () => {
+    if (!tokenData?.mintAddress || !connectedWallet) {
+      setCreatorFeeStatus(null);
+      return;
+    }
+    try {
+      setCreatorFeeStatus(await fetchCreatorFeeStatus(tokenData.mintAddress, connectedWallet));
+    } catch (err) {
+      console.warn('Creator fee status load issue:', err);
+    }
+  };
+
+  useEffect(() => {
+    setCreatorFeeMsg(null);
+    loadCreatorFeeStatus();
+    const timer = setInterval(loadCreatorFeeStatus, 30_000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tokenData?.mintAddress, connectedWallet]);
+
+  const handleClaimCreatorFees = async () => {
+    const wallet = connectedWallet || getWalletAccount();
+    if (!wallet || !tokenData?.mintAddress || !creatorFeeStatus || creatorFeeStatus.balanceWei === 0n) return;
+    try {
+      setClaimingCreatorFees(true);
+      setCreatorFeeMsg(null);
+      const res = await claimCreatorFees(tokenData.mintAddress, wallet);
+      const shortTx = `${res.txHash.slice(0, 8)}...${res.txHash.slice(-6)}`;
+      setCreatorFeeMsg(`Claimed ${Number(res.claimedEth).toFixed(6)} ${EVM_NATIVE_SYMBOL} in creator fees (Tx: ${shortTx})`);
+      await loadCreatorFeeStatus();
+      await refreshOnchainBalances();
+    } catch (err: any) {
+      console.error('Creator fee claim failed:', err);
+      setStatus(describeError(err));
+    } finally {
+      setClaimingCreatorFees(false);
+    }
+  };
+
+  // Only the token's creator (or a wallet that actually holds a balance on the relevant
+  // contract) sees this; everyone else sees nothing rather than a permanently-empty card.
+  const renderCreatorFeesCard = () => {
+    if (!connectedWallet || !creatorFeeStatus) return null;
+    if (!creatorFeeStatus.isCreator && creatorFeeStatus.balanceWei === 0n) return null;
+    const isV4 = creatorFeeStatus.source.kind === 'v4';
+    return (
+      <div className="bg-[#0B1120] border border-[#1D2940] rounded-2xl p-4 sm:p-5 shadow-xl shadow-black/20">
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="text-white font-bold text-sm">Creator Fees</h3>
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-sky-500/10 text-sky-300 border border-sky-500/20 uppercase tracking-wider">
+            {isV4 ? 'V4 · All Your Tokens' : 'V3 · This Token'}
+          </span>
+        </div>
+        <p className="text-[#8DA3CD] text-[11px] leading-relaxed mb-3">
+          1% of every trade accrues to the creator on-chain and is withdrawn on your own schedule, paid to your wallet by
+          the {isV4 ? 'shared V4 hook — the balance below covers every V4 token you created' : 'token\'s bonding curve'}.
+          Signed and sent by your connected wallet.
+        </p>
+        <div className="rounded-xl bg-gradient-to-br from-[#0C1A30] to-[#0A1424] p-3.5 border border-[#23385D] space-y-2.5 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-[#9FB0CF]">Accrued, unclaimed:</span>
+            <span className="text-white font-bold text-xs sm:text-sm">
+              {creatorFeeStatus.balanceWei > 0n ? `${creatorFeeStatus.balanceEth.toFixed(6)} ${EVM_NATIVE_SYMBOL}` : '0.000000 ETH'}
+            </span>
+          </div>
+          <button
+            onClick={handleClaimCreatorFees}
+            disabled={claimingCreatorFees || creatorFeeStatus.balanceWei === 0n}
+            className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#0EA5E9] to-[#0284C7] hover:from-[#0284C7] hover:to-[#0369A1] text-white font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2 shadow-md shadow-sky-500/20"
+          >
+            {claimingCreatorFees ? <span>Claiming...</span> : <span>Claim Creator Fees</span>}
+          </button>
+          {creatorFeeMsg && <p className="text-center text-sky-300 text-[11px] font-medium">{creatorFeeMsg}</p>}
+        </div>
+      </div>
+    );
+  };
+
   // Deliberately its own card, its own button, its own copy — never merged into the
   // buy/sell panel above. See src/lib/permit2.ts's header comment for why.
   const renderBotSellingCard = () => {
@@ -2313,6 +2398,7 @@ const TokenPreviewPage = () => {
                 {renderPositionCard()}
                 {renderLossRewardCard()}
                 {renderBotSellingCard()}
+                {renderCreatorFeesCard()}
               </div>
 
               {/* 2. TOKEN ABOUT / DESCRIPTION */}
@@ -2470,6 +2556,7 @@ const TokenPreviewPage = () => {
               {renderPositionCard()}
               {renderLossRewardCard()}
               {renderBotSellingCard()}
+              {renderCreatorFeesCard()}
               {renderContractDetailsCard()}
             </aside>
           </div>
