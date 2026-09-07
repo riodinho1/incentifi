@@ -225,15 +225,15 @@ const activeTokenLocks = new Set();
 
 /**
  * Drain-then-switch, PER TOKEN (section B6). Which pool this token's NEXT epoch is published on:
- *   - V2 not configured                          -> V1 (today's behaviour, unchanged)
- *   - V1 unallocated >= this epoch's demand      -> V1 (V1 can still fund a whole epoch: keep draining it)
- *   - V1 unallocated >= dust but < demand, V2 set -> V2 (V1's remainder is smaller than one epoch; it
- *                                                    is picked up by a later, smaller epoch rather
- *                                                    than parking this one as pending_funding forever)
- *   - V1 unallocated < dust                      -> V2
- * The demand-aware rule is what makes "drain" safe for tokens whose hook has been re-pointed to
- * V2: V1 receives no new deposits for them, so an underfunded epoch published there would never
- * resolve. Pending epochs keep the pool they were recorded on (reward_epochs.pool_address).
+ *   - V2 not configured      -> V1 (today's behaviour, unchanged: an underfunded epoch is parked
+ *                               as pending_funding until V1 is topped up)
+ *   - V1 unallocated >= dust -> V1. If V1 cannot cover this epoch's full demand the epoch is
+ *                               published on V1 anyway, CAPPED to V1's unallocated balance
+ *                               (`capToV1`): rewards are scaled pro-rata so V1 is emptied to the
+ *                               wei. V1 has no withdraw, so this is the only way its remainder
+ *                               ever reaches holders once the hook deposits into V2.
+ *   - V1 unallocated <  dust -> V2 (V1 is drained)
+ * Pending epochs keep the pool they were recorded on (reward_epochs.pool_address).
  * Never throws: an RPC failure reading V1 falls back to V1 (the status quo).
  */
 export async function resolveEpochPool(tokenAddress, demandWei = 0n, options = {}) {
@@ -241,7 +241,7 @@ export async function resolveEpochPool(tokenAddress, demandWei = 0n, options = {
   const v2 = options.v2 ?? LOSS_REWARD_POOL_V2_ADDRESS;
   const dustWei = options.dustWei ?? MIN_EPOCH_PAYOUT_WEI;
   const client = options.client ?? publicClient;
-  if (!v2) return { address: v1, version: 'v1', reason: 'v2_not_configured', v1UnallocatedWei: null };
+  if (!v2) return { address: v1, version: 'v1', reason: 'v2_not_configured', capToV1: false, v1UnallocatedWei: null };
   let v1UnallocatedWei;
   try {
     v1UnallocatedWei = BigInt(
@@ -249,13 +249,27 @@ export async function resolveEpochPool(tokenAddress, demandWei = 0n, options = {
     );
   } catch (err) {
     console.warn(`[POOL SELECT] Could not read V1 unallocated balance for ${tokenAddress} (${err.message}); staying on V1.`);
-    return { address: v1, version: 'v1', reason: 'v1_read_failed', v1UnallocatedWei: null };
+    return { address: v1, version: 'v1', reason: 'v1_read_failed', capToV1: false, v1UnallocatedWei: null };
   }
   const demand = BigInt(demandWei || 0n);
-  if (v1UnallocatedWei >= dustWei && (demand === 0n || v1UnallocatedWei >= demand)) {
-    return { address: v1, version: 'v1', reason: 'v1_can_fund', v1UnallocatedWei };
+  if (v1UnallocatedWei >= dustWei) {
+    const capToV1 = demand > v1UnallocatedWei;
+    return { address: v1, version: 'v1', reason: capToV1 ? 'v1_drain_capped' : 'v1_can_fund', capToV1, v1UnallocatedWei };
   }
-  return { address: v2, version: 'v2', reason: v1UnallocatedWei < dustWei ? 'v1_drained' : 'v1_below_demand', v1UnallocatedWei };
+  return { address: v2, version: 'v2', reason: 'v1_drained', capToV1: false, v1UnallocatedWei };
+}
+
+/**
+ * Pro-rata allocation in exact wei. Each holder gets floor(theoretical_i * available / demand),
+ * so the sum never exceeds `availableWei` and the on-chain allocation (the sum of the leaves) is
+ * exactly what the pool has. Exported for tests. With available >= demand this is the identity.
+ */
+export function capAllocationsToAvailable(theoreticalWeiList, availableWei) {
+  const demand = theoreticalWeiList.reduce((a, b) => a + b, 0n);
+  if (demand === 0n || availableWei >= demand) return { finalWei: [...theoreticalWeiList], scalingFactor: 1, allocatedWei: demand };
+  const finalWei = theoreticalWeiList.map((t) => (t * availableWei) / demand);
+  const allocatedWei = finalWei.reduce((a, b) => a + b, 0n);
+  return { finalWei, scalingFactor: Number(availableWei) / Number(demand), allocatedWei };
 }
 
 /**
@@ -893,11 +907,28 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
 
     console.log(`[POOL BUDGET] Available Unallocated ETH on ${epochPool.version.toUpperCase()}: ${availablePoolEth.toFixed(6)} ETH`);
 
-    // 7. Calculate Proportional Scaling Factor & Mode
-    // When pool is underfunded, 100% full theoretical rewards and proofs are preserved as pending_funding
-    const isUnderfunded = availablePoolEth < totalTheoreticalDemandEth;
-    const scalingFactor = 1.0;
-    const totalDistributedEth = totalTheoreticalDemandEth;
+    // 7. Scaling & mode.
+    //    Default: when the pool is underfunded, 100% theoretical rewards and proofs are preserved
+    //    as pending_funding (no scaling). V1-DRAIN exception (resolveEpochPool.capToV1): the epoch
+    //    is published on V1 now, capped pro-rata to V1's unallocated balance, so V1 empties to the
+    //    wei and the token moves to V2 on the next run. Allocations are computed in exact wei and
+    //    the on-chain allocation is the SUM OF THE LEAVES (never a rounded float), so the pool's
+    //    per-epoch cap can never be a wei short of the last claimant.
+    const theoreticalWeiList = eligibleAllocations.map((a) => BigInt(Math.round(a.theoreticalReward * 1e18)));
+    const availablePoolWei = BigInt(Math.round(availablePoolEth * 1e18));
+    let isUnderfunded = availablePoolEth < totalTheoreticalDemandEth;
+    let scalingFactor = 1.0;
+    let finalWeiList = theoreticalWeiList;
+    let allocatedWei = theoreticalWeiList.reduce((a, b) => a + b, 0n);
+    if (epochPool.capToV1 && isUnderfunded && availablePoolWei > 0n) {
+      const capped = capAllocationsToAvailable(theoreticalWeiList, availablePoolWei);
+      finalWeiList = capped.finalWei;
+      scalingFactor = capped.scalingFactor;
+      allocatedWei = capped.allocatedWei;
+      isUnderfunded = false;
+      console.log(`[V1 DRAIN] Epoch #${candidateEpochNumber} capped to V1's remaining ${availablePoolEth.toFixed(6)} ETH (demand ${totalTheoreticalDemandEth.toFixed(6)} ETH, scaling ${scalingFactor.toFixed(6)}); V1 will be emptied and the next epoch moves to V2.`);
+    }
+    const totalDistributedEth = Number(allocatedWei) / 1e18;
 
     // 7a. Minimum-payout dust guard (see MIN_EPOCH_PAYOUT_WEI's own doc comment).
     // Checked here, BEFORE building the Merkle tree or touching cost basis: a
@@ -948,8 +979,9 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
 
     for (let i = 0; i < eligibleAllocations.length; i++) {
       const alloc = eligibleAllocations[i];
-      const finalRewardEth = alloc.theoreticalReward;
-      const finalRewardWei = BigInt(Math.round(finalRewardEth * 1e18));
+      const finalRewardWei = finalWeiList[i];
+      const finalRewardEth = Number(finalRewardWei) / 1e18;
+      if (finalRewardWei === 0n) continue; // a pro-rata share that rounds to zero wei gets no leaf
 
       const leaf = hashLeaf(token, candidateEpochNumber, alloc.wallet, finalRewardWei);
       leaves.push(leaf);
@@ -992,8 +1024,8 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
             transport: http(RPC_URL),
           });
 
-          const totalAllocatedWei = BigInt(Math.round(totalDistributedEth * 1e18));
-          console.log(`[ON-CHAIN] Submitting setEpochMerkleRoot for Epoch #${candidateEpochNumber} on ${epochPool.version.toUpperCase()} ${EPOCH_POOL_ADDRESS}...`);
+          const totalAllocatedWei = allocatedWei; // exact sum of the leaves
+          console.log(`[ON-CHAIN] Submitting setEpochMerkleRoot for Epoch #${candidateEpochNumber} on ${epochPool.version.toUpperCase()} ${EPOCH_POOL_ADDRESS} (allocating ${totalAllocatedWei} wei)...`);
 
           onchainTxHash = await walletClient.writeContract({
             address: getAddress(EPOCH_POOL_ADDRESS),

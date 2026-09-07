@@ -3,7 +3,7 @@
  * scripts/loss-reward-worker.mjs resolveEpochPool(): which pool a token's NEXT epoch goes to.
  *   V2 unset                            -> V1 (status quo)
  *   V1 unallocated >= demand            -> V1 (keep draining)
- *   V1 unallocated >= dust but < demand -> V2 (do not park the epoch as pending_funding forever)
+ *   V1 unallocated >= dust but < demand -> V1, CAPPED to V1 unallocated (drain to the wei; V2 next run)
  *   V1 unallocated <  dust              -> V2 (drained)
  *   V1 read fails                       -> V1 (fail to the status quo, never throw)
  * Three tokens with different V1 balances resolve independently in the same run.
@@ -69,21 +69,22 @@ try {
   const demand = E / 100n; // 0.01 ETH epoch
 
   const rich = await resolveEpochPool(TOKEN_RICH, demand);
-  assert.equal(rich.address, V1); assert.equal(rich.version, 'v1'); assert.equal(rich.reason, 'v1_can_fund');
+  assert.equal(rich.address, V1); assert.equal(rich.version, 'v1'); assert.equal(rich.reason, 'v1_can_fund'); assert.equal(rich.capToV1, false);
   assert.equal(rich.v1UnallocatedWei, E / 20n);
   console.log(`rich token:    V1 has 0.05 ETH >= 0.01 demand -> ${rich.version} (${rich.reason})  OK`);
 
   const thin = await resolveEpochPool(TOKEN_THIN, demand);
-  assert.equal(thin.address, V2); assert.equal(thin.version, 'v2'); assert.equal(thin.reason, 'v1_below_demand');
-  console.log(`thin token:    V1 has 0.002 ETH (>= dust, < demand) -> ${thin.version} (${thin.reason})  OK`);
+  assert.equal(thin.address, V1); assert.equal(thin.version, 'v1'); assert.equal(thin.reason, 'v1_drain_capped');
+  assert.equal(thin.capToV1, true, 'the epoch is published on V1 capped to its 0.002 ETH');
+  console.log(`thin token:    V1 has 0.002 ETH (>= dust, < demand) -> ${thin.version} CAPPED (${thin.reason})  OK`);
 
   // ...but with a smaller epoch that V1 CAN fund, the same token keeps draining V1
   const thinSmall = await resolveEpochPool(TOKEN_THIN, E / 1000n);
-  assert.equal(thinSmall.version, 'v1'); assert.equal(thinSmall.reason, 'v1_can_fund');
+  assert.equal(thinSmall.version, 'v1'); assert.equal(thinSmall.reason, 'v1_can_fund'); assert.equal(thinSmall.capToV1, false);
   console.log(`thin token:    smaller 0.001 ETH epoch -> ${thinSmall.version} (${thinSmall.reason})  OK`);
 
   const drained = await resolveEpochPool(TOKEN_DRAINED, demand);
-  assert.equal(drained.address, V2); assert.equal(drained.reason, 'v1_drained');
+  assert.equal(drained.address, V2); assert.equal(drained.reason, 'v1_drained'); assert.equal(drained.capToV1, false);
   assert.ok(drained.v1UnallocatedWei < MIN_EPOCH_PAYOUT_WEI);
   console.log(`drained token: V1 has 0.000005 ETH (< dust ${MIN_EPOCH_PAYOUT_WEI} wei) -> ${drained.version} (${drained.reason})  OK`);
 
@@ -97,7 +98,18 @@ try {
 
   // zero demand (no-holder / dust epochs) only needs V1 to be above dust
   const zero = await resolveEpochPool(TOKEN_THIN, 0n);
-  assert.equal(zero.version, 'v1');
+  assert.equal(zero.version, 'v1'); assert.equal(zero.capToV1, false);
+
+  // pure pro-rata cap: sum of leaves == available, never a wei over
+  const { capAllocationsToAvailable } = await import('../scripts/loss-reward-worker.mjs');
+  const cap = capAllocationsToAvailable([800_000_000_000_000_000n, 800_000_000_000_000_000n], 300_000_000_000_000_000n);
+  assert.equal(cap.allocatedWei, 300_000_000_000_000_000n);
+  assert.deepEqual(cap.finalWei, [150_000_000_000_000_000n, 150_000_000_000_000_000n]);
+  assert.ok(Math.abs(cap.scalingFactor - 0.1875) < 1e-15);
+  const odd = capAllocationsToAvailable([1n, 1n, 1n], 2n);
+  assert.equal(odd.allocatedWei, 0n, 'shares that floor to 0 wei allocate nothing (never over)');
+  const full = capAllocationsToAvailable([5n, 7n], 100n);
+  assert.deepEqual(full.finalWei, [5n, 7n]); assert.equal(full.scalingFactor, 1); assert.equal(full.allocatedWei, 12n);
 
   assert.ok(calls.every((c) => c.startsWith(V1)), 'only V1 is read to decide (V2 balance is irrelevant to the switch)');
   console.log('\nworker-dual-pool tests passed');
