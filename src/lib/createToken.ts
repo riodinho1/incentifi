@@ -9,6 +9,8 @@ type CreateTokenInput = {
   website?: string;
   twitter?: string;
   telegram?: string;
+  /** Loss-reward payout asset address (address(0) / 'ETH' = ETH). */
+  rewardAsset?: string;
   onProgress?: CreateEvmTokenProgressCallback;
 };
 

@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import WalletButton from '../../components/WalletButton';
 import { useWalletConnected } from '../../hooks/useWalletConnected';
 import { createRealToken } from '../../lib/createToken';
@@ -10,6 +10,7 @@ import {
   getEvmProvider,
 } from '../../lib/evmNetwork';
 import { LEGIBLE_LAUNCH_ENABLED } from '../../lib/uniswapAddresses';
+import { ETH_ASSET, getRewardAssetOptions, shouldShowStockDropdown, type RewardAssetOption } from '../../lib/rewardAssets';
 
 const LaunchPage = () => {
   const connected = useWalletConnected();
@@ -31,6 +32,23 @@ const LaunchPage = () => {
   }>({});
   const [imageError, setImageError] = useState('');
   const [isDeploying, setIsDeploying] = useState(false);
+  // Loss-reward payout asset (address; address(0) = ETH). The dropdown is real only when
+  // VITE_STOCK_REWARDS_ENABLED=true AND the legible launch path is on; otherwise ETH-only.
+  const showStockDropdown = shouldShowStockDropdown();
+  const [rewardAsset, setRewardAsset] = useState<string>(ETH_ASSET);
+  const [rewardAssetOptions, setRewardAssetOptions] = useState<RewardAssetOption[]>([{ symbol: 'ETH', address: ETH_ASSET, enabled: true }]);
+  const [rewardAssetOptionsLoading, setRewardAssetOptionsLoading] = useState(false);
+  useEffect(() => {
+    if (!showStockDropdown) return;
+    let cancelled = false;
+    setRewardAssetOptionsLoading(true);
+    getRewardAssetOptions()
+      .then((opts) => { if (!cancelled) setRewardAssetOptions(opts); })
+      .catch(() => { /* ETH-only fallback already in state */ })
+      .finally(() => { if (!cancelled) setRewardAssetOptionsLoading(false); });
+    return () => { cancelled = true; };
+  }, [showStockDropdown]);
+  const selectedRewardOption = rewardAssetOptions.find((o) => o.address.toLowerCase() === rewardAsset.toLowerCase()) || rewardAssetOptions[0];
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -110,6 +128,7 @@ const LaunchPage = () => {
       const result = await createRealToken(provider, {
         ...formData,
         tokenSymbol: symbol,
+        rewardAsset: showStockDropdown ? rewardAsset : ETH_ASSET,
         onProgress: (step, total, title, desc) => {
           setDeployStep({ step, total, title, desc });
         },
@@ -142,9 +161,19 @@ const LaunchPage = () => {
           // tags the row later from the TokenLaunched event, and the frontend falls back to
           // the chain in the meantime (src/lib/tokenVenue.ts).
           const hookAddress = String(launchResult.hookAddress || '').toLowerCase();
-          let { error } = await supabase.from('tokens').insert({ ...registryRow, hook_address: hookAddress });
-          if (error && /hook_address|column/i.test(error.message)) {
-            ({ error } = await supabase.from('tokens').insert(registryRow));
+          const rewardAssetLower = String(launchResult.lossRewardAsset || 'ETH') === 'ETH' ? null : String(launchResult.lossRewardAsset).toLowerCase();
+          const rewardAssetSymbol = rewardAssetLower ? selectedRewardOption?.symbol || 'STOCK' : 'ETH';
+          // Optional columns come from two migrations (legible_pool_cutover.sql, loss_reward_v2_migration.sql);
+          // if either is not applied yet, retry with fewer columns rather than failing the launch.
+          const attempts = [
+            { ...registryRow, hook_address: hookAddress, reward_asset: rewardAssetLower, reward_asset_symbol: rewardAssetSymbol },
+            { ...registryRow, hook_address: hookAddress },
+            registryRow,
+          ];
+          let error: { message: string } | null = null;
+          for (const row of attempts) {
+            ({ error } = await supabase.from('tokens').insert(row));
+            if (!error || !/column|hook_address|reward_asset/i.test(error.message)) break;
           }
           if (error) throw new Error(error.message);
         } catch (err: unknown) {
@@ -358,23 +387,41 @@ const LaunchPage = () => {
                   </div>
 
                   {LEGIBLE_LAUNCH_ENABLED && (
-                    /* Loss-reward payout asset — ETH is the only option until LossRewardPoolV2 is live. */
+                    /* Loss-reward payout asset. Chosen once at launch; cannot change afterwards. */
                     <div>
                       <label className="block text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">
                         Loss Reward Asset
                       </label>
-                      <select
-                        name="lossRewardAsset"
-                        value="ETH"
-                        disabled
-                        aria-readonly="true"
-                        className="w-full px-4 py-3 rounded-xl bg-[#0A0F1D] border border-[#1E293B] text-white text-sm font-semibold opacity-90 cursor-not-allowed"
-                      >
-                        <option value="ETH">ETH</option>
-                      </select>
+                      {showStockDropdown ? (
+                        <select
+                          name="lossRewardAsset"
+                          data-testid="loss-reward-asset-select"
+                          value={rewardAsset}
+                          onChange={(e) => setRewardAsset(e.target.value)}
+                          disabled={isDeploying || rewardAssetOptionsLoading}
+                          className="w-full px-4 py-3 rounded-xl bg-[#0A0F1D] border border-[#1E293B] text-white text-sm font-semibold focus:outline-none focus:border-[#10B981]"
+                        >
+                          {rewardAssetOptions.map((opt) => (
+                            <option key={opt.address} value={opt.address} disabled={!opt.enabled}>
+                              {opt.symbol}{opt.enabled ? '' : ` — unavailable (${opt.reason})`}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <select
+                          name="lossRewardAsset"
+                          value="ETH"
+                          disabled
+                          aria-readonly="true"
+                          className="w-full px-4 py-3 rounded-xl bg-[#0A0F1D] border border-[#1E293B] text-white text-sm font-semibold opacity-90 cursor-not-allowed"
+                        >
+                          <option value="ETH">ETH</option>
+                        </select>
+                      )}
                       <p className="mt-1.5 text-[11px] text-slate-500">
-                        Loss rewards for this token are paid in ETH. Stock-token payouts (AAPL, TSLA, NVDA) arrive with the
-                        next loss-reward pool; the choice is made once, at launch, and cannot change afterwards.
+                        {selectedRewardOption && selectedRewardOption.symbol !== 'ETH'
+                          ? `Loss rewards for this token are paid in ${selectedRewardOption.symbol}: at claim time each holder's ETH allocation is spent buying ${selectedRewardOption.symbol} and they receive whatever it buys — no dollar-value promise. If ${selectedRewardOption.symbol} cannot be delivered, they receive the ETH instead. The choice is made once, at launch, and cannot change afterwards.`
+                          : 'Loss rewards for this token are paid in ETH. The choice is made once, at launch, and cannot change afterwards.'}
                       </p>
                     </div>
                   )}

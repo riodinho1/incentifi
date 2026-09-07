@@ -55,6 +55,7 @@ import {
   type ClaimableRewardsState,
 } from '../../lib/lossReward';
 import { fetchCreatorFeeStatus, claimCreatorFees, type CreatorFeeStatus } from '../../lib/creatorFees';
+import { getTokenRewardAsset, formatRewardAssetBadge, type TokenRewardAsset } from '../../lib/rewardAssets';
 import {
   getStoredSession,
   authenticateWallet,
@@ -254,6 +255,14 @@ const TokenPreviewPage = () => {
 
   // Incentifi Loss-Reward state
   const [costBasisData, setCostBasisData] = useState<HolderCostBasis | null>(null);
+  // What this token's loss rewards pay out in (LossRewardPoolV2.rewardAsset; ETH when V2 is unset).
+  const [rewardAssetInfo, setRewardAssetInfo] = useState<TokenRewardAsset | null>(null);
+  useEffect(() => {
+    if (!tokenData?.mintAddress) return;
+    let cancelled = false;
+    getTokenRewardAsset(tokenData.mintAddress).then((info) => { if (!cancelled) setRewardAssetInfo(info); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [tokenData?.mintAddress]);
   const [claimableState, setClaimableState] = useState<ClaimableRewardsState>({
     unclaimedEpochs: [],
     totalClaimableEth: 0,
@@ -427,7 +436,8 @@ const TokenPreviewPage = () => {
     try {
       setClaiming(true);
       setClaimSuccessMsg(null);
-      const res = await claimBatchRewards(tokenData.mintAddress, wallet, claimableState.unclaimedEpochs);
+      // V2 epochs are bounded by a quote minus the trade panel's slippage setting; V1 epochs are unchanged.
+      const res = await claimBatchRewards(tokenData.mintAddress, wallet, claimableState.unclaimedEpochs, { slippagePct: slippage });
       if (res?.alreadyClaimed) {
         setClaimSuccessMsg('Rewards were already claimed on-chain. State refreshed.');
       } else if (res?.txHash) {
@@ -435,7 +445,9 @@ const TokenPreviewPage = () => {
         const amountDisplay = res.claimedEth && res.claimedEth !== '0'
           ? `${res.claimedEth} ETH`
           : `${claimableState.totalClaimableEth.toFixed(5)} ETH`;
-        setClaimSuccessMsg(`Claim successful! ${amountDisplay} (Tx: ${shortTx})`);
+        const paidIn = rewardAssetInfo?.isStock ? ` — paid in ${rewardAssetInfo.symbol} (your ETH allocation was spent buying it; balances show with Robinhood's uiMultiplier applied)` : '';
+        const multi = res.txHashes && res.txHashes.length > 1 ? ` in ${res.txHashes.length} transactions` : '';
+        setClaimSuccessMsg(`Claim successful! ${amountDisplay}${paidIn}${multi} (Tx: ${shortTx})`);
       } else {
         setClaimSuccessMsg('Claim processed successfully.');
       }
@@ -1958,6 +1970,14 @@ const TokenPreviewPage = () => {
       </div>
 
       <div className="space-y-3 text-xs">
+        {/* Loss-reward payout asset badge (ETH unless the creator selected a stock on LossRewardPoolV2) */}
+        <div className="flex items-center justify-between rounded-xl bg-[#070A12] px-3.5 py-2.5 border border-[#1D2940]" data-testid="loss-reward-asset-badge">
+          <span className="text-[#8DA3CD]">Payout Asset</span>
+          <span className={`font-bold text-xs sm:text-sm ${rewardAssetInfo?.isStock ? 'text-[#10B981]' : 'text-white'}`}>
+            {formatRewardAssetBadge(rewardAssetInfo?.symbol || 'ETH')}
+            {rewardAssetInfo?.forcedEth ? ' (forced)' : ''}
+          </span>
+        </div>
         {/* Loss Pool TVL */}
         <div className="flex items-center justify-between rounded-xl bg-[#070A12] px-3.5 py-2.5 border border-[#1D2940]">
           <span className="text-[#8DA3CD]">Loss Pool Balance</span>
