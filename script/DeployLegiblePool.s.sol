@@ -46,7 +46,7 @@ contract DeployLegiblePool is Script {
         IncentifiV4LegibleHook hook = new IncentifiV4LegibleHook{salt: salt}(POOL_MANAGER, lossRewardPool, deployer);
         require(address(hook) == predicted, "hook address mismatch");
         IncentifiV4LegibleFactory factory = new IncentifiV4LegibleFactory(POOL_MANAGER, hook);
-        IncentifiFeeConverter converter = new IncentifiFeeConverter(POOL_MANAGER, address(hook), lossRewardPool);
+        IncentifiFeeConverter converter = new IncentifiFeeConverter(POOL_MANAGER, address(hook));
         hook.setFactory(address(factory));
         hook.setFeeConverter(address(converter));
         if (owner != deployer) hook.transferOwnership(owner);

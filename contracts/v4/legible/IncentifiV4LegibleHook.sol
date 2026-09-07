@@ -120,7 +120,10 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
     // ------------------------------------------------------------------------
     // Wiring
     // ------------------------------------------------------------------------
-    address public immutable lossRewardPool;
+    /// @notice Where the loss-pool half of every fee is deposited. Re-pointable by the owner
+    ///         (setLossRewardPool) so LossRewardPoolV2 can replace the non-upgradeable V1 pool
+    ///         without redeploying the hook. Deposits already made never move.
+    address public lossRewardPool;
     address public immutable deployer;
     /// @notice Governance for postGraduationFeePips / lpOpen. Starts as the deployer.
     address public owner;
@@ -196,6 +199,7 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
     event PostGraduationFeeSet(address indexed token, uint24 pips);
     event LpOpenSet(address indexed token, bool open);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event LossRewardPoolUpdated(address indexed previousPool, address indexed newPool);
 
     error OnlyFactory();
     error OnlyOwner();
@@ -219,6 +223,7 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
     error EthTransferFailed();
     error TokenTransferFailed();
     error FactoryAlreadySet();
+    error PoolMustBeAContract(address pool);
     error FeeConverterAlreadySet();
     error FeeConverterNotSet();
     error FeeTooHigh();
@@ -228,6 +233,7 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
 
     constructor(IPoolManager _poolManager, address _lossRewardPool, address _deployer) BaseHook(_poolManager) {
         if (_lossRewardPool == address(0) || _deployer == address(0)) revert ZeroAddress();
+        if (_lossRewardPool.code.length == 0) revert PoolMustBeAContract(_lossRewardPool);
         lossRewardPool = _lossRewardPool;
         deployer = _deployer;
         owner = _deployer;
@@ -256,6 +262,18 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
         if (newOwner == address(0)) revert ZeroAddress();
         emit OwnershipTransferred(owner, newOwner);
         owner = newOwner;
+    }
+
+    /// @notice Re-point the loss-reward deposit target (e.g. to LossRewardPoolV2). Owner-only, no
+    ///         timelock: every deposit AFTER this call goes to the new pool; nothing already
+    ///         deposited moves. The target must be a deployed contract. The fee converter reads
+    ///         this pointer at deposit time, so it follows automatically.
+    function setLossRewardPool(address newPool) external {
+        if (msg.sender != owner) revert OnlyOwner();
+        if (newPool == address(0)) revert ZeroAddress();
+        if (newPool.code.length == 0) revert PoolMustBeAContract(newPool);
+        emit LossRewardPoolUpdated(lossRewardPool, newPool);
+        lossRewardPool = newPool;
     }
 
     /// @notice Decision D (final): the post-graduation fee is 2% by default and can never exceed

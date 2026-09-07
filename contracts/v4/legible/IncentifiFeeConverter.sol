@@ -20,6 +20,7 @@ interface ILossRewardPoolMin {
 }
 
 interface ILegibleHook {
+    function lossRewardPool() external view returns (address);
     function poolKeyOf(address token) external view returns (PoolKey memory);
     function poolIdOf(address token) external view returns (PoolId);
     function priceCheckpoints(PoolId poolId) external view returns (uint160 sqrtPriceX96, uint64 blockNumber);
@@ -52,7 +53,6 @@ interface ILegibleHook {
 contract IncentifiFeeConverter is IUnlockCallback {
     IPoolManager public immutable poolManager;
     ILegibleHook public immutable hook;
-    address public immutable lossRewardPool;
 
     /// @notice Max shortfall vs the checkpoint-implied value, in basis points (3%).
     uint256 public constant MAX_SLIPPAGE_BPS = 300;
@@ -70,11 +70,16 @@ contract IncentifiFeeConverter is IUnlockCallback {
     error SlippageExceeded(uint256 ethOut, uint256 floor);
     error TokenTransferFailed();
 
-    constructor(IPoolManager _poolManager, address _hook, address _lossRewardPool) {
-        if (address(_poolManager) == address(0) || _hook == address(0) || _lossRewardPool == address(0)) revert ZeroAddress();
+    constructor(IPoolManager _poolManager, address _hook) {
+        if (address(_poolManager) == address(0) || _hook == address(0)) revert ZeroAddress();
         poolManager = _poolManager;
         hook = ILegibleHook(_hook);
-        lossRewardPool = _lossRewardPool;
+    }
+
+    /// @notice The loss-reward pool is read from the hook at deposit time, so a hook re-point
+    ///         (setLossRewardPool) redirects converter deposits too. No second pointer to forget.
+    function lossRewardPool() public view returns (address) {
+        return hook.lossRewardPool();
     }
 
     function notifyTokenFees(address token, uint256 amount) external {
@@ -113,7 +118,7 @@ contract IncentifiFeeConverter is IUnlockCallback {
         uint256 creatorShare = ethOut / 2;
         uint256 lossShare = ethOut - creatorShare;
         if (creatorShare > 0) hook.creditCreatorFees{value: creatorShare}(token);
-        if (lossShare > 0) ILossRewardPoolMin(lossRewardPool).depositReward{value: lossShare}(token);
+        if (lossShare > 0) ILossRewardPoolMin(lossRewardPool()).depositReward{value: lossShare}(token);
         emit Converted(token, tokensSold, ethOut, creatorShare, lossShare);
     }
 

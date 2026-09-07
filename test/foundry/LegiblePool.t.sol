@@ -95,7 +95,7 @@ contract LegiblePoolTest is Test {
         assertEq(address(hook), predicted, "CREATE2 hook address must carry the mined flags");
 
         factory = new IncentifiV4LegibleFactory(POOL_MANAGER, hook);
-        converter = new IncentifiFeeConverter(POOL_MANAGER, address(hook), address(pool));
+        converter = new IncentifiFeeConverter(POOL_MANAGER, address(hook));
         hook.setFactory(address(factory));
         hook.setFeeConverter(address(converter));
         bot = new GenericV4Bot(POOL_MANAGER);

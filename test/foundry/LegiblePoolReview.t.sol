@@ -74,7 +74,7 @@ abstract contract LegibleReviewBase is Test {
         hook = new IncentifiV4LegibleHook{salt: salt}(POOL_MANAGER, lossRewardPool, address(this));
         assertEq(address(hook), predicted);
         factory = new IncentifiV4LegibleFactory(POOL_MANAGER, hook);
-        converter = new IncentifiFeeConverter(POOL_MANAGER, address(hook), lossRewardPool);
+        converter = new IncentifiFeeConverter(POOL_MANAGER, address(hook));
         hook.setFactory(address(factory));
         hook.setFeeConverter(address(converter));
         bot = new GenericV4Bot(POOL_MANAGER);
