@@ -26,7 +26,9 @@ import {IncentifiLaunchToken} from "../../contracts/IncentifiLaunchToken.sol";
  *   #3 _inHookOperation is per pool: a reentrant swap on pool B during pool A's graduation is
  *      charged its fee and emits Bought (LegiblePoolReentrancyTest, below)
  *   #4 graduation dust is donated into the graduated position and re-emerges via collect()
- *   #5 post-graduation fee raises are timelocked; a reduction to zero is immediate
+ *   #5 (final) the 2% fee continues after graduation, split 1%/1%; capped at 2%; the owner
+ *      may set any value in [0, 2%] immediately (no timelock). The deploy script's EOA-owner
+ *      path is exercised by the forge-script dry run documented in script/DeployLegiblePool.s.sol
  *
  * Run: forge test --match-path test/foundry/LegiblePoolReview.t.sol -vv
  */
@@ -220,43 +222,77 @@ contract LegiblePoolReviewTest is LegibleReviewBase {
     }
 
     // ---------------------------------------------------------------------------------------
-    // #5b fee raises are timelocked; a reduction to zero is immediate
+    // #5 (final): the 2% fee continues after graduation and is split 1%/1%; a fee above 2%
+    //     reverts; 0 and any value up to 2% land immediately; owner-only
     // ---------------------------------------------------------------------------------------
-    function test_Review5_PostGraduationFeeTimelock() public {
+    function test_Review5_FeeContinuesAfterGraduation_CappedAtTwoPercent_NoTimelock() public {
+        uint24 twoPct = hook.PRE_GRADUATION_FEE_PIPS();
+        assertEq(twoPct, 20_000);
+        assertEq(hook.DEFAULT_POST_GRADUATION_FEE_PIPS(), twoPct, "default == curve fee");
+        assertEq(hook.MAX_POST_GRADUATION_FEE_PIPS(), twoPct, "cap == curve fee");
+        assertEq(hook.postGraduationFeePips(address(token)), twoPct, "on from launch, before graduation");
+
         botBuy(key, token, buyer, 8 ether);
         assertTrue(hook.tokenStates(poolId).graduated);
+        assertEq(hook.postGraduationFeePips(address(token)), twoPct, "no fee cliff at graduation");
+        hook.collect(address(token)); // flush everything accrued up to and including graduation
 
-        vm.expectRevert(IncentifiV4LegibleHook.UseTimelock.selector);
-        hook.setPostGraduationFee(address(token), 5_000); // a nonzero fee never lands immediately
+        // Post-graduation BUY: Swap.fee == 20_000, Bought reports 1%/1%, collect() splits 1%/1%.
+        uint256 creatorBefore = hook.creatorBalances(creator);
+        uint256 poolBefore = pool.totalDeposited(address(token));
+        vm.recordLogs();
+        botBuy(key, token, buyer, 1 ether);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        (Vm.Log memory swapLog,) = findLog(logs, address(POOL_MANAGER), PM_SWAP_TOPIC);
+        (,,,,, uint24 fee) = abi.decode(swapLog.data, (int128, int128, uint160, uint128, int24, uint24));
+        assertEq(fee, twoPct, "post-graduation buy charged 20_000 pips");
+        (Vm.Log memory bought,) = findLog(logs, address(hook), BOUGHT_TOPIC);
+        (uint256 ethIn,, uint256 cFee, uint256 lFee) = abi.decode(bought.data, (uint256, uint256, uint256, uint256));
+        assertEq(ethIn, 1 ether);
+        assertEq(cFee, 0.01 ether, "Bought: 1% creator");
+        assertEq(lFee, 0.01 ether, "Bought: 1% loss pool");
+        hook.collect(address(token));
+        assertApproxEqAbs(hook.creatorBalances(creator) - creatorBefore, 0.01 ether, 1e6, "collect: 1% to the creator");
+        assertApproxEqAbs(pool.totalDeposited(address(token)) - poolBefore, 0.01 ether, 1e6, "collect: 1% to the loss pool");
 
-        hook.proposePostGraduationFee(address(token), 20_000);
-        (uint24 pips, uint64 eta) = hook.pendingPostGraduationFee(address(token));
-        assertEq(pips, 20_000);
-        assertEq(eta, uint64(block.timestamp + hook.FEE_TIMELOCK()));
+        // Post-graduation SELL: Swap.fee == 20_000, Sold reports equal halves worth 2% of the gross.
+        vm.recordLogs();
+        botSell(key, token, buyer, token.balanceOf(buyer) / 10);
+        logs = vm.getRecordedLogs();
+        (swapLog,) = findLog(logs, address(POOL_MANAGER), PM_SWAP_TOPIC);
+        (,,,,, fee) = abi.decode(swapLog.data, (int128, int128, uint160, uint128, int24, uint24));
+        assertEq(fee, twoPct, "post-graduation sell charged 20_000 pips");
+        (Vm.Log memory sold,) = findLog(logs, address(hook), SOLD_TOPIC);
+        (, uint256 ethOut, uint256 sCFee, uint256 sLFee) = abi.decode(sold.data, (uint256, uint256, uint256, uint256));
+        assertApproxEqAbs(sCFee, sLFee, 1, "Sold: split 1%/1% (an odd wei goes to the loss pool)");
+        assertApproxEqAbs(sCFee + sLFee, ethOut * twoPct / (1_000_000 - twoPct), 2, "Sold: fee == 2% of the gross");
 
-        vm.expectRevert(IncentifiV4LegibleHook.TimelockNotElapsed.selector);
-        hook.executePostGraduationFee(address(token));
-        vm.warp(block.timestamp + hook.FEE_TIMELOCK() - 1);
-        vm.expectRevert(IncentifiV4LegibleHook.TimelockNotElapsed.selector);
-        hook.executePostGraduationFee(address(token));
-        assertEq(hook.postGraduationFeePips(address(token)), 0, "still 0 before the delay");
+        // Governance: above 2% reverts; 0 and anything up to 2% land immediately; owner-only.
+        vm.expectRevert(IncentifiV4LegibleHook.FeeTooHigh.selector);
+        hook.setPostGraduationFee(address(token), twoPct + 1);
 
-        vm.warp(block.timestamp + 1);
-        vm.prank(stranger); // permissionless once due
-        hook.executePostGraduationFee(address(token));
-        assertEq(hook.postGraduationFeePips(address(token)), 20_000, "raise lands only after the delay");
+        hook.setPostGraduationFee(address(token), 0);
+        assertEq(hook.postGraduationFeePips(address(token)), 0, "0 lands immediately");
+        vm.recordLogs();
+        botBuy(key, token, buyer, 0.1 ether);
+        (swapLog,) = findLog(vm.getRecordedLogs(), address(POOL_MANAGER), PM_SWAP_TOPIC);
+        (,,,,, fee) = abi.decode(swapLog.data, (int128, int128, uint160, uint128, int24, uint24));
+        assertEq(fee, 0, "...and is charged in the same block");
 
-        hook.setPostGraduationFee(address(token), 0); // immediate
-        assertEq(hook.postGraduationFeePips(address(token)), 0, "reduction to zero is immediate");
+        hook.setPostGraduationFee(address(token), 10_000);
+        assertEq(hook.postGraduationFeePips(address(token)), 10_000, "1% lands immediately");
+        vm.recordLogs();
+        botBuy(key, token, buyer, 0.1 ether);
+        (swapLog,) = findLog(vm.getRecordedLogs(), address(POOL_MANAGER), PM_SWAP_TOPIC);
+        (,,,,, fee) = abi.decode(swapLog.data, (int128, int128, uint160, uint128, int24, uint24));
+        assertEq(fee, 10_000, "...and is charged in the same block");
 
-        hook.proposePostGraduationFee(address(token), 10_000);
-        hook.cancelPostGraduationFee(address(token));
-        vm.expectRevert(IncentifiV4LegibleHook.NoPendingFee.selector);
-        hook.executePostGraduationFee(address(token));
+        hook.setPostGraduationFee(address(token), twoPct);
+        assertEq(hook.postGraduationFeePips(address(token)), twoPct, "2% (the cap) lands immediately");
 
         vm.prank(stranger);
         vm.expectRevert(IncentifiV4LegibleHook.OnlyOwner.selector);
-        hook.proposePostGraduationFee(address(token), 10_000);
+        hook.setPostGraduationFee(address(token), 0);
     }
 }
 

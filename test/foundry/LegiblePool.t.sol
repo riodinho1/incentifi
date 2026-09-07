@@ -433,7 +433,7 @@ contract LegiblePoolTest is Test {
         assertEq(realEth, finalEth);
         assertEq(realToken, finalTokens);
 
-        // post-graduation trading works through the full-range position, at the default 0 fee
+        // post-graduation trading works through the full-range position; the 2% fee continues
         uint256 depositedBefore = pool.totalDeposited(address(token));
         vm.recordLogs();
         uint256 out2 = botBuy(buyer, 0.1 ether);
@@ -441,9 +441,10 @@ contract LegiblePoolTest is Test {
         assertGt(out2, 0, "post-graduation buy fills");
         (Vm.Log memory bought,) = findLog(logs, address(hook), BOUGHT_TOPIC);
         (,, uint256 cFee, uint256 lFee) = abi.decode(bought.data, (uint256, uint256, uint256, uint256));
-        assertEq(cFee + lFee, 0, "default post-graduation fee is 0");
+        assertEq(cFee, 0.001 ether, "post-graduation buy: 1% creator");
+        assertEq(lFee, 0.001 ether, "post-graduation buy: 1% loss pool");
         hook.collect(address(token));
-        assertEq(pool.totalDeposited(address(token)), depositedBefore, "nothing accrued at 0 fee");
+        assertApproxEqAbs(pool.totalDeposited(address(token)) - depositedBefore, 0.001 ether, 1e6, "1% of the post-graduation buy reaches the loss pool");
         uint256 sellOut = botSell(buyer, out2);
         assertGt(sellOut, 0, "post-graduation sell fills");
     }
@@ -482,38 +483,47 @@ contract LegiblePoolTest is Test {
     }
 
     // ------------------------------------------------------------------------------------------
-    // 9. Post-graduation fee: governed, default 0, zero allowed, capped (decision D)
+    // 9. Post-graduation fee (decision D, final): 2% by default from launch, split 1%/1%, capped
+    //    at 2%, owner-adjustable within [0, 2%] effective immediately, no timelock
     // ------------------------------------------------------------------------------------------
-    function test_PostGraduationFee_GovernedDefaultZero() public {
+    function test_PostGraduationFee_TwoPercentByDefault_CappedAtTwoPercent() public {
+        uint24 twoPct = hook.PRE_GRADUATION_FEE_PIPS();
+        assertEq(hook.MAX_POST_GRADUATION_FEE_PIPS(), twoPct, "the cap IS the curve fee");
+        assertEq(hook.postGraduationFeePips(address(token)), twoPct, "on by default from launch");
+
         botBuy(buyer, 8 ether);
         assertTrue(tokenState().graduated);
-        assertEq(hook.postGraduationFeePips(address(token)), 0, "default 0");
+        assertEq(hook.postGraduationFeePips(address(token)), twoPct, "no fee cliff at graduation");
 
         vm.prank(stranger);
         vm.expectRevert(IncentifiV4LegibleHook.OnlyOwner.selector);
-        hook.proposePostGraduationFee(address(token), 20_000);
+        hook.setPostGraduationFee(address(token), 0);
 
-        uint24 tooHigh = hook.MAX_POST_GRADUATION_FEE_PIPS() + 1;
+        uint24 tooHigh = twoPct + 1;
         vm.expectRevert(IncentifiV4LegibleHook.FeeTooHigh.selector);
-        hook.proposePostGraduationFee(address(token), tooHigh);
+        hook.setPostGraduationFee(address(token), tooHigh);
 
-        hook.proposePostGraduationFee(address(token), 20_000);
-        vm.warp(block.timestamp + hook.FEE_TIMELOCK());
-        hook.executePostGraduationFee(address(token));
+        hook.collect(address(token)); // flush fees accrued up to graduation
         uint256 before = pool.totalDeposited(address(token));
+        uint256 creatorBefore = hook.creatorBalances(creator);
         vm.recordLogs();
         botBuy(buyer, 1 ether);
         (Vm.Log memory swapLog,) = findLog(vm.getRecordedLogs(), address(POOL_MANAGER), PM_SWAP_TOPIC);
         (,,,,, uint24 fee) = abi.decode(swapLog.data, (int128, int128, uint160, uint128, int24, uint24));
-        assertEq(fee, 20_000, "override applied post-graduation");
+        assertEq(fee, twoPct, "post-graduation swap charged 2%");
         hook.collect(address(token));
-        assertApproxEqAbs(pool.totalDeposited(address(token)) - before, 0.01 ether, 1e6, "1% of 1 ETH reaches the pool");
+        assertApproxEqAbs(pool.totalDeposited(address(token)) - before, 0.01 ether, 1e6, "1% of 1 ETH reaches the loss pool");
+        assertApproxEqAbs(hook.creatorBalances(creator) - creatorBefore, 0.01 ether, 1e6, "1% of 1 ETH to the creator");
 
-        hook.setPostGraduationFee(address(token), 0); // one-way door stays open: back to zero is allowed
+        hook.setPostGraduationFee(address(token), 0); // immediate, no proposal step exists
+        assertEq(hook.postGraduationFeePips(address(token)), 0);
         before = pool.totalDeposited(address(token));
         botBuy(buyer, 1 ether);
         hook.collect(address(token));
-        assertEq(pool.totalDeposited(address(token)), before, "back at 0: nothing accrues");
+        assertEq(pool.totalDeposited(address(token)), before, "at 0: nothing accrues");
+
+        hook.setPostGraduationFee(address(token), twoPct); // back up to the cap, also immediate
+        assertEq(hook.postGraduationFeePips(address(token)), twoPct);
     }
 
     // ------------------------------------------------------------------------------------------

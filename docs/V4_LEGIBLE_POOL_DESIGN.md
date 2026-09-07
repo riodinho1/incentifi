@@ -1,6 +1,6 @@
 # V4 "Legible Pool" Redesign — Design Doc (pre-Solidity)
 
-**Status:** Phase 2 implemented in this PR (contracts + Foundry fork suite, 11/11 green on a Robinhood mainnet fork). NOT deployed. Numbers below were corrected from the suite (tickSpacing 10, see §3.1).
+**Status:** Phase 2 implemented in this PR (contracts + Foundry fork suite, 11 + 5 review tests green on a Robinhood mainnet fork). NOT deployed. Numbers below were corrected from the suite (tickSpacing 10, see §3.1). Decision D is **final** as of review round 2: the 2% fee continues after graduation, capped at 2%, no timelock, owner is a hardware-wallet EOA by choice (§3.6, §6).
 **Goal:** make pre-graduation Incentifi V4 tokens tradable on generic terminals (GMGN, Axiom, DexScreener-fed tools) *without* per-terminal integration, while leaving the loss-reward economics and payout path unchanged.
 
 ---
@@ -22,7 +22,7 @@ Execution and pricing already work for any generic caller — Uniswap's canonica
 - **Reward path unchanged:** 1% creator + 1% loss-pool per trade, same `LossRewardPool`, same `depositReward(token)`, same `holder_cost_basis` → epochs → Merkle → wallet-signed claims.
 - **Curve economics unchanged:** same price path $5k → $69k, same 5.853863 ETH to graduation, same tokens sold (proven in §4).
 - **Indexer/worker/frontend/infra shape unchanged** (see §8). `Bought`/`Sold` events preserved field-for-field.
-- **Do NOT couple** "become visible" with "start charging after graduation" (§6 — one-way door).
+- **Fee continuity:** the same 2% (1% creator / 1% loss pool) applies before *and* after graduation; there is no fee cliff and the fee can never exceed 2% (§3.6).
 
 ## 3. Design
 
@@ -50,7 +50,7 @@ At launch the price sits at the range's upper bound, so the position is 100% tok
 - Fees accrue to the hook's position natively. `collect()` (hook calls `modifyLiquidity(liquidityDelta = 0)` and takes `feesAccrued`) splits **ETH-side** fees 50/50: `creatorBalances[creator] +=` (pull-payment, existing `claimCreatorFees()` UX) and `LossRewardPool.depositReward{value}(token)`.
 - **Token-side fees** (sell-side fees accrue in the input token): forwarded to a small `FeeConverter` contract with a permissionless `convert(token)` that sells them into the same pool as an ordinary trade (indexed, fee-paying) and deposits the ETH 50/50 the same way. This keeps sell-side fees funding the loss pool in ETH, which today's design does; the alternative — burning the token side (Brew) — is simpler but would halve loss-pool inflow to buy-side only (TESTINGG's volume tonight was ~50/50). **Open decision A** (§7).
 - Collection cadence: on every graduation, on `claimCreatorFees()`, and via permissionless `collect(token)`.
-- **Converter protections (review #1/#2):** `convert()` is permissionless, so the caller's `minEthOut` is only an *additional* constraint. The floor is derived on-chain from the hook's per-pool **price checkpoint** — the pool price at the end of the previous block it traded in, captured on the first swap of each block before that swap moves the price — and the conversion must deliver ≥ 97% of the checkpoint-implied ETH for the tokens actually sold, else it reverts. A same-block sandwich therefore cannot settle; a multi-block manipulation is bounded to 3% of one (small) batch and must hold a mispriced position across blocks. The converter's own swap is **fee-free** (`beforeSwap` returns a 0 override for it), so the ETH it delivers matches what the holder's `Sold` event reported and no new token fees are minted recursively.
+- **Converter protections (review #1/#2):** `convert()` is permissionless, so the caller's `minEthOut` is only an *additional* constraint. The floor is derived on-chain from the hook's per-pool **price checkpoint** — the pool price at the end of the previous block it traded in, captured on the first swap of each block before that swap moves the price — and the conversion must deliver ≥ 97% of the checkpoint-implied ETH for the tokens actually sold, else it reverts. A same-block sandwich therefore cannot settle. A cross-block manipulation is *not* bounded by the 3% — the 3% is measured against the checkpoint, and the checkpoint is exactly what a cross-block attack moves. The real protection is economic: to move the reference price enough to matter, the attacker must trade far more than the batch they are targeting (batches are ~2% of trade size against a ~1e9-token curve) and pay the 2% fee in both directions (~4% round trip, half of which funds the very creator/loss-pool split they are attacking) to extract a fraction of something small, while holding a mispriced position against arbitrage in between. The converter's own swap is **fee-free** (`beforeSwap` returns a 0 override for it), so the ETH it delivers matches what the holder's `Sold` event reported and no new token fees are minted recursively.
 
 ### 3.4 Liquidity gating (security)
 - `beforeAddLiquidity`: revert unless `sender == hook`. Pre-graduation **always** (anyone else adding liquidity breaks curve semantics and lets them front-run graduation). Post-graduation governed by `lpOpen[token]` (default **false** → no fee dilution; opening it is a deliberate later choice — **open decision C**).
@@ -63,8 +63,8 @@ At launch the price sits at the range's upper bound, so the position is 100% tok
 - **Remainder (review #4):** the full-range mint cannot pair everything — with tickSpacing 10 the curve raises ~0.046% less ETH than pairs the whole reserve at P_g, so ETH binds and **~0.06% of the reserve (~127,000 tokens, ~0.003 ETH of value) plus at most dust ETH** is left over per graduation. It is **donated into the just-minted graduated position** (`PoolManager.donate`), where it accrues as ordinary LP fees to the hook's own position (external LPs are gated) and re-emerges through `collect()` — ETH split 1%/1%, tokens via the converter. Nothing is stranded and no privileged sweep exists.
 - **Edge cases:** the pool has no liquidity below `tickLower`, so a swap that would overshoot stops at the bound (partial fill) — "crossing" means reaching it, which is a trade, which fires `afterSwap`. A swap landing exactly on the bound graduates too. Deltas created by the hook's own `modifyLiquidity` inside `afterSwap` must be settled by the hook within the unlock — **this is the settlement-order class of bug we already had once; it gets the heaviest test coverage.**
 
-### 3.6 Post-graduation fee: a governed parameter, default **0**
-`postGraduationFeePips[token]` (hook-owned, **zero always allowed**, capped at 10%), returned as the dynamic override after graduation. Ships at 0. **Raises are timelocked (review #5b):** `proposePostGraduationFee` → **2 days** → permissionless `executePostGraduationFee`; `cancel` by the owner; a **reduction to zero is immediate** via `setPostGraduationFee(token, 0)`, and that function accepts nothing else. See §6.
+### 3.6 Post-graduation fee: **2%, on from launch, capped at 2%** (decision D, final)
+`postGraduationFeePips[token]` is set to `DEFAULT_POST_GRADUATION_FEE_PIPS = 20_000` (2%) when the token is registered and is returned as the dynamic override after graduation — identical to the curve fee, split 1% creator / 1% `LossRewardPool`. **No fee cliff:** trading carries on at the same rate throughout. Rationale: half the fee funds the loss-reward pool, which keeps paying underwater holders after graduation, so the fee is not dead weight. `MAX_POST_GRADUATION_FEE_PIPS = 20_000`: the fee **can never exceed the curve fee**. The owner may set any value in `[0, 2%]` per token with a single `setPostGraduationFee(token, pips)`, **effective immediately** — with default == cap there is no raise to delay, and lowering only ever helps traders, so there is no timelock and no proposal state.
 
 ### 3.7 Hook permissions
 `beforeInitialize (bit 13) · beforeAddLiquidity (11) · beforeSwap (7) · afterSwap (6)` → mask **`0x28C0`**. No return-delta bits — that is the whole point. CREATE2 salt mined for this mask (same tooling as tonight's deploy).
@@ -90,10 +90,10 @@ mcap: $5000 at launch, $69000 at graduation
 ```
 
 ## 5. Legibility acceptance test (empirical, before any cutover)
-Launch a throwaway token on the new trio on mainnet and confirm, in order: (1) `getLiquidity > 0`, `Swap` events with real amounts, moving `slot0`; (2) V4 Quoter quote == UniversalRouter execution for a buy **and** a sell; (3) DexScreener indexes the pair (automatic for real V4 liquidity — control pool confirmed); (4) the token appears and **trades** on GMGN and Axiom. Only after (4): consider §6.
+Launch a throwaway token on the new trio on mainnet and confirm, in order: (1) `getLiquidity > 0`, `Swap` events with real amounts, moving `slot0`; (2) V4 Quoter quote == UniversalRouter execution for a buy **and** a sell; (3) DexScreener indexes the pair (automatic for real V4 liquidity — control pool confirmed); (4) the token appears and **trades** on GMGN and Axiom.
 
-## 6. The one-way door: decouple visibility from post-graduation fees
-Hooks are immutable per pool. Ship with `postGradFeePips = 0` and `lpOpen = false`; run §5; then flip the fee on (a storage write, no redeploy). Rationale for eventually charging: a hook fee is enforced on every path, whereas today's V3 post-grad fee is bypassed by anyone trading the Uniswap pool directly. Close that inconsistency in step two, not step one.
+## 6. Post-graduation fee and governance (superseded → final)
+Earlier drafts shipped the post-graduation fee at 0 behind a governed switch ("one-way door"), then added a 2-day timelock and a multisig-owner requirement. **All of that is superseded** by the product decision in §3.6: the fee is 2% throughout, on from launch, capped at 2% in the contract, adjustable within `[0, 2%]` immediately. Because the cap equals the default, the owner cannot raise anything; the only remaining owner levers are lowering the fee (helps traders) and opening external LP on graduated pools (decision C). With that little power, **the owner is a single hardware-wallet EOA, deliberately** — `script/DeployLegiblePool.s.sol` deploys with a plain EOA owner (the `--sender`, or `OWNER` if set). A hook fee is enforced on every path, so unlike the V3 post-grad fee it cannot be bypassed by trading the pool directly.
 
 ## 7. Open decisions (need an answer before Solidity)
 | | Options | Recommendation |
@@ -101,7 +101,7 @@ Hooks are immutable per pool. Ship with `postGradFeePips = 0` and `lpOpen = fals
 | **A. Token-side (sell) fees** | convert to ETH via `FeeConverter` (keeps loss-pool funding whole) · burn (simplest, halves loss-pool inflow) | **Convert** — a separate small contract, permissionless, ordinary indexed trades; hook stays minimal |
 | **B. Router** | drop `IncentifiV4Router` and trade through UniversalRouter like everyone else · keep a thin router | **Drop** — one fewer deploy, and it forces us to eat the same path terminals use |
 | **C. Post-grad LP gating** | keep gated (no fee dilution) · open (external LPs share fees) | **Keep gated** at launch; revisit with §6 |
-| **D. Post-grad fee level** | 0 · 1%/1% · governed | **Governed, default 0** (non-negotiable per §6) |
+| **D. Post-grad fee level** | 0 · 1%/1% · governed | **RESOLVED (final): 2% (1%/1%) throughout, on from launch, capped at 2%, no timelock; owner is a hardware-wallet EOA by choice** (§3.6, §6) |
 
 ## 8. What changes / what doesn't
 | Layer | Change |
@@ -115,9 +115,9 @@ Hooks are immutable per pool. Ship with `postGradFeePips = 0` and `lpOpen = fals
 
 ## 9. Migration & rollout
 1. Contracts + fork suite (curve equivalence to the wei vs today's hook; fees land in the real pool; UR buy & sell; graduation incl. boundary cases; loss-reward epoch end-to-end on the new pool; `FeeConverter.convert`).
-2. Mainnet: mine salt for `0x28C0`, deploy hook → `FeeConverter` → factory, re-point `uniswapAddresses.ts` + indexer factory default, PR to master (user runs deploys with own key; each tx verified on-chain). **Hard requirement (review #5a): the hook owner must be a multisig, never an EOA** — `script/DeployLegiblePool.s.sol` refuses to run unless `OWNER_MULTISIG` is a deployed contract and transfers ownership to it as its final step.
+2. Mainnet: mine salt for `0x28C0`, deploy hook → `FeeConverter` → factory, re-point `uniswapAddresses.ts` + indexer factory default, PR to master (user runs deploys with own key; each tx verified on-chain). Owner: the deploying hardware-wallet EOA (or `OWNER`), by choice — see §6; no multisig, no timelock.
 3. §5 acceptance on a throwaway launch. Then open launches.
-4. Later, deliberately: §6 fee switch, decision C.
+4. Later, deliberately: decision C (opening external LP).
 
 ## 10. Risks
 - **Settlement inside `afterSwap` during graduation** — heaviest testing; same bug class as the GenericSell fix.

@@ -64,9 +64,11 @@ interface IIncentifiFeeConverter {
  *         * Liquidity is gated: only this hook may add liquidity, pre-graduation always, and
  *           post-graduation unless governance opens it per token (decision C: gated).
  *
- *         * Post-graduation fee is a governed parameter that DEFAULTS TO ZERO and may be set
- *           back to zero (decision D). Hooks are immutable per pool; a hardcoded nonzero
- *           post-graduation fee would be a one-way door.
+ *         * The fee continues after graduation: postGraduationFeePips defaults to the same 2%
+ *           (1% creator / 1% LossRewardPool) from launch, so there is no fee cliff and the
+ *           loss-reward pool keeps being funded by post-graduation volume. The owner may set
+ *           it anywhere in [0, 2%] per token, effective immediately; it can never exceed the
+ *           curve fee (decision D, final).
  *
  *         * Graduation fires inside afterSwap the moment the pool price reaches the curve's
  *           lower bound (position fully converted to ETH), in the same transaction; a
@@ -107,8 +109,10 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
 
     /// @notice 2.00% dynamic LP fee while pre-graduation, in pips (1e6 = 100%). Split 1%/1%.
     uint24 public constant PRE_GRADUATION_FEE_PIPS = 20_000;
-    /// @notice Governance ceiling for the post-graduation fee (10%). Zero is always allowed.
-    uint24 public constant MAX_POST_GRADUATION_FEE_PIPS = 100_000;
+    /// @notice Post-graduation fee applied from launch: identical to the curve fee, split 1%/1%.
+    uint24 public constant DEFAULT_POST_GRADUATION_FEE_PIPS = 20_000;
+    /// @notice Ceiling for the post-graduation fee: it can never exceed the curve fee (2%).
+    uint24 public constant MAX_POST_GRADUATION_FEE_PIPS = 20_000;
 
     bytes32 private constant CURVE_SALT = bytes32(0);
     bytes32 private constant GRADUATED_SALT = bytes32(uint256(1));
@@ -147,7 +151,8 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
     mapping(address => address) public pendingCreator;
     /// @notice Pull-payment creator fees, global across all of a creator's tokens.
     mapping(address => uint256) public creatorBalances;
-    /// @notice Post-graduation fee per token, pips. Default 0. Governed. Zero always allowed.
+    /// @notice Post-graduation fee per token, pips. Set to DEFAULT_POST_GRADUATION_FEE_PIPS (2%)
+    ///         at registration; owner-adjustable within [0, MAX_POST_GRADUATION_FEE_PIPS].
     mapping(address => uint24) public postGraduationFeePips;
     /// @notice Whether external LPs may add liquidity after graduation. Default false.
     mapping(address => bool) public lpOpen;
@@ -169,15 +174,6 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
     }
     mapping(PoolId => PriceCheckpoint) public priceCheckpoints;
 
-    /// @notice Timelocked post-graduation fee raise (decision D: a fee raise must be visible
-    ///         before it lands; a reduction to ZERO stays immediate).
-    struct PendingFee {
-        uint24 pips;
-        uint64 eta;
-    }
-    mapping(address => PendingFee) public pendingPostGraduationFee;
-    uint256 public constant FEE_TIMELOCK = 2 days;
-
     enum Op {
         Seed,
         Collect,
@@ -198,8 +194,6 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
     event Graduated(PoolId indexed poolId, address indexed token, uint256 finalEthReserve, uint256 finalTokenReserve);
     event GraduationLiquidityDeployed(PoolId indexed poolId, uint128 liquidity, uint160 sqrtPriceX96, uint256 ethDonated, uint256 tokenDonated);
     event PostGraduationFeeSet(address indexed token, uint24 pips);
-    event PostGraduationFeeProposed(address indexed token, uint24 pips, uint64 eta);
-    event PostGraduationFeeCancelled(address indexed token);
     event LpOpenSet(address indexed token, bool open);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
@@ -231,9 +225,6 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
     error AlreadyGraduated();
     error NotReadyToGraduate();
     error UnexpectedDelta();
-    error UseTimelock();
-    error NoPendingFee();
-    error TimelockNotElapsed();
 
     constructor(IPoolManager _poolManager, address _lossRewardPool, address _deployer) BaseHook(_poolManager) {
         if (_lossRewardPool == address(0) || _deployer == address(0)) revert ZeroAddress();
@@ -267,41 +258,14 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
         owner = newOwner;
     }
 
-    /// @notice Decision D, immediate path: ONLY a reduction to zero. Any nonzero fee must go
-    ///         through propose -> FEE_TIMELOCK -> execute so a raise is visible before it lands.
+    /// @notice Decision D (final): the post-graduation fee is 2% by default and can never exceed
+    ///         2%, so there is nothing a delay would guard. The owner may set any value in
+    ///         [0, MAX_POST_GRADUATION_FEE_PIPS] per token, effective immediately.
     function setPostGraduationFee(address token, uint24 pips) external {
         if (msg.sender != owner) revert OnlyOwner();
-        if (pips != 0) revert UseTimelock();
-        delete pendingPostGraduationFee[token];
-        postGraduationFeePips[token] = 0;
-        emit PostGraduationFeeSet(token, 0);
-    }
-
-    /// @notice Owner proposes a nonzero post-graduation fee (capped at 10%); executable by anyone
-    ///         after FEE_TIMELOCK. Re-proposing overwrites the pending proposal and restarts the clock.
-    function proposePostGraduationFee(address token, uint24 pips) external {
-        if (msg.sender != owner) revert OnlyOwner();
         if (pips > MAX_POST_GRADUATION_FEE_PIPS) revert FeeTooHigh();
-        uint64 eta = uint64(block.timestamp + FEE_TIMELOCK);
-        pendingPostGraduationFee[token] = PendingFee({pips: pips, eta: eta});
-        emit PostGraduationFeeProposed(token, pips, eta);
-    }
-
-    function cancelPostGraduationFee(address token) external {
-        if (msg.sender != owner) revert OnlyOwner();
-        if (pendingPostGraduationFee[token].eta == 0) revert NoPendingFee();
-        delete pendingPostGraduationFee[token];
-        emit PostGraduationFeeCancelled(token);
-    }
-
-    /// @notice Permissionless: applies a proposal once its delay has elapsed.
-    function executePostGraduationFee(address token) external {
-        PendingFee memory pending = pendingPostGraduationFee[token];
-        if (pending.eta == 0) revert NoPendingFee();
-        if (block.timestamp < pending.eta) revert TimelockNotElapsed();
-        delete pendingPostGraduationFee[token];
-        postGraduationFeePips[token] = pending.pips;
-        emit PostGraduationFeeSet(token, pending.pips);
+        postGraduationFeePips[token] = pips;
+        emit PostGraduationFeeSet(token, pips);
     }
 
     /// @notice Decision C: external liquidity after graduation is closed unless opened here.
@@ -341,6 +305,7 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
         if (token == address(0) || creator == address(0)) revert ZeroAddress();
         if (pendingCreator[token] != address(0)) revert AlreadyPending();
         pendingCreator[token] = creator;
+        postGraduationFeePips[token] = DEFAULT_POST_GRADUATION_FEE_PIPS; // fee continues after graduation
         emit TokenRegistered(token, creator);
     }
 
