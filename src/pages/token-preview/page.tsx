@@ -2066,8 +2066,9 @@ const TokenPreviewPage = () => {
       <div className="bg-[#0B1120] border border-[#1D2940] rounded-2xl p-4 sm:p-5 shadow-xl shadow-black/20">
         <h3 className="text-white font-bold text-sm mb-1">Allow External Bots to Sell This Token</h3>
         <p className="text-[#8DA3CD] text-[11px] leading-relaxed mb-3">
-          This lets Uniswap's Universal Router move this token from your wallet, so third-party trading bots and
-          tools (e.g. Telegram trading bots) can sell it for you. Two on-chain transactions, paid by your own wallet.
+          Lets tools that trade through Uniswap's Universal Router (e.g. the Uniswap app, Permit2-based bots) sell this
+          token. Bots using their own direct approval — like most sniper bots — don't need this. Two on-chain
+          transactions, paid by your own wallet.
         </p>
 
         {botSellingStatus?.fullyEnabled ? (
