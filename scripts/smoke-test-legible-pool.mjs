@@ -37,6 +37,7 @@ import {
   encodeAbiParameters,
   parseAbiParameters,
   decodeEventLog,
+  encodeDeployData,
   keccak256,
   getAddress,
   formatEther,
@@ -142,9 +143,23 @@ const me = account.address;
 const fmt = (wei) => `${formatEther(BigInt(wei))} ETH`;
 const fmtTok = (wei) => `${(Number(wei) / 1e18).toLocaleString('en-US', { maximumFractionDigits: 6 })} ${SYMBOL}`;
 
-async function send(label, request) {
-  const hash = await walletClient.writeContract(request);
-  console.log(`  -> ${label}: ${hash}`);
+// Gas policy (2026-09-07 post-mortem, tx 0x81c6b0e8...): the first buy was sent with viem's bare
+// estimate (194,373) and ran out of gas inside the nested token transfer (the node itself
+// estimates 198,695; a V4 swap through UniversalRouter is ~6 calls deep and needs the 1/64
+// reserve at every level). Every transaction now carries the node estimate + 30%, and the two
+// swaps and convert() never go below 300,000.
+const SWAP_GAS_FLOOR = 300_000n;
+function withHeadroom(estimate, floor = 0n) {
+  const padded = estimate + (estimate * 30n) / 100n;
+  return padded < floor ? floor : padded;
+}
+
+async function send(label, request, floor = 0n) {
+  const estimate = await publicClient.estimateContractGas({ ...request, account });
+  const gas = withHeadroom(estimate, floor);
+  console.log(`  -> ${label}: gas estimate ${estimate}, limit ${gas}`);
+  const hash = await walletClient.writeContract({ ...request, gas });
+  console.log(`     tx ${hash}`);
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   if (receipt.status !== 'success') throw new Error(`${label} reverted (${hash})`);
   console.log(`     mined in block ${receipt.blockNumber}, gasUsed ${receipt.gasUsed}`);
@@ -230,8 +245,12 @@ async function main() {
   // 1. deploy + launch --------------------------------------------------------------------------
   console.log(`\n[1] deploy ${SYMBOL} and launch it (rewardAsset = ETH)`);
   const artifact = JSON.parse(readFileSync('artifacts/contracts/IncentifiLaunchToken.sol/IncentifiLaunchToken.json', 'utf8'));
-  const deployHash = await walletClient.deployContract({ abi: artifact.abi, bytecode: artifact.bytecode, args: [SYMBOL, SYMBOL, TOTAL_SUPPLY] });
-  console.log(`  -> deploy: ${deployHash}`);
+  const deployData = encodeDeployData({ abi: artifact.abi, bytecode: artifact.bytecode, args: [SYMBOL, SYMBOL, TOTAL_SUPPLY] });
+  const deployEstimate = await publicClient.estimateGas({ account, data: deployData });
+  const deployGas = withHeadroom(deployEstimate);
+  console.log(`  -> deploy: gas estimate ${deployEstimate}, limit ${deployGas}`);
+  const deployHash = await walletClient.deployContract({ abi: artifact.abi, bytecode: artifact.bytecode, args: [SYMBOL, SYMBOL, TOTAL_SUPPLY], gas: deployGas });
+  console.log(`     tx ${deployHash}`);
   const deployReceipt = await publicClient.waitForTransactionReceipt({ hash: deployHash });
   if (deployReceipt.status !== 'success' || !deployReceipt.contractAddress) throw new Error('token deployment failed');
   const TOKEN = getAddress(deployReceipt.contractAddress);
@@ -255,7 +274,7 @@ async function main() {
   const buy = urInputs(poolKey, true, BUY_WEI);
   const buyReceipt = await send('UniversalRouter.execute (V4_SWAP zeroForOne)', {
     address: UNIVERSAL_ROUTER, abi: UR_ABI, functionName: 'execute', args: [buy.commands, buy.inputs, BigInt(Math.floor(Date.now() / 1000) + 600)], value: BUY_WEI,
-  });
+  }, SWAP_GAS_FLOOR);
   printSwapEvents(buyReceipt, poolId);
   const bought = decodeAll(buyReceipt, HOOK, HOOK_ABI).find((e) => e.eventName === 'Bought');
   if (bought) console.log(`     hook.Bought: trader=${bought.args.trader} ethIn=${fmt(bought.args.ethIn)} tokensOut=${fmtTok(bought.args.tokensOut)} creatorFee=${fmt(bought.args.creatorFee)} lossPoolFee=${fmt(bought.args.lossPoolFee)}`);
@@ -273,7 +292,7 @@ async function main() {
   const sell = urInputs(poolKey, false, sellAmount);
   const sellReceipt = await send('UniversalRouter.execute (V4_SWAP oneForZero)', {
     address: UNIVERSAL_ROUTER, abi: UR_ABI, functionName: 'execute', args: [sell.commands, sell.inputs, BigInt(Math.floor(Date.now() / 1000) + 600)],
-  });
+  }, SWAP_GAS_FLOOR);
   printSwapEvents(sellReceipt, poolId);
   const sold = decodeAll(sellReceipt, HOOK, HOOK_ABI).find((e) => e.eventName === 'Sold');
   if (sold) console.log(`     hook.Sold: trader=${sold.args.trader} tokensIn=${fmtTok(sold.args.tokensIn)} ethOut=${fmt(sold.args.ethOut)} creatorFee=${fmt(sold.args.creatorFee)} lossPoolFee=${fmt(sold.args.lossPoolFee)}`);
@@ -294,7 +313,7 @@ async function main() {
   if (pending === 0n) {
     console.log('     nothing to convert (no token-side fees)');
   } else {
-    const convertReceipt = await send('converter.convert', { address: FEE_CONVERTER, abi: CONVERTER_ABI, functionName: 'convert', args: [TOKEN, 0n, 0n] });
+    const convertReceipt = await send('converter.convert', { address: FEE_CONVERTER, abi: CONVERTER_ABI, functionName: 'convert', args: [TOKEN, 0n, 0n] }, SWAP_GAS_FLOOR);
     printSwapEvents(convertReceipt, poolId);
     const converted = decodeAll(convertReceipt, FEE_CONVERTER, CONVERTER_ABI).find((e) => e.eventName === 'Converted');
     if (converted) console.log(`     Converted: tokensIn=${fmtTok(converted.args.tokensIn)} ethOut=${fmt(converted.args.ethOut)} creatorShare=${fmt(converted.args.creatorShare)} lossPoolShare=${fmt(converted.args.lossPoolShare)}`);
