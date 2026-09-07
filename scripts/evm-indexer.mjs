@@ -8,6 +8,13 @@ import {
 } from 'viem';
 import { createServer as createViteServer } from 'vite';
 import fs from 'fs';
+import {
+  INCENTIFI_LEGIBLE_FACTORY,
+  INCENTIFI_LEGIBLE_HOOK,
+  LEGIBLE_DISCOVERY_FLOOR_BLOCK,
+  LEGIBLE_HOOK_EVENTS,
+  fetchLegibleState,
+} from './lib/legiblePool.mjs';
 
 // Robust .env.local loader
 if (fs.existsSync('.env.local')) {
@@ -532,8 +539,38 @@ async function getV4Module() {
   return v4ModulePromise;
 }
 
-// lowercase token address -> symbol, for every V4 token discovered so far this process.
+// lowercase token address -> symbol, for every V4 token discovered so far this process
+// (both V4 factories: the GenericSell trio and the legible trio).
 const v4TokenSymbolCache = new Map();
+// lowercase token address -> lowercase hook address its pool is bound to. This is the tag the
+// frontend/worker route by ("which hook", never a global switch); mirrored best-effort into
+// tokens.hook_address (supabase/legible_pool_cutover.sql).
+const v4TokenHook = new Map();
+// lowercase poolId -> lowercase hook address, so a hook's Bought/Sold is only ever matched to
+// pools THAT hook serves (two hooks are polled; poolIds are unique per key, but be explicit).
+const v4PoolIdToHook = new Map();
+const hookTaggedInDb = new Set();
+const LEGIBLE_HOOK_LOWER = INCENTIFI_LEGIBLE_HOOK.toLowerCase();
+
+/**
+ * Best-effort DB tag. Never throws: if the migration adding tokens.hook_address has not been
+ * applied, or the token has no registry row yet, this is a warning and the frontend falls back
+ * to the chain (src/lib/tokenVenue.ts). Retried on every discovery pass until it sticks.
+ */
+async function tagTokenHookInDb(tokenAddr, hookAddr) {
+  const key = `${tokenAddr}:${hookAddr}`;
+  if (hookTaggedInDb.has(key)) return;
+  try {
+    const { error } = await supabase.from('tokens').update({ hook_address: hookAddr }).eq('mint_address', tokenAddr);
+    if (error) {
+      console.warn(`[V4 DISCOVERY] Could not tag ${tokenAddr} with hook ${hookAddr} in tokens.hook_address (${error.code} ${error.message}) — apply supabase/legible_pool_cutover.sql; the frontend falls back to the chain meanwhile.`);
+      return;
+    }
+    hookTaggedInDb.add(key);
+  } catch (err) {
+    console.warn(`[V4 DISCOVERY] tokens.hook_address tag failed for ${tokenAddr}: ${err.message}`);
+  }
+}
 // lowercase poolId (bytes32 hex) -> lowercase token address, for the same tokens. The hook's
 // Bought/Sold events identify the pool, not the token, so this is how a trade log is mapped
 // back to the token whose trades/candles/cost-basis rows it belongs in.
@@ -557,6 +594,9 @@ async function getV4HookAddress() {
 // discoverV4TokensInRange's one-time historical catch-up (see runIndexer) has run, so the
 // per-tick incremental scan below never fires against an unpopulated cache.
 let v4LastScannedBlock = null;
+// Same, for the legible factory (PR #17). Its own cursor and floor: it was deployed in block
+// 56,911,931, so there is nothing to scan before LEGIBLE_DISCOVERY_FLOOR_BLOCK.
+let legibleLastScannedBlock = null;
 
 async function getLogsWithRetry(params, { retries = 3, baseDelayMs = 500 } = {}) {
   for (let attempt = 0; ; attempt += 1) {
@@ -581,12 +621,16 @@ async function getLogsWithRetry(params, { retries = 3, baseDelayMs = 500 } = {})
  * function is also used for the one-time historical catch-up, where there is no "next
  * tick" to self-heal on).
  */
-export async function discoverV4TokensInRange(fromBlock, toBlock, { chunkSize = 5000n } = {}) {
+export async function discoverV4TokensInRange(fromBlock, toBlock, { chunkSize = 5000n, factory = INCENTIFI_V4_FACTORY, hook = null } = {}) {
+  // Which hook this factory's pools are bound to: the legible factory's is a known constant;
+  // the GenericSell factory's is read from-chain (its `hook()` immutable) as before.
+  const hookAddr = (hook || (factory.toLowerCase() === INCENTIFI_LEGIBLE_FACTORY.toLowerCase() ? INCENTIFI_LEGIBLE_HOOK : await getV4HookAddress())).toLowerCase();
+  const label = hookAddr === LEGIBLE_HOOK_LOWER ? 'legible' : 'generic-sell';
   let from = fromBlock;
   while (from <= toBlock) {
     const to = from + chunkSize > toBlock ? toBlock : from + chunkSize;
     const logs = await getLogsWithRetry({
-      address: getAddress(INCENTIFI_V4_FACTORY),
+      address: getAddress(factory),
       event: parseAbiItem('event TokenLaunched(address indexed token, address indexed creator, bytes32 poolId)'),
       fromBlock: from,
       toBlock: to,
@@ -594,7 +638,10 @@ export async function discoverV4TokensInRange(fromBlock, toBlock, { chunkSize = 
 
     for (const log of logs) {
       const tokenAddr = log.args.token.toLowerCase();
-      if (v4TokenSymbolCache.has(tokenAddr)) continue;
+      if (v4TokenSymbolCache.has(tokenAddr)) {
+        await tagTokenHookInDb(tokenAddr, hookAddr); // retry the DB tag if an earlier one failed
+        continue;
+      }
       try {
         const symbol = await client.readContract({
           address: getAddress(tokenAddr),
@@ -603,7 +650,10 @@ export async function discoverV4TokensInRange(fromBlock, toBlock, { chunkSize = 
         });
         v4TokenSymbolCache.set(tokenAddr, symbol);
         v4PoolIdToToken.set(log.args.poolId.toLowerCase(), tokenAddr);
-        console.log(`[V4 DISCOVERY] Found V4 token ${symbol} (${tokenAddr}) launched at block ${log.blockNumber}, poolId ${log.args.poolId}`);
+        v4PoolIdToHook.set(log.args.poolId.toLowerCase(), hookAddr);
+        v4TokenHook.set(tokenAddr, hookAddr);
+        console.log(`[V4 DISCOVERY] Found V4 token ${symbol} (${tokenAddr}) on the ${label} hook ${hookAddr}, launched at block ${log.blockNumber}, poolId ${log.args.poolId}`);
+        await tagTokenHookInDb(tokenAddr, hookAddr);
       } catch (err) {
         console.warn(`[V4 DISCOVERY] Could not read symbol() for newly-discovered V4 token ${tokenAddr}: ${err.message}`);
       }
@@ -625,20 +675,41 @@ export async function discoverV4TokensInRange(fromBlock, toBlock, { chunkSize = 
  */
 export async function indexV4TradesInRange(fromBlock, toBlock) {
   if (v4PoolIdToToken.size === 0 || fromBlock > toBlock) return 0;
-  const hookAddress = await getV4HookAddress();
-  const logs = await getLogsWithRetry({
-    address: hookAddress,
-    events: V4_HOOK_TRADE_EVENTS,
-    fromBlock,
-    toBlock,
-  });
+  // Two hooks, one getLogs each. A hook is only polled once at least one of ITS pools is known.
+  const sources = [];
+  const hooksInUse = new Set(v4PoolIdToHook.values());
+  const genericHook = hooksInUse.has(LEGIBLE_HOOK_LOWER) && hooksInUse.size === 1 ? null : (await getV4HookAddress()).toLowerCase();
+  if (genericHook && hooksInUse.has(genericHook)) sources.push({ hook: genericHook, events: V4_HOOK_TRADE_EVENTS });
+  if (hooksInUse.has(LEGIBLE_HOOK_LOWER)) sources.push({ hook: LEGIBLE_HOOK_LOWER, events: LEGIBLE_HOOK_EVENTS });
 
   let matched = 0;
+  for (const source of sources) {
+    const logs = await getLogsWithRetry({
+      address: getAddress(source.hook),
+      events: source.events,
+      fromBlock,
+      toBlock,
+    });
+    matched += await ingestHookTradeLogs(logs, source.hook);
+  }
+  return matched;
+}
+
+async function ingestHookTradeLogs(logs, hookLower) {
+  let matched = 0;
   for (const log of logs) {
-    const tokenAddr = v4PoolIdToToken.get(log.args.poolId.toLowerCase());
+    const poolId = log.args.poolId.toLowerCase();
+    const tokenAddr = v4PoolIdToToken.get(poolId);
     // A pool this process never discovered (e.g. a token from another factory bound to the
-    // same hook) — not ours to index.
-    if (!tokenAddr) continue;
+    // same hook), or a pool that belongs to the OTHER hook — not ours to index here.
+    if (!tokenAddr || v4PoolIdToHook.get(poolId) !== hookLower) continue;
+    if (log.eventName === 'FeesConverted') {
+      // The legible fee converter selling collected token-side fees back into the pool:
+      // protocol plumbing, never a holder trade. Logged for visibility, NOT a trade row and
+      // NOT a holder_cost_basis update (that is what keeps the loss-reward maths honest).
+      console.log(`[V4 FEES] FeesConverted on ${v4TokenSymbolCache.get(tokenAddr)} (${tokenAddr}): ${Number(log.args.tokensIn) / 1e18} tokens -> ${Number(log.args.ethOut) / 1e18} ETH (tx ${log.transactionHash})`);
+      continue;
+    }
     const symbol = v4TokenSymbolCache.get(tokenAddr);
     const a = log.args;
     const creatorFee = Number(a.creatorFee) / 1e18;
@@ -719,15 +790,35 @@ export async function advanceV4Discovery(toBlock) {
   let from = v4LastScannedBlock === null ? V4_DISCOVERY_FLOOR_BLOCK : v4LastScannedBlock + 1n;
   while (from <= toBlock) {
     const to = from + 5000n > toBlock ? toBlock : from + 5000n;
-    await discoverV4TokensInRange(from, to);
+    await discoverV4TokensInRange(from, to, { factory: INCENTIFI_V4_FACTORY });
     v4LastScannedBlock = to;
     from = to + 1n;
   }
+  // The legible factory (PR #17) is a second, independent source with the same guarantees:
+  // resumable per chunk, hard precondition of the tick (a legible launch this process had not
+  // discovered would have its trades skipped for good — the same phantom-payout hole).
+  let lfrom = legibleLastScannedBlock === null ? LEGIBLE_DISCOVERY_FLOOR_BLOCK : legibleLastScannedBlock + 1n;
+  while (lfrom <= toBlock) {
+    const to = lfrom + 5000n > toBlock ? toBlock : lfrom + 5000n;
+    await discoverV4TokensInRange(lfrom, to, { factory: INCENTIFI_LEGIBLE_FACTORY, hook: INCENTIFI_LEGIBLE_HOOK });
+    legibleLastScannedBlock = to;
+    lfrom = to + 1n;
+  }
 }
 
-/** True once V4 discovery covers `block` — i.e. V4 trades in windows up to it can be indexed. */
+/** True once V4 discovery (both factories) covers `block` — i.e. V4 trades in windows up to it can be indexed. */
 export function isV4DiscoveryReadyThrough(block) {
-  return v4LastScannedBlock !== null && v4LastScannedBlock >= block;
+  return v4LastScannedBlock !== null && v4LastScannedBlock >= block && legibleLastScannedBlock !== null && legibleLastScannedBlock >= block;
+}
+
+/** Tests: the in-memory discovery state (token -> symbol, token -> hook). */
+export function getV4DiscoveryState() {
+  return {
+    tokens: Object.fromEntries(v4TokenSymbolCache),
+    hooks: Object.fromEntries(v4TokenHook),
+    pools: Object.fromEntries(v4PoolIdToToken),
+    scannedThrough: { genericSell: v4LastScannedBlock, legible: legibleLastScannedBlock },
+  };
 }
 
 /**
@@ -781,16 +872,21 @@ export function createIndexer() {
       try {
         await advanceV4Discovery(toBlock);
       } catch (err) {
-        throw new Error(`V4 discovery not ready (scanned through block ${v4LastScannedBlock ?? 'none yet'}, need ${toBlock}): ${err.message}`);
+        throw new Error(`V4 discovery not ready (generic-sell scanned through ${v4LastScannedBlock ?? 'none yet'}, legible through ${legibleLastScannedBlock ?? 'none yet'}, need ${toBlock}): ${err.message}`);
       }
 
       // V4 market snapshots: display-only, so a hiccup here (module load, RPC) is logged and
       // retried next tick without blocking trade indexing.
       if (v4TokenSymbolCache.size > 0) {
         try {
-          const v4Module = await getV4Module();
+          let v4Module = null; // the Vite-loaded frontend module is only needed for GenericSell tokens
           for (const [tokenAddr, symbol] of v4TokenSymbolCache) {
-            await updateV4MarketSnapshot(tokenAddr, symbol, v4Module.fetchV4CurveState);
+            if (v4TokenHook.get(tokenAddr) === LEGIBLE_HOOK_LOWER) {
+              await updateV4MarketSnapshot(tokenAddr, symbol, (t) => fetchLegibleState(client, t, REFERENCE_ETH_USD));
+            } else {
+              v4Module = v4Module || (await getV4Module());
+              await updateV4MarketSnapshot(tokenAddr, symbol, v4Module.fetchV4CurveState);
+            }
           }
         } catch (err) {
           console.warn('[V4] Snapshot pass failed this tick (will retry next tick):', err.message);
@@ -909,7 +1005,8 @@ export async function runIndexer() {
   console.log('--- Starting Incentifi EVM Indexer ---');
   console.log(`RPC: ${RPC_URL}`);
   console.log(`Factory: ${INCENTIFI_BONDING_CURVE_FACTORY}`);
-  console.log(`V4 Factory: ${INCENTIFI_V4_FACTORY}`);
+  console.log(`V4 Factory (GenericSell): ${INCENTIFI_V4_FACTORY}`);
+  console.log(`V4 Factory (legible): ${INCENTIFI_LEGIBLE_FACTORY} -> hook ${INCENTIFI_LEGIBLE_HOOK}`);
 
   // Best-effort warm-up of V4 discovery to chain head so the first ticks are fast. NOT
   // load-bearing: every tick re-runs advanceV4Discovery (resumable) and refuses to index

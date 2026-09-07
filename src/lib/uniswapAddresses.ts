@@ -106,3 +106,46 @@ export const BPS_DENOMINATOR = 10_000;
 export const TICK_LOWER = -887_200;
 export const TICK_UPPER = 887_200;
 
+
+// ----------------------------------------------------------------------------
+// V4 "legible pool" trio (PR #17) — deployed on Robinhood Chain 2026-09-07, verified
+// (hook + factory: Blockscout full match and Sourcify exact match; converter: Sourcify exact
+// match), smoke-tested on mainnet (SMK95868). Every launched token is a REAL Uniswap V4 pool
+// (one hook-owned range position, 2% dynamic LP fee) that generic terminals can index, traded
+// through UniversalRouter + Permit2 like any other V4 pool, pre- AND post-graduation.
+// Tokens on the older IncentifiV4HookGenericSell trio (INCENTIFI_V4_*) keep their own path;
+// which trio a token belongs to is resolved PER TOKEN (src/lib/tokenVenue.ts), never globally.
+// ----------------------------------------------------------------------------
+export const INCENTIFI_LEGIBLE_HOOK = String(
+  import.meta.env.VITE_INCENTIFI_LEGIBLE_HOOK || '0x921d0bE20A21e5A687734b4dF6302EA55BD168C0'
+).trim() as `0x${string}`;
+
+export const INCENTIFI_LEGIBLE_FACTORY = String(
+  import.meta.env.VITE_INCENTIFI_LEGIBLE_FACTORY || '0xD4ce8F9577F3a865C3bA0c9d156f2b615df89Dda'
+).trim() as `0x${string}`;
+
+export const INCENTIFI_LEGIBLE_FEE_CONVERTER = String(
+  import.meta.env.VITE_INCENTIFI_LEGIBLE_FEE_CONVERTER || '0xe1BB0667d64683072BaeE03D8D9Feb201dcAF7D9'
+).trim() as `0x${string}`;
+
+// Canonical Uniswap V4 infrastructure on Robinhood Chain (same PoolManager the hooks are bound to).
+export const UNISWAP_V4_POOL_MANAGER = String(
+  import.meta.env.VITE_UNISWAP_V4_POOL_MANAGER || '0x8366a39CC670B4001A1121B8F6A443A643e40951'
+).trim() as `0x${string}`;
+
+export const UNISWAP_V4_QUOTER = String(
+  import.meta.env.VITE_UNISWAP_V4_QUOTER || '0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94'
+).trim() as `0x${string}`;
+
+export const UNISWAP_V4_STATE_VIEW = String(
+  import.meta.env.VITE_UNISWAP_V4_STATE_VIEW || '0xf3334192d15450cdd385c8b70e03f9a6bd9e673b'
+).trim() as `0x${string}`;
+
+/**
+ * Feature flag for NEW launches only. `true` -> the launch page deploys through the legible
+ * factory (`launchToken(token, address(0))`, ETH loss rewards). Anything else -> the previous
+ * GenericSell launch path, unchanged. Existing tokens are never affected by this flag: they are
+ * routed by the hook their pool actually uses (src/lib/tokenVenue.ts).
+ */
+export const LEGIBLE_LAUNCH_ENABLED =
+  String(import.meta.env.VITE_LEGIBLE_LAUNCH_ENABLED || 'false').trim().toLowerCase() === 'true';

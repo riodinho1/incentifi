@@ -9,6 +9,7 @@ import {
   EVM_CHAIN_NAME,
   getEvmProvider,
 } from '../../lib/evmNetwork';
+import { LEGIBLE_LAUNCH_ENABLED } from '../../lib/uniswapAddresses';
 
 const LaunchPage = () => {
   const connected = useWalletConnected();
@@ -122,7 +123,7 @@ const LaunchPage = () => {
       // Save token to Supabase registry if configured
       if (isSupabaseConfigured()) {
         try {
-          const { error } = await supabase.from('tokens').insert({
+          const registryRow = {
             name: formData.tokenName,
             symbol: symbol,
             description: formData.description || '',
@@ -134,7 +135,17 @@ const LaunchPage = () => {
             creator_address:
               launchResult.creatorAddress || provider.publicKey?.toString?.() || '',
             created_at: new Date().toISOString(),
-          });
+          };
+          // Tag the token with the hook its pool is bound to (supabase/legible_pool_cutover.sql).
+          // If that migration has not been applied yet PostgREST rejects the unknown column;
+          // retry without it so a launch never fails on a registry-schema lag — the indexer
+          // tags the row later from the TokenLaunched event, and the frontend falls back to
+          // the chain in the meantime (src/lib/tokenVenue.ts).
+          const hookAddress = String(launchResult.hookAddress || '').toLowerCase();
+          let { error } = await supabase.from('tokens').insert({ ...registryRow, hook_address: hookAddress });
+          if (error && /hook_address|column/i.test(error.message)) {
+            ({ error } = await supabase.from('tokens').insert(registryRow));
+          }
           if (error) throw new Error(error.message);
         } catch (err: unknown) {
           console.error('Supabase save error:', err);
@@ -345,6 +356,28 @@ const LaunchPage = () => {
                       </div>
                     </div>
                   </div>
+
+                  {LEGIBLE_LAUNCH_ENABLED && (
+                    /* Loss-reward payout asset — ETH is the only option until LossRewardPoolV2 is live. */
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">
+                        Loss Reward Asset
+                      </label>
+                      <select
+                        name="lossRewardAsset"
+                        value="ETH"
+                        disabled
+                        aria-readonly="true"
+                        className="w-full px-4 py-3 rounded-xl bg-[#0A0F1D] border border-[#1E293B] text-white text-sm font-semibold opacity-90 cursor-not-allowed"
+                      >
+                        <option value="ETH">ETH</option>
+                      </select>
+                      <p className="mt-1.5 text-[11px] text-slate-500">
+                        Loss rewards for this token are paid in ETH. Stock-token payouts (AAPL, TSLA, NVDA) arrive with the
+                        next loss-reward pool; the choice is made once, at launch, and cannot change afterwards.
+                      </p>
+                    </div>
+                  )}
 
                   {/* Description */}
                   <div>

@@ -147,3 +147,25 @@ Wiring (`setFactory` tx `0xb260214d…`, `setFeeConverter` tx `0x26000279…`), 
 | Converter `0xe1BB0667…F7D9` | **exact match**, 14:54:11Z — https://sourcify.dev/server/v2/contract/4663/0xe1BB0667d64683072BaeE03D8D9Feb201dcAF7D9 | **pending**: Blockscout's verification endpoint rate-limited every submission ("Too many requests") and Cloudflare blocked Sourcify's push (403). Sourcify is the verification that counts; to mirror it later, open the address on Blockscout and use "Verify via Sourcify", or re-run `forge verify-contract --verifier blockscout --verifier-url https://robinhoodchain.blockscout.com/api/`. |
 
 **Next (§5 acceptance, in order):** run `scripts/smoke-test-legible-pool.mjs` from a funded throwaway wallet (launch → UR buy → UR sell → `collect` → `convert`); confirm real `Swap` events and a moving `slot0`; DexScreener indexes the poolId; Quoter == UniversalRouter; GMGN / Axiom show the token. Only then re-point `src/lib/uniswapAddresses.ts` and the indexer's factory default to this trio.
+
+## 13. Frontend + indexer cutover for NEW launches (flag, default OFF)
+
+**Dual-system, routed per token.** Every token is routed by the hook its pool is bound to — `tokens.hook_address` when the indexer has tagged it (`supabase/legible_pool_cutover.sql`), else the chain (legible factory `isLaunched`, then the GenericSell factory, then the V3 factory) — see `src/lib/tokenVenue.ts`. Nothing is switched globally; every pre-existing code path (V3 curve + IncentifiSwapRouter, GenericSell hook + IncentifiV4Router) is intact.
+
+**Launch flag.** `VITE_LEGIBLE_LAUNCH_ENABLED=true` makes the launch page deploy through the legible factory with `launchToken(token, address(0))` (ETH loss rewards; an ETH-only "Loss Reward Asset" control is shown). Any other value (default) keeps the GenericSell launch path. The flag affects new launches only.
+
+**Trading for legible tokens.** Quotes from Uniswap's V4 Quoter (`quoteExactInputSingle` / `quoteExactOutputSingle`); buys and sells through UniversalRouter (Permit2 on the token side), pre- and post-graduation; price from slot0, progress / reserves / graduation from `hook.curveStates(poolId)` (legacy 6-field shape). **Gas:** every V4 swap is sent with an explicit limit of the node estimate + 30%, floor 300,000 — never the bare estimate (2026-09-07 smoke test: the first buy ran out of gas at 194,373).
+
+**Off-chain.** The indexer discovers launches from BOTH factories (resumable, fail-loud precondition of every tick — the phantom-payout guard applies to the legible hook too), ingests `Bought`/`Sold` from both hooks into the same rows, logs the legible hook's `FeesConverted` without creating a trade, and tags `tokens.hook_address`. The worker takes a legible token's benchmark from slot0 (`v4_legible_slot0`), before and after graduation, and leaves the V3 / GenericSell paths untouched. Creator fees for legible tokens are claimed from the legible hook's `creatorBalances`.
+
+| Env var | Read by | Default (deployed 2026-09-07) |
+|---|---|---|
+| `VITE_LEGIBLE_LAUNCH_ENABLED` | frontend | `false` |
+| `VITE_INCENTIFI_LEGIBLE_HOOK` | frontend, indexer, worker | `0x921d0bE20A21e5A687734b4dF6302EA55BD168C0` |
+| `VITE_INCENTIFI_LEGIBLE_FACTORY` | frontend, indexer, worker | `0xD4ce8F9577F3a865C3bA0c9d156f2b615df89Dda` |
+| `VITE_INCENTIFI_LEGIBLE_FEE_CONVERTER` | frontend, scripts | `0xe1BB0667d64683072BaeE03D8D9Feb201dcAF7D9` |
+| `VITE_UNISWAP_V4_POOL_MANAGER` | frontend | `0x8366a39CC670B4001A1121B8F6A443A643e40951` |
+| `VITE_UNISWAP_V4_QUOTER` | frontend, scripts | `0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94` |
+| `VITE_UNISWAP_V4_STATE_VIEW` | frontend, indexer, worker | `0xf3334192d15450cdd385c8b70e03f9a6bd9e673b` |
+
+Rollout: apply `supabase/legible_pool_cutover.sql`, deploy the indexer/worker (they pick up both hooks with no env change), deploy the frontend with the flag unset (old launch path, legible tokens such as SMK95868 already tradeable), then flip `VITE_LEGIBLE_LAUNCH_ENABLED=true` on Vercel when ready.

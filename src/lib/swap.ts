@@ -25,6 +25,14 @@ import {
   executeV4Buy,
   executeV4Sell,
 } from './bondingCurveV4';
+import {
+  fetchLegiblePoolState,
+  quoteLegibleBuy,
+  quoteLegibleSell,
+  executeLegibleBuy,
+  executeLegibleSell,
+} from './legiblePool';
+import { resolveTokenVenue, type TokenVenue } from './tokenVenue';
 
 const FACTORY_ABI = parseAbi([
   'function getPool(address tokenA, address tokenB, uint24 fee) view returns (address pool)',
@@ -108,8 +116,18 @@ export type UnifiedMarketState = {
   circulatingTokens: number;
   realEthReserveEth: number;
   realTokenReserveTokens: number;
-  /** True for a token launched through the V4 factory (see ./bondingCurveV4). */
+  /** True for a token launched through either V4 factory (see ./bondingCurveV4, ./legiblePool). */
   isV4?: boolean;
+  /**
+   * Which contracts this token trades through — resolved per token from the DB tag / the chain
+   * (see ./tokenVenue). 'legible' tokens are real V4 pools traded via UniversalRouter before and
+   * after graduation; 'v4-generic' tokens use IncentifiV4Router (pre-graduation only); 'v3' the
+   * per-token curve + IncentifiSwapRouter.
+   */
+  venue?: TokenVenue;
+  /** Legible pools only: the hook (explorer target) and the V4 poolId. */
+  hookAddress?: string;
+  poolId?: string;
   /**
    * False only for a graduated V4 pool — IncentifiV4Router doesn't support
    * post-graduation trades and no replacement router is deployed yet (see
@@ -128,12 +146,39 @@ export const getUnifiedMarketState = async (
   tokenAddress: string,
   ethPriceUsd: number = REFERENCE_ETH_USD
 ): Promise<UnifiedMarketState> => {
-  if (await isV4LaunchedToken(tokenAddress)) {
+  const venue = await resolveTokenVenue(tokenAddress);
+
+  // Legible pool (PR #17): price from slot0, progress/reserves from the hook's legacy view.
+  if (venue === 'legible') {
+    const st = await fetchLegiblePoolState(tokenAddress, ethPriceUsd);
+    return {
+      isBondingCurve: !st.graduated,
+      isGraduated: st.graduated,
+      isV4: true,
+      venue: 'legible',
+      tradingSupported: true,
+      hookAddress: st.hookAddress,
+      poolId: st.poolId,
+      poolAddress: st.uniswapPoolAddress || undefined,
+      curveAddress: undefined,
+      priceEth: st.currentPriceEth,
+      priceUsd: st.currentPriceEth * ethPriceUsd,
+      marketCapUsd: st.marketCapUsd,
+      progressBps: st.progressBps,
+      circulatingTokens: st.circulatingTokens,
+      realEthReserveEth: Number(st.realEthReserve) / 1e18,
+      realTokenReserveTokens: Number(st.realTokenReserve) / 1e18,
+    };
+  }
+
+  // Previous V4 trio (GenericSell hook + IncentifiV4Router) — unchanged path.
+  if (venue === 'v4-generic' || (venue === 'unknown' && (await isV4LaunchedToken(tokenAddress)))) {
     const v4State = await fetchV4CurveState(tokenAddress, ethPriceUsd);
     return {
       isBondingCurve: !v4State.graduated,
       isGraduated: v4State.graduated,
       isV4: true,
+      venue: 'v4-generic',
       tradingSupported: v4State.tradingSupported,
       poolAddress: v4State.uniswapPoolAddress || undefined,
       curveAddress: undefined, // V4 has no per-token curve contract
@@ -233,8 +278,30 @@ export const buyToken = async (
 
   if (ethWei <= 0n) throw new Error('Enter a valid ETH amount.');
 
-  // 0. V4-launched token: route to the V4 factory/hook/router instead.
-  if (await isV4LaunchedToken(token)) {
+  const venue = await resolveTokenVenue(token);
+
+  // 0a. Legible pool: quote from the V4 Quoter, swap through UniversalRouter, pre- and
+  //     post-graduation alike (there is no "graduated = no trading" state for these pools).
+  if (venue === 'legible') {
+    const { amount: quotedTokensOut } = await quoteLegibleBuy(token, ethWei);
+    if (quotedTokensOut <= 0n) throw new Error('The pool returned a zero quote for this amount.');
+    const minTokensOut = applySlippage(quotedTokensOut, slippagePct * 100);
+    const res = await executeLegibleBuy(token, ethWei, minTokensOut, quotedTokensOut);
+    const tokensPurchasedNum = Number(res.tokenAmount) / 1e18;
+    const ethPaidNum = Number(res.ethAmount) / 1e18;
+    return {
+      txHash: res.txHash,
+      trade: {
+        side: 'buy',
+        amountToken: tokensPurchasedNum,
+        amountEth: ethPaidNum,
+        priceEth: tokensPurchasedNum > 0 ? ethPaidNum / tokensPurchasedNum : 0,
+      },
+    };
+  }
+
+  // 0b. Previous V4 trio: route to the V4 factory/hook/router instead (unchanged).
+  if (venue === 'v4-generic' || (venue === 'unknown' && (await isV4LaunchedToken(token)))) {
     const v4State = await fetchV4CurveState(token, ethPriceUsd);
     if (v4State.graduated) {
       // executeV4Buy would throw this same error — surfaced here first so the
@@ -372,8 +439,29 @@ export const sellToken = async (
 
   if (tokenWei <= 0n) throw new Error('Enter a valid token amount.');
 
-  // 0. V4-launched token: route to the V4 factory/hook/router instead.
-  if (await isV4LaunchedToken(token)) {
+  const venue = await resolveTokenVenue(token);
+
+  // 0a. Legible pool: V4 Quoter + UniversalRouter (Permit2 on the token side), any phase.
+  if (venue === 'legible') {
+    const { amount: quotedEthOut } = await quoteLegibleSell(token, tokenWei);
+    if (quotedEthOut <= 0n) throw new Error('The pool returned a zero quote for this amount.');
+    const minEthOut = applySlippage(quotedEthOut, slippagePct * 100);
+    const res = await executeLegibleSell(token, tokenWei, minEthOut, quotedEthOut);
+    const tokensSoldNum = Number(res.tokenAmount) / 1e18;
+    const ethReceivedNum = Number(res.ethAmount) / 1e18;
+    return {
+      txHash: res.txHash,
+      trade: {
+        side: 'sell',
+        amountToken: tokensSoldNum,
+        amountEth: ethReceivedNum,
+        priceEth: tokensSoldNum > 0 ? ethReceivedNum / tokensSoldNum : 0,
+      },
+    };
+  }
+
+  // 0b. Previous V4 trio (unchanged).
+  if (venue === 'v4-generic' || (venue === 'unknown' && (await isV4LaunchedToken(token)))) {
     const v4State = await fetchV4CurveState(token, ethPriceUsd);
     if (v4State.graduated) {
       throw new Error(
