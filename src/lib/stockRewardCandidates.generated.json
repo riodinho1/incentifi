@@ -1,0 +1,135 @@
+{
+  "generatedAt": "2026-09-07T23:30:40.474Z",
+  "candidates": [
+    {
+      "symbol": "AAPL",
+      "name": "Apple • Robinhood Token",
+      "address": "0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9"
+    },
+    {
+      "symbol": "BB",
+      "name": "Blackberry • Robinhood Token",
+      "address": "0x48E39E56aCdbA37b09020C0b734A613C9a2f100A"
+    },
+    {
+      "symbol": "BE",
+      "name": "Bloom Energy • Robinhood Token",
+      "address": "0x822CC93fFD030293E9842c30BBD678F530701867"
+    },
+    {
+      "symbol": "COIN",
+      "name": "Coinbase • Robinhood Token",
+      "address": "0x6330D8C3178a418788dF01a47479c0ce7CCF450b"
+    },
+    {
+      "symbol": "COST",
+      "name": "Costco • Robinhood Token",
+      "address": "0x4EA005168D7F09a7A0Ba9D1DEf21a479950E44C2"
+    },
+    {
+      "symbol": "CRCL",
+      "name": "Circle Internet Group • Robinhood Token",
+      "address": "0xdF0992E440dD0be65BD8439b609d6D4366bf1CB5"
+    },
+    {
+      "symbol": "DJT",
+      "name": "Trump Media & Technology Group • Robinhood Token",
+      "address": "0x1D11f0496982706C5e14A514D4E79F2e6BdE4516"
+    },
+    {
+      "symbol": "GLD",
+      "name": "SPDR Gold Trust • Robinhood Token",
+      "address": "0xC9a981FEE1F9DEc688bb123ccDeCc63D0deBFC4e"
+    },
+    {
+      "symbol": "GME",
+      "name": "GameStop • Robinhood Token",
+      "address": "0x1b0E319c6A659F002271B69dB8A7df2F911c153E"
+    },
+    {
+      "symbol": "GOOGL",
+      "name": "Alphabet Class A • Robinhood Token",
+      "address": "0x2e0847E8910a9732eB3fb1bb4b70a580ADAD4FE3"
+    },
+    {
+      "symbol": "HIMS",
+      "name": "Hims & Hers Health • Robinhood Token",
+      "address": "0xCceE82fE024c36fA15E1005edE3E9e4787e23D09"
+    },
+    {
+      "symbol": "LLY",
+      "name": "Eli Lilly • Robinhood Token",
+      "address": "0x8005d266423c7ea827372c9c864491e5786600ea"
+    },
+    {
+      "symbol": "META",
+      "name": "Meta Platforms • Robinhood Token",
+      "address": "0xc0D6457C16Cc70d6790Dd43521C899C87ce02f35"
+    },
+    {
+      "symbol": "MRVL",
+      "name": "Marvell Technology • Robinhood Token",
+      "address": "0x62fd0668e10D8B72339BE2DCF7643001688ff13B"
+    },
+    {
+      "symbol": "MSTR",
+      "name": "Strategy Inc. • Robinhood Token",
+      "address": "0xec262a75e413fAfD0dF80480274532C79D42da09"
+    },
+    {
+      "symbol": "MU",
+      "name": "Micron Technology • Robinhood Token",
+      "address": "0xfF080c8ce2E5feadaCa0Da81314Ae59D232d4afD"
+    },
+    {
+      "symbol": "NVDA",
+      "name": "NVIDIA • Robinhood Token",
+      "address": "0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC"
+    },
+    {
+      "symbol": "QQQ",
+      "name": "Invesco QQQ • Robinhood Token",
+      "address": "0xD5f3879160bc7c32ebb4dC785F8a4F505888de68"
+    },
+    {
+      "symbol": "QUBT",
+      "name": "Quantum Computing • Robinhood Token",
+      "address": "0x59818904ab4cE163b3cE4FfB64f2D6Ca02c434B4"
+    },
+    {
+      "symbol": "RBLX",
+      "name": "Roblox • Robinhood Token",
+      "address": "0xF0C4BF4C582cb3836e98394b1d4e7B7281101bE8"
+    },
+    {
+      "symbol": "SGOV",
+      "name": "iShares 0-3 Month Treasury Bond • Robinhood Token",
+      "address": "0x92FD66527192E3e61d4DDd13322Aa222DE86F9B5"
+    },
+    {
+      "symbol": "SNDK",
+      "name": "Sandisk Corporation • Robinhood Token",
+      "address": "0xB90A19fF0Af67f7779afF50A882A9CfF42446400"
+    },
+    {
+      "symbol": "SPCX",
+      "name": "SpaceX • Robinhood Token",
+      "address": "0x4a0E65A3EcceC6dBe60AE065F2e7bb85Fae35eEa"
+    },
+    {
+      "symbol": "SPY",
+      "name": "SPDR S&P 500 ETF Trust • Robinhood Token",
+      "address": "0x117cc2133c37B721F49dE2A7a74833232B3B4C0C"
+    },
+    {
+      "symbol": "TSLA",
+      "name": "Tesla • Robinhood Token",
+      "address": "0x322F0929c4625eD5bAd873c95208D54E1c003b2d"
+    },
+    {
+      "symbol": "TSM",
+      "name": "Taiwan Semiconductor Manufacturing • Robinhood Token",
+      "address": "0x58FfE4a942d3885bAa22D7520691F611EF09e7AA"
+    }
+  ]
+}

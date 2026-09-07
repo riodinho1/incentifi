@@ -1,5 +1,6 @@
 import { parseAbi, getAddress, formatUnits } from 'viem';
 import { publicClient } from './evmNetwork';
+import generatedCandidates from './stockRewardCandidates.generated.json';
 import {
   LOSS_REWARD_POOL_V2,
   STOCK_REWARDS_ENABLED,
@@ -29,12 +30,30 @@ import {
 export const ETH_ASSET = '0x0000000000000000000000000000000000000000' as const;
 export const ROBINHOOD_CHAIN_ID = 4663;
 
-/** The launch allow-list (AAPL / TSLA / NVDA — MSFT deferred). Addresses verified in Phase A. */
-export const STOCK_REWARD_CANDIDATES: Record<string, `0x${string}`> = {
-  AAPL: '0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9',
-  TSLA: '0x322F0929c4625eD5bAd873c95208D54E1c003b2d',
-  NVDA: '0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC',
-};
+export type StockCandidate = { symbol: string; address: `0x${string}`; name?: string };
+
+/**
+ * The launch candidate universe: every Robinhood stock token that has a LossRewardPoolV2 swap route
+ * in config/loss-reward-stock-routes.json (generated from the live venue map by
+ * scripts/ops/generate-stock-routes.mjs — Uniswap V3 WETH pool with liquidity and a TWAP, StockFactory
+ * round-trip, API ACTIVE). Regenerate + re-run script/ConfigureStockRoutes.s.sol to change it. The
+ * chain still decides per asset at render time (isSelectableAsset), so a stale list only costs a
+ * greyed-out option, never a wrong one.
+ */
+export const STOCK_REWARD_CANDIDATE_LIST: StockCandidate[] = (generatedCandidates as { candidates: StockCandidate[] }).candidates
+  .map((c) => ({ symbol: String(c.symbol).toUpperCase(), address: getAddress(c.address), name: c.name ? stripRobinhoodSuffix(c.name) : undefined }))
+  .sort((a, b) => a.symbol.localeCompare(b.symbol));
+
+/** symbol -> address view of the same list (kept for callers that index by symbol). */
+export const STOCK_REWARD_CANDIDATES: Record<string, `0x${string}`> = Object.fromEntries(STOCK_REWARD_CANDIDATE_LIST.map((c) => [c.symbol, c.address]));
+
+/** "Apple • Robinhood Token" -> "Apple" */
+export function stripRobinhoodSuffix(name: string): string {
+  return String(name).replace(/\s*[•·-]\s*Robinhood Token\s*$/i, '').trim();
+}
+
+/** Multicall3 is deployed at the canonical address on Robinhood Chain (verified by scripts/ops/enumerate-stock-venues.mjs). */
+export const MULTICALL3_ADDRESS = '0xcA11bde05977b3631167028862bE2a173976CA11' as const;
 
 const STOCK_ABI = parseAbi([
   'function uid() view returns (bytes32)',
@@ -59,6 +78,8 @@ export const shouldShowStockDropdown = (): boolean => STOCK_REWARDS_ENABLED && L
 export type RewardAssetOption = {
   symbol: string;
   address: `0x${string}`;
+  /** Display name without the "• Robinhood Token" suffix (stocks only). */
+  name?: string;
   enabled: boolean;
   /** Why the option is greyed out (only when !enabled) — names the failed check. */
   reason?: string;
@@ -153,6 +174,44 @@ export async function isCanonicalStock(asset: string): Promise<boolean> {
   }
 }
 
+/**
+ * The two on-chain checks for MANY assets in three multicalls (uid ×N, then tokenAddress ×N +
+ * isSelectableAsset ×N) instead of 3N RPC round-trips. A failed sub-call counts as "false", the
+ * same as the single-asset helpers. Falls back to the single-asset helpers if multicall itself fails.
+ */
+export async function checkStocksOnChain(assets: `0x${string}`[]): Promise<Map<string, { canonical: boolean; selectable: boolean }>> {
+  const out = new Map<string, { canonical: boolean; selectable: boolean }>();
+  if (!assets.length) return out;
+  try {
+    const uids = await publicClient.multicall({
+      contracts: assets.map((a) => ({ address: getAddress(a), abi: STOCK_ABI, functionName: 'uid' })) as any,
+      allowFailure: true,
+      multicallAddress: MULTICALL3_ADDRESS,
+    } as any);
+    const v2 = isV2Configured() ? getAddress(LOSS_REWARD_POOL_V2) : null;
+    const second = await publicClient.multicall({
+      contracts: [
+        ...assets.map((_, i) => ({ address: getAddress(ROBINHOOD_STOCK_FACTORY), abi: STOCK_FACTORY_ABI, functionName: 'tokenAddress', args: [uids[i].status === 'success' ? uids[i].result : `0x${'0'.repeat(64)}`] })),
+        ...(v2 ? assets.map((a) => ({ address: v2, abi: POOL_V2_ABI, functionName: 'isSelectableAsset', args: [getAddress(a)] })) : []),
+      ] as any,
+      allowFailure: true,
+      multicallAddress: MULTICALL3_ADDRESS,
+    } as any);
+    assets.forEach((a, i) => {
+      const addr = getAddress(a);
+      const rt = second[i];
+      const canonical = uids[i].status === 'success' && rt.status === 'success' && getAddress(String(rt.result)) === addr;
+      const sel = v2 ? second[assets.length + i] : null;
+      const selectable = Boolean(sel && sel.status === 'success' && sel.result);
+      out.set(addr.toLowerCase(), { canonical, selectable });
+    });
+    return out;
+  } catch {
+    for (const a of assets) out.set(getAddress(a).toLowerCase(), { canonical: await isCanonicalStock(a), selectable: await isSelectableOnPool(a) });
+    return out;
+  }
+}
+
 export async function isSelectableOnPool(asset: string): Promise<boolean> {
   if (!isV2Configured()) return false;
   try {
@@ -170,6 +229,8 @@ export type RewardAssetOptionDeps = {
   fetchActive?: () => Promise<Map<string, `0x${string}`> | AssetListResult>;
   canonical?: (asset: `0x${string}`) => Promise<boolean>;
   selectable?: (asset: `0x${string}`) => Promise<boolean>;
+  /** Candidate universe (default: the generated route list). */
+  candidates?: StockCandidate[];
   /** Console sink for the "asset list unreachable" warning (tests). */
   warn?: (message: string) => void;
 };
@@ -214,15 +275,19 @@ export async function getRewardAssetOptionsWithStatus(deps: RewardAssetOptionDep
     assetList = { reachable: false, error: message };
     warn(`[reward assets] Robinhood asset list unreachable (${message}). Enabling stock options on the on-chain checks alone (StockFactory round-trip + isSelectableAsset on the reward pool). api.robinhood.com sends no CORS headers, so a direct browser fetch always fails; configure the gateway's GET /assets proxy (VITE_ROBINHOOD_ASSETS_PROXY_URL or VITE_SUPABASE_URL) for the ACTIVE filter.`);
   }
-  const canonical = deps.canonical ?? isCanonicalStock;
-  const selectable = deps.selectable ?? isSelectableOnPool;
+  const candidates = deps.candidates ?? STOCK_REWARD_CANDIDATE_LIST;
+  // On-chain checks: injected per-asset helpers (tests) or one batched multicall pass for the whole list.
+  let batch: Map<string, { canonical: boolean; selectable: boolean }> | null = null;
+  if (!deps.canonical && !deps.selectable) batch = await checkStocksOnChain(candidates.map((c) => c.address));
+  const canonical = deps.canonical ?? (async (a: `0x${string}`) => batch?.get(a.toLowerCase())?.canonical ?? (await isCanonicalStock(a)));
+  const selectable = deps.selectable ?? (async (a: `0x${string}`) => batch?.get(a.toLowerCase())?.selectable ?? (await isSelectableOnPool(a)));
 
-  const options: RewardAssetOption[] = [eth];
-  for (const [symbol, address] of Object.entries(STOCK_REWARD_CANDIDATES)) {
-    const opt: RewardAssetOption = { symbol, address: address as `0x${string}`, enabled: false };
-    if (!(await canonical(address as `0x${string}`))) opt.reason = REASON_NOT_CANONICAL;
+  const stockOptions: RewardAssetOption[] = [];
+  for (const { symbol, address, name } of candidates) {
+    const opt: RewardAssetOption = { symbol, address, name, enabled: false };
+    if (!(await canonical(address))) opt.reason = REASON_NOT_CANONICAL;
     else if (!v2Configured) opt.reason = REASON_V2_NOT_CONFIGURED;
-    else if (!(await selectable(address as `0x${string}`))) opt.reason = REASON_NOT_SELECTABLE;
+    else if (!(await selectable(address))) opt.reason = REASON_NOT_SELECTABLE;
     else if (active) {
       const listed = active.get(symbol);
       if (!listed) opt.reason = REASON_API_INACTIVE;
@@ -232,9 +297,11 @@ export async function getRewardAssetOptionsWithStatus(deps: RewardAssetOptionDep
       opt.enabled = true;
       opt.note = NOTE_API_UNREACHABLE;
     }
-    options.push(opt);
+    stockOptions.push(opt);
   }
-  return { options, assetList };
+  // ETH first, then enabled stocks A-Z, then the greyed-out ones A-Z (with their reasons)
+  stockOptions.sort((a, b) => (Number(b.enabled) - Number(a.enabled)) || a.symbol.localeCompare(b.symbol));
+  return { options: [eth, ...stockOptions], assetList };
 }
 
 /** Options only (see getRewardAssetOptionsWithStatus). */

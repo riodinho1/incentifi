@@ -375,3 +375,34 @@ One step per invocation; every step re-reads the chain before acting and exits 1
 
 Pointing the hook back at V1 later is possible (`setLossRewardPool` is not one-way) but recreates the stranding problem in reverse, so treat step 6 as final.
 
+## C10. Payout-asset universe: every routable Robinhood stock (2026-09-08)
+
+**Deployed state.** LossRewardPoolV2 `0x5d94246CD31064Da02E953DB357F0001F0E9A631` (owner = operator = `0x78a4E4BC…`, `minStockRewardWei` 0.002 ETH, `assetSetters(legible factory) == true`), `RewardSwapperUniswapV3` `0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe`; hook and converter both read `lossRewardPool() == V2` (re-point tx `0xfbc1bd47f83d79c16b023851bda0cff2901aa287ea611bf90b8f5a022e47ea02`). Routes live at the time of writing: AAPL / TSLA / NVDA only. Records: `broadcast/DeployLossRewardPoolV2.s.sol/4663/run-latest.json`, `broadcast/RepointHookLossRewardPool.s.sol/4663/run-latest.json`.
+
+**The ask:** offer every stock on Robinhood Chain as a payout asset, not just AAPL/TSLA/NVDA. **What the chain allows** (read-only census by `scripts/ops/enumerate-stock-venues.mjs`: StockFactory `Deployed` events via Blockscout, then multicalled on-chain state; chain head 57 190 155):
+
+| Population | Count |
+|---|---|
+| Stocks in the StockFactory registry (`Deployed` events, all round-trip ok) | **203** |
+| … listed `ACTIVE` by the Robinhood API (9 registry stocks are not in the API: JEPQ ZETA QNT DRAM NOK RVI NASA ARM WEEK) | 194 |
+| … with any Uniswap **V3 WETH** pool | 47 |
+| … with a V3 WETH pool that has in-range liquidity | 36 |
+| … ≥ 1 WETH in the pool **and** a 30 m/10 m TWAP available (adapter's `referenceOut`) | 28 |
+| … **and** the asset address sorts above WETH (adapter requires WETH = token0) → **routable today** | **26** |
+| Stocks with a V3 **USDG** pool / with in-range liquidity / ≥ 1 000 USDG | 194 / 74 / 66 |
+| Stocks with a Uniswap **V4** pool / with liquidity / ETH-quoted with liquidity | 93 / 69 / 5 (V4 stock pools are almost all USDG-quoted at 90–95 % LP fee; the ETH ones are 5 %) — not usable |
+| Stocks with **any** liquid venue at all | 105 |
+| API-active stocks with **no** liquid venue anywhere (cannot be bought on-chain by anyone) | 89 |
+
+So "every stock" is bounded by venues, not by the pool design: **26 stocks** can be routed with the deployed adapter now; **~40 more** (liquid USDG pools, e.g. AMZN, MSFT, USO, GME's deeper pool) become reachable only with a second adapter that swaps ETH → USDG → stock (the WETH/USDG 0.01 % pool holds 6 416 WETH / 15.9 M USDG, so the first hop is not the constraint); the 7 stocks whose address sorts below WETH (VTI JNJ TTD AMC FLY SMH RDDT — AMC and RDDT have deep WETH pools) need the adapter to handle either token order; and 89 active stocks have no liquidity on any DEX, so no adapter can help them. Both adapter extensions are new contracts (`IRewardSwapper` implementations the pool can be pointed at per asset with `setAssetRoute`; no pool redeploy) and are **not** built here — decision pending.
+
+**What ships (no contract changes):**
+- `scripts/ops/enumerate-stock-venues.mjs` — the census above (`--out`, `--reuse`, `--skip-v4`; Blockscout + throttled multicalls, 429-aware).
+- `scripts/ops/generate-stock-routes.mjs` — turns the census into `config/loss-reward-stock-routes.json` (asset, canonical pool, fee tier holding the most WETH, `twapWindow 1800`, `maxDeviationBps 300`) with a named reason for every excluded stock, and `src/lib/stockRewardCandidates.generated.json` for the frontend. Criteria: registry round-trip, API `ACTIVE` (unless `--include-unlisted`), in-range liquidity, `--min-weth` (default 1), TWAP available, WETH = token0.
+- `script/ConfigureStockRoutes.s.sol` — one `setAssetRoute` per route in the file that is missing or different on-chain (idempotent); the adapter's `validateRoute` and the pool's StockFactory check reject a bad entry in simulation before anything is broadcast. Runbook steps `RoutesDryRun` / `RoutesBroadcast -V2 <addr>`; `ReadBack` now reports every route in the file as configured / missing / different. **Fork test** `test/foundry/ConfigureStockRoutes.t.sol` runs the script against the committed file on a mainnet fork: all routes canonical, ≥ 90 % selectable, second run a no-op, doctored file rejected.
+- Frontend: the candidate universe is the generated list (26 today), checked on-chain in **three multicalls** (uid ×N, `tokenAddress` ×N + `isSelectableAsset` ×N) instead of 3 N round-trips; options sorted ETH → enabled A–Z → disabled A–Z with the named reason; names shown without the "• Robinhood Token" suffix. A stale list only greys an option out; an asset without a live route is never offered as enabled.
+
+**Regenerating after Robinhood adds stocks or liquidity moves:** `node scripts/ops/enumerate-stock-venues.mjs --out <venues.json>` → `node scripts/ops/generate-stock-routes.mjs --in <venues.json>` → review the diff of `config/loss-reward-stock-routes.json` → `Deploy-LossRewardV2.ps1 -Step RoutesDryRun -V2 0x5d94…` → `RoutesBroadcast` → deploy the frontend (it ships the new candidate list). Routes are never removed by the script; disable one with `setAssetEnabled(asset, false)` if a venue dries up (the pool's TWAP bound already degrades such claims to ETH).
+
+**Also fixed here:** PR #25 shipped an unbalanced JSX block in `src/pages/launch/page.tsx` (a stray `) : (` after the ETH-only branch) — `vite build` failed on master; this branch removes the stray line and `vite build` passes.
+
