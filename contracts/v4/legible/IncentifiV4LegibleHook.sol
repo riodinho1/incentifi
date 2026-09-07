@@ -151,12 +151,32 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
     mapping(address => uint24) public postGraduationFeePips;
     /// @notice Whether external LPs may add liquidity after graduation. Default false.
     mapping(address => bool) public lpOpen;
-    mapping(PoolId => uint256) public ethDustBalances;
-    mapping(PoolId => uint256) public tokenDustBalances;
+    /// @dev PER POOL: true while this hook performs its own PoolManager operations on that pool
+    ///      (seed, collect, graduation's price-fix swap and mint). beforeSwap/afterSwap for THAT
+    ///      pool short-circuit then. Per pool, not global: graduation makes external calls
+    ///      (LossRewardPool.depositReward, token.transfer, the converter), and a swap on any
+    ///      OTHER pool served by this hook during those calls must still be charged its fee and
+    ///      emit its events.
+    mapping(PoolId => bool) private _inHookOperation;
 
-    /// @dev True while this hook performs its own PoolManager operations (seed, collect,
-    ///      graduation's price-fix swap and mint). beforeSwap/afterSwap short-circuit then.
-    bool private _inHookOperation;
+    /// @notice Pool price as of the END of the previous block in which the pool traded: captured
+    ///         on the first swap of each block, BEFORE that swap moves the price. Anything that
+    ///         happens later in the same block cannot move it, which is what lets
+    ///         IncentifiFeeConverter derive a sandwich-resistant floor for its conversions.
+    struct PriceCheckpoint {
+        uint160 sqrtPriceX96;
+        uint64 blockNumber;
+    }
+    mapping(PoolId => PriceCheckpoint) public priceCheckpoints;
+
+    /// @notice Timelocked post-graduation fee raise (decision D: a fee raise must be visible
+    ///         before it lands; a reduction to ZERO stays immediate).
+    struct PendingFee {
+        uint24 pips;
+        uint64 eta;
+    }
+    mapping(address => PendingFee) public pendingPostGraduationFee;
+    uint256 public constant FEE_TIMELOCK = 2 days;
 
     enum Op {
         Seed,
@@ -176,8 +196,10 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
     event FeesCollected(PoolId indexed poolId, uint256 ethFees, uint256 tokenFees, uint256 creatorShare, uint256 lossPoolShare);
     event CreatorFeesClaimed(address indexed creator, uint256 amount);
     event Graduated(PoolId indexed poolId, address indexed token, uint256 finalEthReserve, uint256 finalTokenReserve);
-    event GraduationLiquidityDeployed(PoolId indexed poolId, uint128 liquidity, uint160 sqrtPriceX96, uint256 ethDust, uint256 tokenDust);
+    event GraduationLiquidityDeployed(PoolId indexed poolId, uint128 liquidity, uint160 sqrtPriceX96, uint256 ethDonated, uint256 tokenDonated);
     event PostGraduationFeeSet(address indexed token, uint24 pips);
+    event PostGraduationFeeProposed(address indexed token, uint24 pips, uint64 eta);
+    event PostGraduationFeeCancelled(address indexed token);
     event LpOpenSet(address indexed token, bool open);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
@@ -209,6 +231,9 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
     error AlreadyGraduated();
     error NotReadyToGraduate();
     error UnexpectedDelta();
+    error UseTimelock();
+    error NoPendingFee();
+    error TimelockNotElapsed();
 
     constructor(IPoolManager _poolManager, address _lossRewardPool, address _deployer) BaseHook(_poolManager) {
         if (_lossRewardPool == address(0) || _deployer == address(0)) revert ZeroAddress();
@@ -242,12 +267,41 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
         owner = newOwner;
     }
 
-    /// @notice Decision D: governed, default 0, zero always allowed, capped at 10%.
+    /// @notice Decision D, immediate path: ONLY a reduction to zero. Any nonzero fee must go
+    ///         through propose -> FEE_TIMELOCK -> execute so a raise is visible before it lands.
     function setPostGraduationFee(address token, uint24 pips) external {
         if (msg.sender != owner) revert OnlyOwner();
+        if (pips != 0) revert UseTimelock();
+        delete pendingPostGraduationFee[token];
+        postGraduationFeePips[token] = 0;
+        emit PostGraduationFeeSet(token, 0);
+    }
+
+    /// @notice Owner proposes a nonzero post-graduation fee (capped at 10%); executable by anyone
+    ///         after FEE_TIMELOCK. Re-proposing overwrites the pending proposal and restarts the clock.
+    function proposePostGraduationFee(address token, uint24 pips) external {
+        if (msg.sender != owner) revert OnlyOwner();
         if (pips > MAX_POST_GRADUATION_FEE_PIPS) revert FeeTooHigh();
-        postGraduationFeePips[token] = pips;
-        emit PostGraduationFeeSet(token, pips);
+        uint64 eta = uint64(block.timestamp + FEE_TIMELOCK);
+        pendingPostGraduationFee[token] = PendingFee({pips: pips, eta: eta});
+        emit PostGraduationFeeProposed(token, pips, eta);
+    }
+
+    function cancelPostGraduationFee(address token) external {
+        if (msg.sender != owner) revert OnlyOwner();
+        if (pendingPostGraduationFee[token].eta == 0) revert NoPendingFee();
+        delete pendingPostGraduationFee[token];
+        emit PostGraduationFeeCancelled(token);
+    }
+
+    /// @notice Permissionless: applies a proposal once its delay has elapsed.
+    function executePostGraduationFee(address token) external {
+        PendingFee memory pending = pendingPostGraduationFee[token];
+        if (pending.eta == 0) revert NoPendingFee();
+        if (block.timestamp < pending.eta) revert TimelockNotElapsed();
+        delete pendingPostGraduationFee[token];
+        postGraduationFeePips[token] = pending.pips;
+        emit PostGraduationFeeSet(token, pending.pips);
     }
 
     /// @notice Decision C: external liquidity after graduation is closed unless opened here.
@@ -351,7 +405,7 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
         PoolKey memory key = _poolKeys[token];
         PoolId poolId = key.toId();
         TokenState storage state = _states[poolId];
-        _inHookOperation = true;
+        _inHookOperation[poolId] = true;
         if (op == Op.Seed) {
             _seedCurve(key, poolId, state);
         } else if (op == Op.Collect) {
@@ -359,7 +413,7 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
         } else {
             _graduate(key, poolId, state);
         }
-        _inHookOperation = false;
+        _inHookOperation[poolId] = false;
         return "";
     }
 
@@ -383,20 +437,37 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
     // ------------------------------------------------------------------------
     // Swaps: fee override only. ZERO_DELTA always.
     // ------------------------------------------------------------------------
-    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata, bytes calldata)
+    function _beforeSwap(address sender, PoolKey calldata key, SwapParams calldata, bytes calldata)
         internal
-        view
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        if (_inHookOperation) {
+        PoolId poolId = key.toId();
+        if (_inHookOperation[poolId]) {
             return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, LPFeeLibrary.OVERRIDE_FEE_FLAG);
         }
-        TokenState storage state = _states[key.toId()];
+        TokenState storage state = _states[poolId];
         if (!state.initialized) revert PoolNotInitialized();
         if (!state.curveSeeded) revert CurveNotSeeded();
+        _checkpointIfNewBlock(poolId);
+        if (sender == feeConverter) {
+            // The converter selling already-collected fees back into the pool is protocol plumbing:
+            // charging it the LP fee would short the creator/loss-pool split relative to what the
+            // holder's Sold event reported, and recursively mint new token fees. Fee-free.
+            return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, LPFeeLibrary.OVERRIDE_FEE_FLAG);
+        }
         uint24 fee = state.graduated ? postGraduationFeePips[state.token] : PRE_GRADUATION_FEE_PIPS;
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, fee | LPFeeLibrary.OVERRIDE_FEE_FLAG);
+    }
+
+    /// @dev On the first swap of a block, record the pre-swap price — i.e. the price the pool
+    ///      ended the previous trading block at. Later swaps in the same block leave it untouched.
+    function _checkpointIfNewBlock(PoolId poolId) internal {
+        PriceCheckpoint storage cp = priceCheckpoints[poolId];
+        if (cp.blockNumber == uint64(block.number)) return;
+        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolId);
+        cp.sqrtPriceX96 = sqrtPriceX96;
+        cp.blockNumber = uint64(block.number);
     }
 
     function _afterSwap(address sender, PoolKey calldata key, SwapParams calldata params, BalanceDelta delta, bytes calldata)
@@ -404,9 +475,9 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
         override
         returns (bytes4, int128)
     {
-        if (_inHookOperation) return (BaseHook.afterSwap.selector, 0);
-
         PoolId poolId = key.toId();
+        if (_inHookOperation[poolId]) return (BaseHook.afterSwap.selector, 0);
+
         TokenState storage state = _states[poolId];
         uint24 fee = state.graduated ? postGraduationFeePips[state.token] : PRE_GRADUATION_FEE_PIPS;
 
@@ -432,9 +503,9 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
         }
 
         if (!state.graduated && _curveExhausted(poolId)) {
-            _inHookOperation = true;
+            _inHookOperation[poolId] = true;
             _graduate(key, poolId, state);
-            _inHookOperation = false;
+            _inHookOperation[poolId] = false;
         }
         return (BaseHook.afterSwap.selector, 0);
     }
@@ -456,6 +527,8 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
         state.curveSeeded = true;
         state.curveTokens = tokensPaid;
         state.reserveTokens = TOTAL_SUPPLY - tokensPaid;
+        // First checkpoint = launch price, so a conversion before any trade has a reference.
+        priceCheckpoints[poolId] = PriceCheckpoint({sqrtPriceX96: launchSqrtPriceX96(), blockNumber: uint64(block.number)});
         emit CurveSeeded(poolId, CURVE_LIQUIDITY, tokensPaid, state.reserveTokens);
     }
 
@@ -526,11 +599,24 @@ contract IncentifiV4LegibleHook is BaseHook, IUnlockCallback {
         state.finalEthReserve = principalEth;
         state.finalTokenReserve = tokensForLp;
         state.reserveTokens = 0;
-        ethDustBalances[poolId] = principalEth - ethDeployed;
-        tokenDustBalances[poolId] = tokensForLp - tokensDeployed;
+
+        // Whatever the mint could not pair (the tick-rounding remainder — ~0.06% of the reserve
+        // with tickSpacing 10, mostly tokens) is DONATED into the position just minted rather
+        // than stranded in this contract: donate() credits it to in-range LPs, which is exactly
+        // this hook's full-range position (external LPs are gated), so it re-emerges through
+        // collect() as ordinary fees — ETH split 1%/1%, tokens via the converter. No privileged
+        // sweep, no key, nothing left behind.
+        uint256 ethDust = principalEth - ethDeployed;
+        uint256 tokenDust = tokensForLp - tokensDeployed;
+        if (ethDust > 0 || tokenDust > 0) {
+            BalanceDelta donated = poolManager.donate(key, ethDust, tokenDust, "");
+            if (donated.amount0() > 0 || donated.amount1() > 0) revert UnexpectedDelta();
+            if (ethDust > 0) _settleNative(ethDust);
+            if (tokenDust > 0) _settleToken(state.token, tokenDust);
+        }
 
         emit Graduated(poolId, state.token, principalEth, tokensForLp);
-        emit GraduationLiquidityDeployed(poolId, liquidity, sqrtPriceX96, principalEth - ethDeployed, tokensForLp - tokensDeployed);
+        emit GraduationLiquidityDeployed(poolId, liquidity, sqrtPriceX96, ethDust, tokenDust);
     }
 
     function _takeAndDistribute(PoolId poolId, TokenState storage state, uint256 ethFees, uint256 tokenFees) internal {

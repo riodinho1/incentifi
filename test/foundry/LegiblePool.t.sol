@@ -66,6 +66,7 @@ contract LegiblePoolTest is Test {
     bytes32 constant SOLD_TOPIC = keccak256("Sold(bytes32,address,uint256,uint256,uint256,uint256)");
     bytes32 constant FEES_CONVERTED_TOPIC = keccak256("FeesConverted(bytes32,uint256,uint256)");
     bytes32 constant GRADUATED_TOPIC = keccak256("Graduated(bytes32,address,uint256,uint256)");
+    bytes32 constant GRAD_LIQ_TOPIC = keccak256("GraduationLiquidityDeployed(bytes32,uint128,uint160,uint256,uint256)");
 
     LossRewardPool pool;
     IncentifiV4LegibleHook hook;
@@ -338,7 +339,7 @@ contract LegiblePoolTest is Test {
         uint256 creatorBefore = hook.creatorBalances(creator);
         vm.recordLogs();
         vm.prank(stranger); // permissionless
-        uint256 converted = converter.convert(address(token), 0);
+        uint256 converted = converter.convert(address(token), 0, 0);
         logs = vm.getRecordedLogs();
         assertGt(converted, 0);
         assertEq(pool.totalDeposited(address(token)) - depositedBefore, converted - converted / 2, "loss pool gets half");
@@ -416,14 +417,15 @@ contract LegiblePoolTest is Test {
         assertApproxEqRel(finalTokens, s0.reserveTokens, 1e12, "reserve paired");
         assertApproxEqAbs(pool.totalDeposited(address(token)), ethConsumed / 100, 1e9, "loss pool got 1% (fees collected at graduation)");
         assertApproxEqAbs(hook.creatorBalances(creator), ethConsumed / 100, 1e9, "creator got 1%");
-        assertEq(address(hook).balance, hook.ethDustBalances(poolId) + hook.creatorBalances(creator), "hook ETH == dust + the creator's unclaimed pull-payment");
-        assertLt(hook.ethDustBalances(poolId), 1e15, "ETH dust < 0.001 ETH");
-        // Token dust is the spacing-10 rounding made visible: the lower bound sits ~6.8 ticks above the
-        // exact graduation price, so the curve raises ~0.046% less ETH than pairs the whole reserve at
-        // that price; ETH binds the full-range mint and ~0.06% of the reserve (~0.003 ETH of value)
-        // stays in hook custody as reported dust.
-        assertLt(hook.tokenDustBalances(poolId), s0.reserveTokens / 500, "token dust < 0.2% of the reserve");
-        assertEq(token.balanceOf(address(hook)), hook.tokenDustBalances(poolId), "hook tokens == reported dust only");
+        // Nothing is stranded: the tick-rounding remainder was DONATED into the graduated position
+        // (see GraduationLiquidityDeployed), so the hook holds only the creator's pull-payment and no tokens.
+        assertEq(address(hook).balance, hook.creatorBalances(creator), "hook ETH == creator's unclaimed pull-payment only");
+        assertEq(token.balanceOf(address(hook)), 0, "hook holds no tokens after graduation");
+        (Vm.Log memory deployed, bool okD) = findLog(logs, address(hook), GRAD_LIQ_TOPIC);
+        assertTrue(okD);
+        (,, uint256 ethDonated, uint256 tokenDonated) = abi.decode(deployed.data, (uint128, uint160, uint256, uint256));
+        assertLt(tokenDonated, s0.reserveTokens / 500, "token remainder < 0.2% of the reserve (spacing-10 rounding)");
+        assertLt(ethDonated, 1e15, "ETH remainder < 0.001 ETH");
 
         // legacy view after graduation
         (,,, bool graduated, uint256 realEth, uint256 realToken) = hook.curveStates(poolId);
@@ -489,13 +491,15 @@ contract LegiblePoolTest is Test {
 
         vm.prank(stranger);
         vm.expectRevert(IncentifiV4LegibleHook.OnlyOwner.selector);
-        hook.setPostGraduationFee(address(token), 20_000);
+        hook.proposePostGraduationFee(address(token), 20_000);
 
         uint24 tooHigh = hook.MAX_POST_GRADUATION_FEE_PIPS() + 1;
         vm.expectRevert(IncentifiV4LegibleHook.FeeTooHigh.selector);
-        hook.setPostGraduationFee(address(token), tooHigh);
+        hook.proposePostGraduationFee(address(token), tooHigh);
 
-        hook.setPostGraduationFee(address(token), 20_000);
+        hook.proposePostGraduationFee(address(token), 20_000);
+        vm.warp(block.timestamp + hook.FEE_TIMELOCK());
+        hook.executePostGraduationFee(address(token));
         uint256 before = pool.totalDeposited(address(token));
         vm.recordLogs();
         botBuy(buyer, 1 ether);
