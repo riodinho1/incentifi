@@ -12,6 +12,7 @@ import {
 } from 'npm:viem@2.55.2';
 import { privateKeyToAccount } from 'npm:viem@2.55.2/accounts';
 import { planClaimTransactions, poolAddressForRow } from './claim-plan.mjs';
+import { createAssetsProxy } from './assets-proxy.mjs';
 
 // ----------------------------------------------------------------------------
 // CORS & Configuration
@@ -19,7 +20,7 @@ import { planClaimTransactions, poolAddressForRow } from './claim-plan.mjs';
 export const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 };
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || '';
@@ -930,6 +931,21 @@ export async function handleClaim(req: Request): Promise<Response> {
   );
 }
 
+/**
+ * Endpoint 5: GET /assets — Robinhood asset list proxy (assets-proxy.mjs).
+ * api.robinhood.com/rhj/assets has no CORS headers, so the launch page cannot read it directly;
+ * the gateway fetches it server-side, slims it to the parsed fields and caches it for a minute
+ * (stale copy served while the upstream is down). No auth beyond the platform's apikey: the data
+ * is public. The frontend treats this list as ENRICHMENT — the chain decides validity.
+ */
+const assetsProxy = createAssetsProxy({
+  upstreamUrl: (typeof Deno !== 'undefined' && Deno.env.get('ROBINHOOD_ASSETS_API_URL')) || undefined,
+});
+export async function handleAssets(): Promise<Response> {
+  const { status, body, headers } = await assetsProxy();
+  return new Response(body, { status, headers: { ...corsHeaders, ...headers } });
+}
+
 // ----------------------------------------------------------------------------
 // Deno / Edge Function Main Router
 // ----------------------------------------------------------------------------
@@ -942,6 +958,9 @@ if (typeof Deno !== 'undefined' && Deno.serve) {
     const url = new URL(req.url);
     const pathname = url.pathname;
 
+    if (pathname.endsWith('/assets') && req.method === 'GET') {
+      return await handleAssets();
+    }
     if (pathname.endsWith('/challenge') && req.method === 'POST') {
       return await handleChallenge(req);
     }

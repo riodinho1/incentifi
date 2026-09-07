@@ -407,6 +407,13 @@ const LaunchPage = () => {
                             </option>
                           ))}
                         </select>
+                      ) : null}
+                      {showStockDropdown && rewardAssetOptions.some((opt) => opt.note) ? (
+                        <p className="mt-2 text-[11px] text-amber-300" data-testid="loss-reward-asset-note">
+                          Robinhood's asset list could not be reached; stock options are enabled on the on-chain checks alone (StockFactory registry and reward pool).
+                        </p>
+                      ) : null}
+                      {showStockDropdown ? null : (
                       ) : (
                         <select
                           name="lossRewardAsset"
