@@ -211,9 +211,22 @@ function Get-DryRunSenderArgs() {
   if ($UseKeystore -ne '') { return (Get-WalletArgs) }
   return @('--sender', $OWNER)
 }
+# Typed confirmation gates. FAIL CLOSED: Confirm-Typed records the word it accepted, and every
+# broadcast step calls Assert-Gate with the same word right before it asks for the wallet. If the
+# Confirm-Typed statement was skipped for any reason (e.g. its prompt string failed to evaluate -
+# PowerShell parses "$V2?" as a variable named V2? and, under Set-StrictMode, throws; with
+# $ErrorActionPreference = 'Continue' that error is printed and execution moves on), Assert-Gate throws
+# and nothing is broadcast. Interpolate a variable followed by ? : ! or [ as ${Var}.
+$script:gatePassed = ''
 function Confirm-Typed($word, $prompt) {
+  $script:gatePassed = ''
   $typed = Read-Host "$prompt Type $word to continue"
   if ($typed -ne $word) { throw "Aborted (you typed '$typed')." }
+  $script:gatePassed = $word
+}
+function Assert-Gate($word) {
+  if ($script:gatePassed -ne $word) { throw "Confirmation gate '$word' was not passed (the prompt was skipped or answered wrongly). Nothing was sent." }
+  $script:gatePassed = ''
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -399,6 +412,7 @@ switch ($Step) {
     Head "forge script $DEPLOY_SCRIPT --broadcast (REAL MONEY, 7 transactions from $OWNER)"
     Set-DeployEnv
     Confirm-Typed 'DEPLOY-V2' "This deploys LossRewardPoolV2 + swapper and configures them. It does NOT re-point the hook."
+    Assert-Gate 'DEPLOY-V2'
     $wallet = Get-WalletArgs
     try {
       $out = & forge script $DEPLOY_SCRIPT --rpc-url $Rpc --broadcast --slow @wallet 2>&1 | Out-String
@@ -480,7 +494,8 @@ switch ($Step) {
     Head "forge script $ROUTES_SCRIPT --broadcast (REAL MONEY: one setAssetRoute per missing/different route, up to $($cfg.count) transactions from $OWNER)"
     $env:POOL = $V2; $env:ROUTES_FILE = $ROUTES_FILE
     if ($script:swapperFromChain) { $env:SWAPPER = $script:swapperFromChain }
-    Confirm-Typed 'SET-ROUTES' "Configure the stock routes from $ROUTES_FILE on $V2?"
+    Confirm-Typed 'SET-ROUTES' "Configure the stock routes from ${ROUTES_FILE} on ${V2}?"
+    Assert-Gate 'SET-ROUTES'
     $wallet = Get-WalletArgs
     try {
       $out = & forge script $ROUTES_SCRIPT --rpc-url $Rpc --broadcast --slow @wallet 2>&1 | Out-String
@@ -527,8 +542,11 @@ switch ($Step) {
     Info "(publishing on V1 capped to its remainder) and then publishes on V2. Irreversible in practice: pointing back at V1 later would"
     Info "leave V2 with the same stranding problem in reverse."
     Confirm-Typed 'MIGRATION-APPLIED' "Is supabase/loss_reward_v2_migration.sql applied (reward_epochs.pool_address exists)?"
-    Confirm-Typed 'WORKER-HAS-V2' "Is LOSS_REWARD_POOL_V2_ADDRESS=$V2 set on the running worker AND the gateway, VITE_LOSS_REWARD_POOL_V2 on the frontend?"
-    Confirm-Typed 'REPOINT' "Send hook.setLossRewardPool($V2) now?"
+    Assert-Gate 'MIGRATION-APPLIED'
+    Confirm-Typed 'WORKER-HAS-V2' "Is LOSS_REWARD_POOL_V2_ADDRESS=${V2} set on the running worker AND the gateway, VITE_LOSS_REWARD_POOL_V2 on the frontend?"
+    Assert-Gate 'WORKER-HAS-V2'
+    Confirm-Typed 'REPOINT' "Send hook.setLossRewardPool(${V2}) now?"
+    Assert-Gate 'REPOINT'
     $env:HOOK = $HOOK; $env:NEW_POOL = $V2
     $wallet = Get-WalletArgs
     try {
