@@ -169,6 +169,13 @@ try {
   const rowB = mock.table('tokens').find((t) => t.mint_address === TOKEN_B.toLowerCase());
   assert.equal(rowA.hook_address, OLD_HOOK.toLowerCase(), 'tokens.hook_address tagged for the GenericSell token');
   assert.equal(rowB.hook_address, LEGIBLE_HOOK.toLowerCase(), 'tokens.hook_address tagged for the legible token');
+  // audit 2026-09-08 finding 5: every discovered token is also recorded in indexed_tokens (the worker's second source)
+  const idxA = mock.table('indexed_tokens').find((t) => t.mint_address.toLowerCase() === TOKEN_A.toLowerCase());
+  const idxB = mock.table('indexed_tokens').find((t) => t.mint_address.toLowerCase() === TOKEN_B.toLowerCase());
+  assert.ok(idxA && idxB, 'both discovered tokens recorded in indexed_tokens');
+  assert.equal(idxA.venue, 'v4-generic'); assert.equal(idxB.venue, 'legible');
+  assert.equal(idxB.hook_address, LEGIBLE_HOOK.toLowerCase());
+  assert.ok(idxB.creator_address && idxB.first_block > 0, 'creator + launch block recorded');
   console.log(`  OLDA -> ${rowA.hook_address}\n  LEGB -> ${rowB.hook_address}\n`);
 
   console.log('[3/5] trades from both hooks landed in token_trades_evm with the same shape');

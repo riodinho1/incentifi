@@ -32,14 +32,17 @@ console.log('======================================================\n');
 // ----------------------------------------------------------------------------
 console.log('Testing [1/8] Chain & Contract Address Invariance...');
 assert.strictEqual(ROBINHOOD_CHAIN_ID, 4663, 'Chain ID must be 4663');
+// The V3 factory was rewired to 0xa0143de8… (scripts/rewire-v3-factory-router.mjs; INTEGRATION.md);
+// 0x9fcea653… is the retired factory recorded in scripts/.v3-deployment-result.json as `oldFactory`.
 assert.strictEqual(
   INCENTIFI_BONDING_CURVE_FACTORY.toLowerCase(),
-  '0x9fcea653c6f31c82606582b22da82b39f61f9c0e',
+  '0xa0143de84fba1753b887e4e32941e4fb342e473f',
   'Factory address mismatch'
 );
+// Router rewired alongside the factory (0xbba0384b… is `oldRouter` in scripts/.v3-deployment-result.json).
 assert.strictEqual(
   INCENTIFI_SWAP_ROUTER.toLowerCase(),
-  '0xbba0384bf34b5cc26daa2c06cdf765bbdeb2acdf',
+  '0x4c1f4197b5eebb6cc15c37e053f963a56787575e',
   'Router address mismatch'
 );
 console.log('  ✓ Verified Robinhood Chain ID 4663 and deployed contract addresses');

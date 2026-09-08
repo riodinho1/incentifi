@@ -35,6 +35,7 @@ const ZERO = '0x0000000000000000000000000000000000000000';
 const TOKEN_A = getAddress('0x00000000000000000000000000000000000000A1'); // rich fees
 const TOKEN_B = getAddress('0x00000000000000000000000000000000000000B1'); // dust fees
 const TOKEN_C = getAddress('0x00000000000000000000000000000000000000C1'); // not legible
+const TOKEN_D = getAddress('0x00000000000000000000000000000000000000D1'); // token-side fees only (after sells)
 const OPERATOR = getAddress('0x70997970C51812dc3A010C7d01b50e0d17dc79C8'); // hardhat #1 (throwaway)
 const E = 10n ** 18n;
 const Q128 = 1n << 128n;
@@ -54,6 +55,8 @@ const state = {
   [TOKEN_A]: { legible: true, growth0: growthFor(E / 50n), growth1: growthFor(800_000n * E), last0: 0n, last1: 0n, pending: 0n, checkpointEthPerToken: 12_500_000_000n /* 1.25e-8 ETH/token -> 800k tokens = 0.01 ETH */ },
   [TOKEN_B]: { legible: true, growth0: growthFor(E / 100_000n), growth1: 0n, last0: 0n, last1: 0n, pending: 0n, checkpointEthPerToken: 0n },
   [TOKEN_C]: { legible: false },
+  // audit finding 3: no ETH fees but 2.4M tokens worth ~0.0048 ETH at the checkpoint -> must collect + convert
+  [TOKEN_D]: { legible: true, growth0: 0n, growth1: growthFor(2_400_000n * E), last0: 0n, last1: 0n, pending: 0n, checkpointEthPerToken: 2_000_000_000n /* 2e-9 ETH/token */ },
 };
 const poolIdOf = (t) => keccak256(toHex(t.toLowerCase() + 'pool'));
 const sent = [];
@@ -162,12 +165,14 @@ mock.seed('token_trades_evm', [
   { tx_hash: '0x02', token_address: TOKEN_A.toLowerCase(), block_time: new Date(NOW - 7200e3).toISOString() },
   { tx_hash: '0x03', token_address: TOKEN_B.toLowerCase(), block_time: new Date(NOW - 600e3).toISOString() },
   { tx_hash: '0x04', token_address: TOKEN_C.toLowerCase(), block_time: new Date(NOW - 600e3).toISOString() },
+  { tx_hash: '0x06', token_address: TOKEN_D.toLowerCase(), block_time: new Date(NOW - 900e3).toISOString() },
   { tx_hash: '0x05', token_address: '0x00000000000000000000000000000000000000d1', block_time: new Date(NOW - 48 * 3600e3).toISOString() }, // too old
 ]);
 mock.seed('tokens', [
   { mint_address: TOKEN_A, hook_address: HOOK.toLowerCase() },
   { mint_address: TOKEN_B, hook_address: null }, // untagged -> checked on-chain
   { mint_address: TOKEN_C, hook_address: null },
+  { mint_address: TOKEN_D, hook_address: HOOK.toLowerCase() },
 ]);
 
 const worker = await import('../scripts/loss-reward-worker.mjs');
@@ -191,7 +196,7 @@ try {
   const logs = [];
   const results = await worker.collectLegibleFees({ log: (m) => logs.push(m), alert: async () => {}, now: () => NOW, lookbackHours: 24 });
   const byToken = Object.fromEntries(results.map((r) => [r.token, r]));
-  assert.deepEqual(Object.keys(byToken).sort(), [TOKEN_A, TOKEN_B].sort(), 'only legible tokens with trades in the last 24h are considered (C is not legible, D too old)');
+  assert.deepEqual(Object.keys(byToken).sort(), [TOKEN_A, TOKEN_B, TOKEN_D].sort(), 'only legible tokens with trades in the last 24h are considered (C is not legible, the 48h-old one is dropped)');
 
   // token A: collect then convert
   const a = byToken[TOKEN_A];
@@ -204,8 +209,8 @@ try {
   assert.equal(a.convert.sent, true, 'A: convert sent (pending 800k tokens ~ 0.01 ETH >> gas)');
   assert.equal(BigInt(a.convert.tokensIn), tokA); assert.equal(BigInt(a.convert.ethOut), (tokA * state[TOKEN_A].checkpointEthPerToken) / E);
   assert.equal(state[TOKEN_A].pending, 0n, 'converter drained');
-  const txA = sent.filter((t) => true);
-  assert.deepEqual(txA.map((t) => t.fn), ['collect', 'convert'], 'exactly collect then convert, nothing for B');
+  const txA = sent.slice(0, 2);
+  assert.deepEqual(txA.map((t) => t.fn), ['collect', 'convert'], 'A: exactly collect then convert');
   assert.equal(txA[0].gas, (COLLECT_GAS * 130n) / 100n, 'collect gas limit = estimate + 30%');
   assert.equal(txA[1].gas, 300_000n, 'convert gas limit = floor 300k (estimate 190k * 1.3 = 247k < 300k)');
   const collectLog = logs.find((l) => l.includes(`[FEE COLLECT] ${TOKEN_A}: collect() sent`));
@@ -222,16 +227,27 @@ try {
   assert.equal(state[TOKEN_B].last0, 0n, 'B: nothing collected');
   console.log('3. token B: fees ~0.1x gas -> held, reason names the ratio  OK');
 
+  // token D: zero ETH fees, token-side fees worth ~0.0048 ETH (55x gas) -> collect AND convert
+  const d = byToken[TOKEN_D];
+  assert.equal(d.collect.sent, true, 'D: token-side value alone clears the bar');
+  assert.equal(BigInt(d.collect.ethFees), 0n);
+  assert.equal(BigInt(d.collect.tokenFees), feesFor(growthFor(2_400_000n * E)));
+  assert.equal(d.convert.sent, true, 'D: the collected tokens are converted in the same pass');
+  assert.equal(state[TOKEN_D].pending, 0n);
+  assert.deepEqual(sent.slice(2).map((t) => `${t.fn}`), ['collect', 'convert'], 'D: collect then convert');
+  assert.ok(logs.some((l) => l.includes(`[FEE COLLECT] ${TOKEN_D}`) && l.includes('at checkpoint')), 'log shows the token-side valuation');
+  console.log('3b. token D: 0 ETH + 2.4M tokens (~0.0048 ETH at checkpoint) -> collect + convert (audit finding 3)  OK');
+
   // second pass: A has nothing left -> nothing sent
   const again = await worker.collectLegibleFees({ log: () => {}, alert: async () => {}, now: () => NOW, tokens: [TOKEN_A] });
   assert.equal(again[0].collect.sent, false); assert.equal(again[0].collect.reason, 'nothing to collect');
   assert.equal(again[0].convert.reason, 'nothing pending');
-  assert.equal(sent.length, 2, 'no new transactions');
+  assert.equal(sent.length, 4, 'no new transactions');
   // dry run with fresh fees on A: decided but not sent
   state[TOKEN_A].growth0 += growthFor(E / 10n);
   const dry = await worker.collectLegibleFees({ log: () => {}, alert: async () => {}, dryRun: true, tokens: [TOKEN_A] });
   assert.equal(dry[0].collect.sent, false); assert.equal(dry[0].collect.reason, 'dry run');
-  assert.equal(sent.length, 2, 'dry run sends nothing');
+  assert.equal(sent.length, 4, 'dry run sends nothing');
   console.log('4. idempotent second pass; dry run decides without sending; non-legible token never considered  OK');
 
   console.log('\nworker-fee-collection tests passed');

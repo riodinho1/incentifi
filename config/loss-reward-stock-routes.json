@@ -1,18 +1,34 @@
 {
-  "generatedAt": "2026-09-07T23:30:40.474Z",
+  "generatedAt": "2026-09-08T10:24:34.938Z",
   "source": {
-    "venuesFile": "stock-venues-2.json",
-    "chainHead": 57202702,
-    "generatedAt": "2026-09-07T22:48:23.235Z"
+    "venuesFile": "venues-fresh.json",
+    "chainHead": 57608045,
+    "generatedAt": "2026-09-08T10:15:27.948Z"
   },
   "criteria": {
     "minWethInPool": 1,
+    "minInRangeLiquidity": "100000000000000000",
     "requireTwap": true,
-    "requireApiActive": true
+    "requireApiActive": true,
+    "overridesFile": "config/loss-reward-stock-routes.overrides.json"
   },
+  "disabled": [
+    {
+      "symbol": "QUBT",
+      "asset": "0x59818904ab4cE163b3cE4FfB64f2D6Ca02c434B4",
+      "since": "2026-09-08",
+      "reason": "docs/AUDIT_2026-09-08.md finding 7: the QUBT/WETH 1% pool serves neither a 30 m nor a 10 m TWAP (observe() reverts), so every claim would pay ETH (ReferenceUnavailable); 1.59 WETH in the pool."
+    },
+    {
+      "symbol": "BE",
+      "asset": "0x822CC93fFD030293E9842c30BBD678F530701867",
+      "since": "2026-09-08",
+      "reason": "docs/AUDIT_2026-09-08.md finding 7: 0.98 WETH in the BE/WETH 0.3% pool - a claim above ~0.03 ETH moves the price past the 3% bound (BelowProtocolBound -> ETH)."
+    }
+  ],
   "twapWindow": 1800,
   "maxDeviationBps": 300,
-  "count": 26,
+  "count": 24,
   "routes": [
     {
       "symbol": "AAPL",
@@ -20,7 +36,7 @@
       "asset": "0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9",
       "pool": "0x8bb3514e2204E1cDF3Ac149EFEe7Ff04D91B719f",
       "fee": 500,
-      "wethInPool": "37.822",
+      "wethInPool": "32.374",
       "twap30m": true
     },
     {
@@ -29,16 +45,7 @@
       "asset": "0x48E39E56aCdbA37b09020C0b734A613C9a2f100A",
       "pool": "0x183304567485e97e68835708f572aAA0e0E71d08",
       "fee": 10000,
-      "wethInPool": "1.765",
-      "twap30m": true
-    },
-    {
-      "symbol": "BE",
-      "name": "Bloom Energy • Robinhood Token",
-      "asset": "0x822CC93fFD030293E9842c30BBD678F530701867",
-      "pool": "0xe3ECA0Fa4A9Bd2C90852c94FE4A756dA11300489",
-      "fee": 3000,
-      "wethInPool": "1.065",
+      "wethInPool": "2.065",
       "twap30m": true
     },
     {
@@ -47,7 +54,7 @@
       "asset": "0x6330D8C3178a418788dF01a47479c0ce7CCF450b",
       "pool": "0x6707aeAc7D0e519B083219d27BB427364363183A",
       "fee": 3000,
-      "wethInPool": "87.943",
+      "wethInPool": "68.140",
       "twap30m": true
     },
     {
@@ -56,7 +63,7 @@
       "asset": "0x4EA005168D7F09a7A0Ba9D1DEf21a479950E44C2",
       "pool": "0xc478A811a0002BE4321A142D5446247456b1cB05",
       "fee": 10000,
-      "wethInPool": "2.382",
+      "wethInPool": "2.656",
       "twap30m": true
     },
     {
@@ -65,17 +72,17 @@
       "asset": "0xdF0992E440dD0be65BD8439b609d6D4366bf1CB5",
       "pool": "0x754DdD4bF8E8635B4301a7f4Af2Ea7A82AB6cEA7",
       "fee": 10000,
-      "wethInPool": "47.359",
+      "wethInPool": "39.698",
       "twap30m": true
     },
     {
       "symbol": "DJT",
       "name": "Trump Media & Technology Group • Robinhood Token",
       "asset": "0x1D11f0496982706C5e14A514D4E79F2e6BdE4516",
-      "pool": "0x95DEF4ea143630d64CAA8F55F7570D8023f20265",
-      "fee": 500,
-      "wethInPool": "1.834",
-      "twap30m": true
+      "pool": "0x81b4Caac5d313ea0c831C4D16f8c23937602dCF1",
+      "fee": 3000,
+      "wethInPool": "27.337",
+      "twap30m": false
     },
     {
       "symbol": "GLD",
@@ -83,7 +90,7 @@
       "asset": "0xC9a981FEE1F9DEc688bb123ccDeCc63D0deBFC4e",
       "pool": "0x98996e833EA35EC17c3645Ca7b6Dd40d188564C4",
       "fee": 10000,
-      "wethInPool": "155.804",
+      "wethInPool": "140.900",
       "twap30m": true
     },
     {
@@ -92,7 +99,7 @@
       "asset": "0x1b0E319c6A659F002271B69dB8A7df2F911c153E",
       "pool": "0xc6BCC95043DC48C204bB2D57fb264a10Efe0a607",
       "fee": 500,
-      "wethInPool": "6.874",
+      "wethInPool": "5.977",
       "twap30m": true
     },
     {
@@ -101,7 +108,7 @@
       "asset": "0x2e0847E8910a9732eB3fb1bb4b70a580ADAD4FE3",
       "pool": "0x8fB9301586f27e2cff85312F7c1d0F16C6167cdE",
       "fee": 100,
-      "wethInPool": "1.689",
+      "wethInPool": "4.950",
       "twap30m": true
     },
     {
@@ -110,7 +117,7 @@
       "asset": "0xCceE82fE024c36fA15E1005edE3E9e4787e23D09",
       "pool": "0xd10E6245961D697d975963682ECe9979E9917fBC",
       "fee": 10000,
-      "wethInPool": "99.628",
+      "wethInPool": "93.174",
       "twap30m": true
     },
     {
@@ -119,7 +126,7 @@
       "asset": "0x8005d266423c7ea827372c9c864491e5786600ea",
       "pool": "0x666bA98aB094793e276215448F2485FD8e3c3CE5",
       "fee": 3000,
-      "wethInPool": "21.890",
+      "wethInPool": "18.908",
       "twap30m": true
     },
     {
@@ -128,7 +135,7 @@
       "asset": "0xc0D6457C16Cc70d6790Dd43521C899C87ce02f35",
       "pool": "0xa4BdB396a69617eb7F70E2cc1EF526f7340b1B0d",
       "fee": 3000,
-      "wethInPool": "18.132",
+      "wethInPool": "19.801",
       "twap30m": true
     },
     {
@@ -137,7 +144,7 @@
       "asset": "0x62fd0668e10D8B72339BE2DCF7643001688ff13B",
       "pool": "0x5201ea77c950aBB8d3706A20bF3b83d872E4A98b",
       "fee": 3000,
-      "wethInPool": "2.450",
+      "wethInPool": "2.453",
       "twap30m": true
     },
     {
@@ -146,7 +153,7 @@
       "asset": "0xec262a75e413fAfD0dF80480274532C79D42da09",
       "pool": "0x70504a6FafdbfB75fE971FAA4dD716e79aC5624c",
       "fee": 10000,
-      "wethInPool": "169.252",
+      "wethInPool": "134.629",
       "twap30m": true
     },
     {
@@ -155,7 +162,7 @@
       "asset": "0xfF080c8ce2E5feadaCa0Da81314Ae59D232d4afD",
       "pool": "0x301F48EC369BB3bfA0bC04d44A79037aa0EE2340",
       "fee": 10000,
-      "wethInPool": "20.443",
+      "wethInPool": "23.913",
       "twap30m": true
     },
     {
@@ -164,7 +171,7 @@
       "asset": "0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC",
       "pool": "0x62AB521f71431f78ac374CdbadC6cda3c8916b6C",
       "fee": 500,
-      "wethInPool": "214.338",
+      "wethInPool": "232.936",
       "twap30m": true
     },
     {
@@ -173,16 +180,7 @@
       "asset": "0xD5f3879160bc7c32ebb4dC785F8a4F505888de68",
       "pool": "0xA40D00a55d43bA2d188039DCF88bD68f4F133E78",
       "fee": 3000,
-      "wethInPool": "27.106",
-      "twap30m": true
-    },
-    {
-      "symbol": "QUBT",
-      "name": "Quantum Computing • Robinhood Token",
-      "asset": "0x59818904ab4cE163b3cE4FfB64f2D6Ca02c434B4",
-      "pool": "0xb0b255ecf93eE03E69B6780CB85da769c0C5E0Ea",
-      "fee": 10000,
-      "wethInPool": "1.004",
+      "wethInPool": "30.043",
       "twap30m": true
     },
     {
@@ -191,7 +189,7 @@
       "asset": "0xF0C4BF4C582cb3836e98394b1d4e7B7281101bE8",
       "pool": "0x6d25417718A8D6c529130a8ccC4BfBf0a18219D3",
       "fee": 3000,
-      "wethInPool": "36.481",
+      "wethInPool": "37.355",
       "twap30m": true
     },
     {
@@ -200,7 +198,7 @@
       "asset": "0x92FD66527192E3e61d4DDd13322Aa222DE86F9B5",
       "pool": "0x7F310e3D05E575Bd449E4484eF5Da15863ea43B1",
       "fee": 10000,
-      "wethInPool": "20.423",
+      "wethInPool": "19.485",
       "twap30m": true
     },
     {
@@ -209,7 +207,7 @@
       "asset": "0xB90A19fF0Af67f7779afF50A882A9CfF42446400",
       "pool": "0x995c1Ad5Eb998b1BdD89F515C4BB64760c411b62",
       "fee": 3000,
-      "wethInPool": "35.544",
+      "wethInPool": "19.499",
       "twap30m": true
     },
     {
@@ -218,7 +216,7 @@
       "asset": "0x4a0E65A3EcceC6dBe60AE065F2e7bb85Fae35eEa",
       "pool": "0xC3c9F0171490Ef0F4536fe493F3b0EbB5ee0CB5e",
       "fee": 500,
-      "wethInPool": "107.414",
+      "wethInPool": "134.790",
       "twap30m": true
     },
     {
@@ -227,7 +225,7 @@
       "asset": "0x117cc2133c37B721F49dE2A7a74833232B3B4C0C",
       "pool": "0xDDCBBa3666f578E3F09516f21Ff85BFee859AB5e",
       "fee": 500,
-      "wethInPool": "319.024",
+      "wethInPool": "277.205",
       "twap30m": true
     },
     {
@@ -236,7 +234,7 @@
       "asset": "0x322F0929c4625eD5bAd873c95208D54E1c003b2d",
       "pool": "0xA953CA88ff430e9487c60cA34d757414f4efdA07",
       "fee": 3000,
-      "wethInPool": "70.820",
+      "wethInPool": "71.142",
       "twap30m": true
     },
     {
@@ -245,7 +243,7 @@
       "asset": "0x58FfE4a942d3885bAa22D7520691F611EF09e7AA",
       "pool": "0x91280dB3392EA92C08d8134b5760Fb4798B69547",
       "fee": 3000,
-      "wethInPool": "10.474",
+      "wethInPool": "10.265",
       "twap30m": true
     }
   ],
@@ -342,7 +340,7 @@
       "symbol": "INDA",
       "address": "0xACEF2e09adb47aD6aBeBAD9fF06689E60615C2B6",
       "reasons": [
-        "V3 WETH pool holds 0.734 WETH < 1"
+        "V3 WETH pool holds 0.775 WETH < 1"
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
@@ -357,7 +355,7 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
+        "v3UsdgLiquid": true,
         "v4Liquid": false
       }
     },
@@ -410,7 +408,7 @@
       "address": "0x03DfbBE0AC4E7bCDaFd08eD41A400326B77D8c80",
       "reasons": [
         "asset address sorts below WETH (asset would be token0); RewardSwapperUniswapV3 requires WETH as token0 - needs a token-order-agnostic adapter",
-        "V3 WETH pool holds 0.219 WETH < 1"
+        "V3 WETH pool holds 0.218 WETH < 1"
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
@@ -435,7 +433,7 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
+        "v3UsdgLiquid": true,
         "v4Liquid": false
       }
     },
@@ -457,7 +455,7 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
+        "v3UsdgLiquid": true,
         "v4Liquid": false
       }
     },
@@ -553,7 +551,7 @@
       "symbol": "SNAP",
       "address": "0xF6589F11Bc40b669e584073F428B05562F568733",
       "reasons": [
-        "V3 WETH pool holds 0.465 WETH < 1"
+        "V3 WETH pool holds 0.467 WETH < 1"
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
@@ -755,7 +753,7 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
+        "v3UsdgLiquid": true,
         "v4Liquid": false
       }
     },
@@ -811,7 +809,7 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
+        "v3UsdgLiquid": true,
         "v4Liquid": false
       }
     },
@@ -841,7 +839,7 @@
       "symbol": "BULL",
       "address": "0xceF9027c7d6985b85f0BA431125073529A947A68",
       "reasons": [
-        "V3 WETH pool holds 0.619 WETH < 1"
+        "V3 WETH pool holds 0.618 WETH < 1"
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
@@ -933,7 +931,7 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
+        "v3UsdgLiquid": true,
         "v4Liquid": false
       }
     },
@@ -1032,7 +1030,7 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
+        "v3UsdgLiquid": true,
         "v4Liquid": false
       }
     },
@@ -1066,7 +1064,7 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
+        "v3UsdgLiquid": true,
         "v4Liquid": false
       }
     },
@@ -1133,7 +1131,7 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
+        "v3UsdgLiquid": true,
         "v4Liquid": false
       }
     },
@@ -1155,7 +1153,7 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
+        "v3UsdgLiquid": true,
         "v4Liquid": false
       }
     },
@@ -1211,7 +1209,7 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
+        "v3UsdgLiquid": true,
         "v4Liquid": false
       }
     },
@@ -1296,7 +1294,7 @@
       "symbol": "MRNA",
       "address": "0x43B07D15cE533bEc5476d70C22a78a1B2B662155",
       "reasons": [
-        "V3 WETH pool holds 0.081 WETH < 1"
+        "V3 WETH pool holds 0.084 WETH < 1"
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
@@ -1310,7 +1308,7 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
+        "v3UsdgLiquid": true,
         "v4Liquid": false
       }
     },
@@ -1356,7 +1354,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1401,7 +1399,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1412,7 +1410,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1423,7 +1421,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1434,7 +1432,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1445,7 +1443,19 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
+      }
+    },
+    {
+      "symbol": "BE",
+      "address": "0x822CC93fFD030293E9842c30BBD678F530701867",
+      "reasons": [
+        "manually disabled (config/loss-reward-stock-routes.overrides.json, since 2026-09-08): docs/AUDIT_2026-09-08.md finding 7: 0.98 WETH in the BE/WETH 0.3% pool - a claim above ~0.03 ETH moves the price past the 3% bound (BelowProtocolBound -> ETH).",
+        "V3 WETH pool holds 0.980 WETH < 1"
+      ],
+      "otherVenues": {
+        "v3UsdgLiquid": true,
+        "v4Liquid": false
       }
     },
     {
@@ -1456,7 +1466,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1467,18 +1477,18 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
       "symbol": "AMD",
       "address": "0x86923f96303D656E4aa86D9d42D1e57ad2023fdC",
       "reasons": [
-        "no Uniswap V3 WETH pool"
+        "V3 WETH pool has no in-range liquidity"
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1489,7 +1499,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1500,7 +1510,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1523,7 +1533,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1534,7 +1544,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1545,7 +1555,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1567,7 +1577,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1577,7 +1587,7 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
+        "v3UsdgLiquid": true,
         "v4Liquid": false
       }
     },
@@ -1600,7 +1610,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1611,7 +1621,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1621,8 +1631,19 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v3UsdgLiquid": true,
+        "v4Liquid": false
+      }
+    },
+    {
+      "symbol": "QUBT",
+      "address": "0x59818904ab4cE163b3cE4FfB64f2D6Ca02c434B4",
+      "reasons": [
+        "manually disabled (config/loss-reward-stock-routes.overrides.json, since 2026-09-08): docs/AUDIT_2026-09-08.md finding 7: the QUBT/WETH 1% pool serves neither a 30 m nor a 10 m TWAP (observe() reverts), so every claim would pay ETH (ReferenceUnavailable); 1.59 WETH in the pool."
+      ],
+      "otherVenues": {
+        "v3UsdgLiquid": true,
+        "v4Liquid": false
       }
     },
     {
@@ -1633,7 +1654,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1655,7 +1676,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1665,8 +1686,8 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v3UsdgLiquid": true,
+        "v4Liquid": false
       }
     },
     {
@@ -1677,7 +1698,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1699,7 +1720,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1709,8 +1730,8 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v3UsdgLiquid": true,
+        "v4Liquid": false
       }
     },
     {
@@ -1776,7 +1797,7 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
+        "v3UsdgLiquid": true,
         "v4Liquid": false
       }
     },
@@ -1787,7 +1808,7 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
+        "v3UsdgLiquid": true,
         "v4Liquid": false
       }
     },
@@ -1817,11 +1838,11 @@
       "symbol": "DDOG",
       "address": "0x27c99fBde9D0d2AA4f4Bfb4943f237843DdF6958",
       "reasons": [
-        "V3 WETH pool holds 0.004 WETH < 1"
+        "V3 WETH pool holds 0.005 WETH < 1"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v3UsdgLiquid": true,
+        "v4Liquid": false
       }
     },
     {
@@ -1843,7 +1864,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1854,7 +1875,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1865,7 +1886,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1875,8 +1896,8 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v3UsdgLiquid": true,
+        "v4Liquid": false
       }
     },
     {
@@ -1898,7 +1919,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1909,7 +1930,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1920,7 +1941,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1931,7 +1952,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1942,7 +1963,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1964,7 +1985,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1975,7 +1996,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1986,7 +2007,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -1997,7 +2018,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -2008,7 +2029,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -2019,7 +2040,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -2029,8 +2050,8 @@
         "no Uniswap V3 WETH pool"
       ],
       "otherVenues": {
-        "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v3UsdgLiquid": true,
+        "v4Liquid": false
       }
     },
     {
@@ -2041,7 +2062,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -2052,7 +2073,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -2074,7 +2095,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -2096,7 +2117,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -2107,7 +2128,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -2118,18 +2139,18 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
       "symbol": "TTWO",
       "address": "0x5e81213613b6B86EaB4c6c50d718d34359459786",
       "reasons": [
-        "V3 WETH pool holds 0.198 WETH < 1"
+        "V3 WETH pool holds 0.205 WETH < 1"
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -2152,7 +2173,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -2163,7 +2184,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -2174,7 +2195,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": true,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {
@@ -2196,7 +2217,7 @@
       ],
       "otherVenues": {
         "v3UsdgLiquid": false,
-        "v4Liquid": true
+        "v4Liquid": false
       }
     },
     {

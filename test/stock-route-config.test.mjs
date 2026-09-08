@@ -14,7 +14,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { getAddress } from 'viem';
 
-const pool = (fee, weth, liq = '1000', twap30 = true, twap10 = true, initialized = true) => ({ fee, address: `0x${(fee + 1000).toString(16).padStart(40, '0')}`, initialized, liquidity: liq, wethBalance: String(weth), twap30mAvailable: twap30, twap10mAvailable: twap10 });
+const pool = (fee, weth, liq = '1000000000000000000', twap30 = true, twap10 = true, initialized = true) => ({ fee, address: `0x${(fee + 1000).toString(16).padStart(40, '0')}`, initialized, liquidity: liq, wethBalance: String(weth), twap30mAvailable: twap30, twap10mAvailable: twap10 });
 const stock = (symbol, address, extra = {}) => ({ symbol, name: `${symbol} • Robinhood Token`, address, roundTrip: true, apiStatus: 'ASSET_STATUS_ACTIVE', pools: [], usdgPools: [], v4Pools: [], ...extra });
 const fixture = {
   chainHead: 1, generatedAt: '2026-09-07T00:00:00.000Z',
@@ -22,7 +22,9 @@ const fixture = {
     stock('AAAA', '0xa0000000000000000000000000000000000000a1', { pools: [pool(500, 2), pool(3000, 40), pool(10000, 0.1)] }), // best tier = 3000 (most WETH)
     stock('BBBB', '0xa0000000000000000000000000000000000000b1', { pools: [pool(3000, 0.4)] }),                              // below min-weth
     stock('CCCC', '0xa0000000000000000000000000000000000000c1', { pools: [pool(3000, 9, '0')] }),                          // no in-range liquidity
-    stock('DDDD', '0xa0000000000000000000000000000000000000d1', { pools: [pool(3000, 9, '5', false, false)] }),            // no TWAP
+    stock('DDDD', '0xa0000000000000000000000000000000000000d1', { pools: [pool(3000, 9, '1000000000000000000', false, false)] }), // no TWAP
+    stock('JJJJ', '0xa000000000000000000000000000000000000ff3', { pools: [pool(3000, 9, '30000000000000000')] }),             // in-range L 3e16 < 1e17 (audit: BE)
+    stock('KKKK', '0xa000000000000000000000000000000000000ff4', { pools: [pool(3000, 9)] }),                                 // healthy but manually disabled (overrides)
     stock('EEEE', '0xa0000000000000000000000000000000000000e1', { pools: [pool(3000, 9)], apiStatus: null }),              // not in API list
     stock('FFFF', '0xa0000000000000000000000000000000000000f1', { pools: [pool(3000, 9)], roundTrip: false }),             // registry mismatch
     stock('GGGG', '0xa000000000000000000000000000000000000ff1', { usdgPools: [{ fee: 3000, address: '0x00000000000000000000000000000000000000ee', liquidity: '7' }] }), // USDG only
@@ -34,13 +36,15 @@ const committedRoutesForTokenOrder = () => JSON.parse(fs.readFileSync('config/lo
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'stock-routes-'));
 const inFile = path.join(tmp, 'venues.json'); fs.writeFileSync(inFile, JSON.stringify(fixture));
 const routesOut = path.join(tmp, 'routes.json'); const candOut = path.join(tmp, 'cands.json');
+const overridesFile = path.join(tmp, 'overrides.json');
+fs.writeFileSync(overridesFile, JSON.stringify({ disabled: [{ symbol: 'KKKK', asset: '0xa000000000000000000000000000000000000ff4', since: '2026-09-08', reason: 'test override' }] }));
 
 console.log('======================================================');
 console.log('  STOCK ROUTE CONFIG (generator + committed outputs)');
 console.log('======================================================\n');
 
 // 1. generator
-execFileSync(process.execPath, ['scripts/ops/generate-stock-routes.mjs', '--in', inFile, '--min-weth', '1', '--routes-out', routesOut, '--candidates-out', candOut], { stdio: ['ignore', 'ignore', 'inherit'] });
+execFileSync(process.execPath, ['scripts/ops/generate-stock-routes.mjs', '--in', inFile, '--min-weth', '1', '--overrides', overridesFile, '--routes-out', routesOut, '--candidates-out', candOut], { stdio: ['ignore', 'ignore', 'inherit'] });
 const gen = JSON.parse(fs.readFileSync(routesOut, 'utf8'));
 assert.equal(gen.count, 1); assert.equal(gen.routes.length, 1);
 assert.equal(gen.routes[0].symbol, 'AAAA'); assert.equal(gen.routes[0].fee, 3000, 'tier with the most WETH wins');
@@ -55,11 +59,15 @@ assert.match(ex.FFFF.reasons[0], /StockFactory round-trip failed/);
 assert.match(ex.GGGG.reasons[0], /no Uniswap V3 WETH pool/); assert.equal(ex.GGGG.otherVenues.v3UsdgLiquid, true, 'the two-hop candidate is flagged');
 assert.match(ex.HHHH.reasons[0], /API status ASSET_STATUS_INACTIVE/);
 assert.match(ex.IIII.reasons[0], /sorts below WETH/);
+assert.match(ex.JJJJ.reasons[0], /in-range liquidity 30000000000000000 < 100000000000000000/, 'audit finding 7: thin in-range liquidity is excluded');
+assert.match(ex.KKKK.reasons[0], /manually disabled \(.*since 2026-09-08\): test override/, 'overrides file excludes a healthy asset');
+assert.deepEqual(gen.disabled.map((d) => d.symbol), ['KKKK'], 'the disabled list is carried into the routes file');
+assert.equal(gen.criteria.minInRangeLiquidity, '100000000000000000');
 for (const r of committedRoutesForTokenOrder()) assert.ok(BigInt(r.asset) > BigInt('0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73'), `${r.symbol}: WETH must be token0 for the adapter`);
 const cands = JSON.parse(fs.readFileSync(candOut, 'utf8'));
 assert.deepEqual(cands.candidates, [{ symbol: 'AAAA', name: 'AAAA • Robinhood Token', address: gen.routes[0].asset }]);
 // --include-unlisted admits EEEE
-execFileSync(process.execPath, ['scripts/ops/generate-stock-routes.mjs', '--in', inFile, '--min-weth', '1', '--include-unlisted', '--routes-out', routesOut, '--candidates-out', candOut], { stdio: ['ignore', 'ignore', 'inherit'] });
+execFileSync(process.execPath, ['scripts/ops/generate-stock-routes.mjs', '--in', inFile, '--min-weth', '1', '--include-unlisted', '--overrides', overridesFile, '--routes-out', routesOut, '--candidates-out', candOut], { stdio: ['ignore', 'ignore', 'inherit'] });
 assert.deepEqual(JSON.parse(fs.readFileSync(routesOut, 'utf8')).routes.map((r) => r.symbol), ['AAAA', 'EEEE']);
 console.log('1. generator: criteria, best tier, named exclusion reasons, --include-unlisted  OK');
 
@@ -81,6 +89,14 @@ assert.deepEqual([by.AAPL.asset, by.AAPL.pool, by.AAPL.fee], ['0xaF3D76f1834A1d4
 assert.deepEqual([by.TSLA.asset, by.TSLA.pool, by.TSLA.fee], ['0x322F0929c4625eD5bAd873c95208D54E1c003b2d', '0xA953CA88ff430e9487c60cA34d757414f4efdA07', 3000]);
 assert.deepEqual([by.NVDA.asset, by.NVDA.pool, by.NVDA.fee], ['0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC', '0x62AB521f71431f78ac374CdbadC6cda3c8916b6C', 500]);
 assert.deepEqual(committed.routes.map((r) => r.symbol), [...committed.routes.map((r) => r.symbol)].sort(), 'sorted by symbol');
+// audit 2026-09-08 finding 7: QUBT and BE are disabled via the overrides file and must not be routed / offered
+const overrides = JSON.parse(fs.readFileSync('config/loss-reward-stock-routes.overrides.json', 'utf8'));
+assert.deepEqual(overrides.disabled.map((d) => d.symbol).sort(), ['BE', 'QUBT']);
+for (const d of overrides.disabled) {
+  assert.ok(!committed.routes.some((r) => r.symbol === d.symbol || r.asset.toLowerCase() === d.asset.toLowerCase()), `${d.symbol} must not be routed while disabled`);
+  assert.ok(committed.excluded.some((e) => e.symbol === d.symbol && e.reasons.some((x) => /manually disabled/.test(x))), `${d.symbol} excluded with the override reason`);
+}
+assert.deepEqual(committed.disabled.map((d) => d.symbol), overrides.disabled.map((d) => d.symbol));
 console.log(`2. committed config: ${committed.count} routes, consistent, Phase-A pools intact  OK`);
 
 // 3. candidates mirror the routes

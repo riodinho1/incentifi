@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-07T23:30:40.474Z",
+  "generatedAt": "2026-09-08T10:24:34.938Z",
   "candidates": [
     {
       "symbol": "AAPL",
@@ -10,11 +10,6 @@
       "symbol": "BB",
       "name": "Blackberry • Robinhood Token",
       "address": "0x48E39E56aCdbA37b09020C0b734A613C9a2f100A"
-    },
-    {
-      "symbol": "BE",
-      "name": "Bloom Energy • Robinhood Token",
-      "address": "0x822CC93fFD030293E9842c30BBD678F530701867"
     },
     {
       "symbol": "COIN",
@@ -90,11 +85,6 @@
       "symbol": "QQQ",
       "name": "Invesco QQQ • Robinhood Token",
       "address": "0xD5f3879160bc7c32ebb4dC785F8a4F505888de68"
-    },
-    {
-      "symbol": "QUBT",
-      "name": "Quantum Computing • Robinhood Token",
-      "address": "0x59818904ab4cE163b3cE4FfB64f2D6Ca02c434B4"
     },
     {
       "symbol": "RBLX",

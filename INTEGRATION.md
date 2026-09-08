@@ -25,7 +25,9 @@ Welcome to the Incentifi Developer Integration Guide. This document provides com
 | :--- | :--- | :--- |
 | **IncentifiBondingCurveFactory** | `0xa0143de84fba1753b887e4e32941e4fb342e473f` | Registry & Curve Factory |
 | **IncentifiSwapRouter** | `0x4c1f4197b5eebb6cc15c37e053f963a56787575e` | Unified Universal Swap Gateway |
-| **LossRewardPool** | `0x697bda9db5a297a9cd9ed969bbf2549d0527dcdf` | Loss-Reward Staking & Protection Pool |
+| **LossRewardPool (V1, legacy)** | `0x697bda9db5a297a9cd9ed969bbf2549d0527dcdf` | Loss-reward pool for tokens launched before 2026-09-07; drains per token, receives no new deposits |
+| **LossRewardPoolV2** | `0x5d94246CD31064Da02E953DB357F0001F0E9A631` | Loss-reward pool since 2026-09-07 (ETH or creator-selected stock payouts); `RewardSwapperUniswapV3` `0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe` |
+| **IncentifiV4LegibleHook / Factory / FeeConverter** | `0x921d0bE20A21e5A687734b4dF6302EA55BD168C0` / `0xD4ce8F9577F3a865C3bA0c9d156f2b615df89Dda` / `0xe1BB0667d64683072BaeE03D8D9Feb201dcAF7D9` | New launches (legible Uniswap V4 pool, 2% LP fee split 1% creator / 1% loss pool) — see docs/V4_LEGIBLE_POOL_DESIGN.md |
 | **WETH** | `0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73` | Canonical Wrapped Ether |
 | **Uniswap V3 Factory** | `0x1f7d7550B1b028f7571E69A784071F0205FD2EfA` | Canonical DEX Factory |
 | **Uniswap V3 PositionManager** | `0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3` | Nonfungible Position Manager |
@@ -56,7 +58,7 @@ LP NFT permanently burned to 0x000000000000000000000000000000000000dEaD
 Trading routes via: IncentifiSwapRouter on Uniswap V3
 ```
 
-> **Important Fee Note**: The 2.0% protocol fee (1% Creator / 1% LossRewardPool) is enforced at the router/curve level. Direct public Uniswap trading after graduation may bypass Incentifi's router-level 2% fee; the fee is enforced when swapping through `IncentifiSwapRouter`.
+> **Important Fee Note** (V3 curves only): The 2.0% protocol fee (1% Creator / 1% LossRewardPool) is enforced at the router/curve level. Legible-pool tokens (launched after 2026-09-07) enforce the same 2% as a Uniswap V4 hook fee on every path instead — it cannot be bypassed. Direct public Uniswap trading after graduation may bypass Incentifi's router-level 2% fee; the fee is enforced when swapping through `IncentifiSwapRouter`.
 
 ---
 
