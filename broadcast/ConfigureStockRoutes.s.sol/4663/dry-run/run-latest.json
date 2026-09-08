@@ -1,0 +1,540 @@
+{
+  "transactions": [
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0x48E39E56aCdbA37b09020C0b734A613C9a2f100A",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0x183304567485e97e68835708f572aAA0e0E71d08, 10000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2476b",
+        "value": "0x0",
+        "input": "0xbcd525e600000000000000000000000048e39e56acdba37b09020c0b734a613c9a2f100a000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade000000000000000000000000183304567485e97e68835708f572aaa0e0e71d0800000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x128",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0x822CC93fFD030293E9842c30BBD678F530701867",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0xe3ECA0Fa4A9Bd2C90852c94FE4A756dA11300489, 3000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2476b",
+        "value": "0x0",
+        "input": "0xbcd525e6000000000000000000000000822cc93ffd030293e9842c30bbd678f530701867000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade000000000000000000000000e3eca0fa4a9bd2c90852c94fe4a756da113004890000000000000000000000000000000000000000000000000000000000000bb80000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x129",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0x6330D8C3178a418788dF01a47479c0ce7CCF450b",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0x6707aeAc7D0e519B083219d27BB427364363183A, 3000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2476b",
+        "value": "0x0",
+        "input": "0xbcd525e60000000000000000000000006330d8c3178a418788df01a47479c0ce7ccf450b000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade0000000000000000000000006707aeac7d0e519b083219d27bb427364363183a0000000000000000000000000000000000000000000000000000000000000bb80000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x12a",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0x4EA005168D7F09a7A0Ba9D1DEf21a479950E44C2",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0xc478A811a0002BE4321A142D5446247456b1cB05, 10000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2475c",
+        "value": "0x0",
+        "input": "0xbcd525e60000000000000000000000004ea005168d7f09a7a0ba9d1def21a479950e44c2000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade000000000000000000000000c478a811a0002be4321a142d5446247456b1cb0500000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x12b",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0xdF0992E440dD0be65BD8439b609d6D4366bf1CB5",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0x754DdD4bF8E8635B4301a7f4Af2Ea7A82AB6cEA7, 10000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2476b",
+        "value": "0x0",
+        "input": "0xbcd525e6000000000000000000000000df0992e440dd0be65bd8439b609d6d4366bf1cb5000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade000000000000000000000000754ddd4bf8e8635b4301a7f4af2ea7a82ab6cea700000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x12c",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0x1D11f0496982706C5e14A514D4E79F2e6BdE4516",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0x95DEF4ea143630d64CAA8F55F7570D8023f20265, 500, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2476b",
+        "value": "0x0",
+        "input": "0xbcd525e60000000000000000000000001d11f0496982706c5e14a514d4e79f2e6bde4516000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade00000000000000000000000095def4ea143630d64caa8f55f7570d8023f2026500000000000000000000000000000000000000000000000000000000000001f40000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x12d",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0xC9a981FEE1F9DEc688bb123ccDeCc63D0deBFC4e",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0x98996e833EA35EC17c3645Ca7b6Dd40d188564C4, 10000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2476b",
+        "value": "0x0",
+        "input": "0xbcd525e6000000000000000000000000c9a981fee1f9dec688bb123ccdecc63d0debfc4e000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade00000000000000000000000098996e833ea35ec17c3645ca7b6dd40d188564c400000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x12e",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0x1b0E319c6A659F002271B69dB8A7df2F911c153E",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0xc6BCC95043DC48C204bB2D57fb264a10Efe0a607, 500, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2475c",
+        "value": "0x0",
+        "input": "0xbcd525e60000000000000000000000001b0e319c6a659f002271b69db8a7df2f911c153e000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade000000000000000000000000c6bcc95043dc48c204bb2d57fb264a10efe0a60700000000000000000000000000000000000000000000000000000000000001f40000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x12f",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0x2e0847E8910a9732eB3fb1bb4b70a580ADAD4FE3",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0x8fB9301586f27e2cff85312F7c1d0F16C6167cdE, 100, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2475c",
+        "value": "0x0",
+        "input": "0xbcd525e60000000000000000000000002e0847e8910a9732eb3fb1bb4b70a580adad4fe3000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade0000000000000000000000008fb9301586f27e2cff85312f7c1d0f16c6167cde00000000000000000000000000000000000000000000000000000000000000640000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x130",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0xCceE82fE024c36fA15E1005edE3E9e4787e23D09",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0xd10E6245961D697d975963682ECe9979E9917fBC, 10000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2475c",
+        "value": "0x0",
+        "input": "0xbcd525e6000000000000000000000000ccee82fe024c36fa15e1005ede3e9e4787e23d09000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade000000000000000000000000d10e6245961d697d975963682ece9979e9917fbc00000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x131",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0x8005d266423c7ea827372c9c864491e5786600ea",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0x666bA98aB094793e276215448F2485FD8e3c3CE5, 3000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2475c",
+        "value": "0x0",
+        "input": "0xbcd525e60000000000000000000000008005d266423c7ea827372c9c864491e5786600ea000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade000000000000000000000000666ba98ab094793e276215448f2485fd8e3c3ce50000000000000000000000000000000000000000000000000000000000000bb80000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x132",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0xc0D6457C16Cc70d6790Dd43521C899C87ce02f35",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0xa4BdB396a69617eb7F70E2cc1EF526f7340b1B0d, 3000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2476b",
+        "value": "0x0",
+        "input": "0xbcd525e6000000000000000000000000c0d6457c16cc70d6790dd43521c899c87ce02f35000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade000000000000000000000000a4bdb396a69617eb7f70e2cc1ef526f7340b1b0d0000000000000000000000000000000000000000000000000000000000000bb80000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x133",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0x62fd0668e10D8B72339BE2DCF7643001688ff13B",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0x5201ea77c950aBB8d3706A20bF3b83d872E4A98b, 3000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2476b",
+        "value": "0x0",
+        "input": "0xbcd525e600000000000000000000000062fd0668e10d8b72339be2dcf7643001688ff13b000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade0000000000000000000000005201ea77c950abb8d3706a20bf3b83d872e4a98b0000000000000000000000000000000000000000000000000000000000000bb80000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x134",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0xec262a75e413fAfD0dF80480274532C79D42da09",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0x70504a6FafdbfB75fE971FAA4dD716e79aC5624c, 10000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2476b",
+        "value": "0x0",
+        "input": "0xbcd525e6000000000000000000000000ec262a75e413fafd0df80480274532c79d42da09000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade00000000000000000000000070504a6fafdbfb75fe971faa4dd716e79ac5624c00000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x135",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0xfF080c8ce2E5feadaCa0Da81314Ae59D232d4afD",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0x301F48EC369BB3bfA0bC04d44A79037aa0EE2340, 10000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2476b",
+        "value": "0x0",
+        "input": "0xbcd525e6000000000000000000000000ff080c8ce2e5feadaca0da81314ae59d232d4afd000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade000000000000000000000000301f48ec369bb3bfa0bc04d44a79037aa0ee234000000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x136",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0xD5f3879160bc7c32ebb4dC785F8a4F505888de68",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0xA40D00a55d43bA2d188039DCF88bD68f4F133E78, 3000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2475c",
+        "value": "0x0",
+        "input": "0xbcd525e6000000000000000000000000d5f3879160bc7c32ebb4dc785f8a4f505888de68000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade000000000000000000000000a40d00a55d43ba2d188039dcf88bd68f4f133e780000000000000000000000000000000000000000000000000000000000000bb80000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x137",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0x59818904ab4cE163b3cE4FfB64f2D6Ca02c434B4",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0xb0b255ecf93eE03E69B6780CB85da769c0C5E0Ea, 10000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2476b",
+        "value": "0x0",
+        "input": "0xbcd525e600000000000000000000000059818904ab4ce163b3ce4ffb64f2d6ca02c434b4000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade000000000000000000000000b0b255ecf93ee03e69b6780cb85da769c0c5e0ea00000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x138",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0xF0C4BF4C582cb3836e98394b1d4e7B7281101bE8",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0x6d25417718A8D6c529130a8ccC4BfBf0a18219D3, 3000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2476b",
+        "value": "0x0",
+        "input": "0xbcd525e6000000000000000000000000f0c4bf4c582cb3836e98394b1d4e7b7281101be8000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade0000000000000000000000006d25417718a8d6c529130a8ccc4bfbf0a18219d30000000000000000000000000000000000000000000000000000000000000bb80000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x139",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0x92FD66527192E3e61d4DDd13322Aa222DE86F9B5",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0x7F310e3D05E575Bd449E4484eF5Da15863ea43B1, 10000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2476b",
+        "value": "0x0",
+        "input": "0xbcd525e600000000000000000000000092fd66527192e3e61d4ddd13322aa222de86f9b5000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade0000000000000000000000007f310e3d05e575bd449e4484ef5da15863ea43b100000000000000000000000000000000000000000000000000000000000027100000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x13a",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0xB90A19fF0Af67f7779afF50A882A9CfF42446400",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0x995c1Ad5Eb998b1BdD89F515C4BB64760c411b62, 3000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2475c",
+        "value": "0x0",
+        "input": "0xbcd525e6000000000000000000000000b90a19ff0af67f7779aff50a882a9cff42446400000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade000000000000000000000000995c1ad5eb998b1bdd89f515c4bb64760c411b620000000000000000000000000000000000000000000000000000000000000bb80000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x13b",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0x4a0E65A3EcceC6dBe60AE065F2e7bb85Fae35eEa",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0xC3c9F0171490Ef0F4536fe493F3b0EbB5ee0CB5e, 500, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2476b",
+        "value": "0x0",
+        "input": "0xbcd525e60000000000000000000000004a0e65a3eccec6dbe60ae065f2e7bb85fae35eea000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade000000000000000000000000c3c9f0171490ef0f4536fe493f3b0ebb5ee0cb5e00000000000000000000000000000000000000000000000000000000000001f40000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x13c",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0x117cc2133c37B721F49dE2A7a74833232B3B4C0C",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0xDDCBBa3666f578E3F09516f21Ff85BFee859AB5e, 500, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2476b",
+        "value": "0x0",
+        "input": "0xbcd525e6000000000000000000000000117cc2133c37b721f49de2a7a74833232b3b4c0c000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade000000000000000000000000ddcbba3666f578e3f09516f21ff85bfee859ab5e00000000000000000000000000000000000000000000000000000000000001f40000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x13d",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    },
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+      "function": "setAssetRoute(address,(address,address,uint24,uint32,uint16,bool))",
+      "functionAbi": "function setAssetRoute(address asset, tuple(address swapper, address pool, uint24 fee, uint32 twapWindow, uint16 maxDeviationBps, bool enabled) route)",
+      "arguments": [
+        "0x58FfE4a942d3885bAa22D7520691F611EF09e7AA",
+        "(0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe, 0x91280dB3392EA92C08d8134b5760Fb4798B69547, 3000, 1800, 300, true)"
+      ],
+      "transaction": {
+        "from": "0x78a4e4bcc8ab559b6d3b1cb9eab0a04a2411c726",
+        "to": "0x5d94246cd31064da02e953db357f0001f0e9a631",
+        "gas": "0x2476b",
+        "value": "0x0",
+        "input": "0xbcd525e600000000000000000000000058ffe4a942d3885baa22d7520691f611ef09e7aa000000000000000000000000ede37d70ca99e25d501c780d6ed24307c63a3ade00000000000000000000000091280db3392ea92c08d8134b5760fb4798b695470000000000000000000000000000000000000000000000000000000000000bb80000000000000000000000000000000000000000000000000000000000000708000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x13e",
+        "chainId": "0x1237"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    }
+  ],
+  "receipts": [],
+  "libraries": [],
+  "pending": [],
+  "returns": {},
+  "timestamp": 1788825961603,
+  "chain": 4663,
+  "commit": "36bb308"
+}
