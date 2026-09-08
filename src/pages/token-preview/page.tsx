@@ -54,7 +54,9 @@ import {
   type HolderCostBasis,
   type ClaimableRewardsState,
 } from '../../lib/lossReward';
-import { fetchCreatorFeeStatus, claimCreatorFees, type CreatorFeeStatus } from '../../lib/creatorFees';
+import { fetchCreatorFeeStatus, claimCreatorFees, hasUncollectedFees, type CreatorFeeStatus } from '../../lib/creatorFees';
+import { fetchStockClaimDisplay, type StockClaimDisplay } from '../../lib/lossRewardDisplay';
+import { getLossPoolBalances, type LossPoolBalances } from '../../lib/lossReward';
 import { getTokenRewardAsset, formatRewardAssetBadge, type TokenRewardAsset } from '../../lib/rewardAssets';
 import {
   getStoredSession,
@@ -270,6 +272,10 @@ const TokenPreviewPage = () => {
     totalPendingEth: 0,
   });
   const [lossPoolTvl, setLossPoolTvl] = useState<number>(0);
+  // Per-pool unallocated balances (V2 = the pool the hook deposits into since the re-point; V1 = the legacy remainder).
+  const [lossPoolBalances, setLossPoolBalances] = useState<LossPoolBalances | null>(null);
+  // Stock-paying tokens: "≈ N GOOGL" for the claimable batch, or the below-minimum notice.
+  const [stockClaimDisplay, setStockClaimDisplay] = useState<StockClaimDisplay | null>(null);
   const [claiming, setClaiming] = useState(false);
   const [claimSuccessMsg, setClaimSuccessMsg] = useState<string | null>(null);
   const [unlocking, setUnlocking] = useState(false);
@@ -321,6 +327,7 @@ const TokenPreviewPage = () => {
     try {
       const tvl = await getLossRewardPoolTVL(tokenData.mintAddress);
       setLossPoolTvl(tvl);
+      getLossPoolBalances(tokenData.mintAddress).then((b) => setLossPoolBalances(b)).catch(() => setLossPoolBalances(null));
 
       if (!connectedWallet) {
         setCostBasisData(null);
@@ -1978,13 +1985,32 @@ const TokenPreviewPage = () => {
             {rewardAssetInfo?.forcedEth ? ' (forced)' : ''}
           </span>
         </div>
-        {/* Loss Pool TVL */}
-        <div className="flex items-center justify-between rounded-xl bg-[#070A12] px-3.5 py-2.5 border border-[#1D2940]">
-          <span className="text-[#8DA3CD]">Loss Pool Balance</span>
-          <span className="text-white font-bold text-xs sm:text-sm">
-            {lossPoolTvl > 0 ? `${lossPoolTvl.toFixed(4)} ${EVM_NATIVE_SYMBOL}` : '0.0000 ETH'}
-          </span>
-        </div>
+        {/* Loss Pool balance: V2's unallocated balance for this token (the pool the hook deposits into), plus any V1 remainder */}
+        {lossPoolBalances?.v2UnallocatedWei !== null && lossPoolBalances?.v2UnallocatedWei !== undefined ? (
+          <>
+            <div className="flex items-center justify-between rounded-xl bg-[#070A12] px-3.5 py-2.5 border border-[#1D2940]" data-testid="loss-pool-balance-v2">
+              <span className="text-[#8DA3CD]">Loss Pool Balance <span className="text-[#5C7399]">(V2, unallocated)</span></span>
+              <span className="text-white font-bold text-xs sm:text-sm">
+                {`${Number(formatEther(lossPoolBalances.v2UnallocatedWei)).toFixed(4)} ${EVM_NATIVE_SYMBOL}`}
+              </span>
+            </div>
+            {lossPoolBalances.v1UnallocatedWei > 0n && (
+              <div className="flex items-center justify-between rounded-xl bg-[#070A12] px-3.5 py-2.5 border border-[#1D2940]" data-testid="loss-pool-balance-v1">
+                <span className="text-[#8DA3CD]">Legacy pool remainder <span className="text-[#5C7399]">(V1, unallocated)</span></span>
+                <span className="text-white font-bold text-xs sm:text-sm">
+                  {`${Number(formatEther(lossPoolBalances.v1UnallocatedWei)).toFixed(4)} ${EVM_NATIVE_SYMBOL}`}
+                </span>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="flex items-center justify-between rounded-xl bg-[#070A12] px-3.5 py-2.5 border border-[#1D2940]">
+            <span className="text-[#8DA3CD]">Loss Pool Balance</span>
+            <span className="text-white font-bold text-xs sm:text-sm">
+              {lossPoolTvl > 0 ? `${lossPoolTvl.toFixed(4)} ${EVM_NATIVE_SYMBOL}` : '0.0000 ETH'}
+            </span>
+          </div>
+        )}
 
         {/* If wallet is connected but session is not authenticated yet, show gas-free Unlock CTA */}
         {connectedWallet && !getStoredSession(connectedWallet) && !costBasisData ? (
@@ -2078,12 +2104,17 @@ const TokenPreviewPage = () => {
 
             {/* Claim Reward Action */}
             <div className="rounded-xl bg-gradient-to-br from-[#0C1A30] to-[#0A1424] p-3.5 border border-[#23385D] space-y-2.5">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between" data-testid="claimable-rewards">
                 <span className="text-[#9FB0CF] text-xs">Claimable Rewards:</span>
-                <span className="text-white font-bold text-xs sm:text-sm">
-                  {claimableState.totalClaimableEth > 0 ? `${claimableState.totalClaimableEth.toFixed(5)} ${EVM_NATIVE_SYMBOL}` : '0.0000 ETH'}
+                <span className={`font-bold text-xs sm:text-sm ${stockClaimDisplay?.mode === 'stock' ? 'text-[#10B981]' : 'text-white'}`}>
+                  {stockClaimDisplay && stockClaimDisplay.mode !== 'eth'
+                    ? stockClaimDisplay.primary
+                    : claimableState.totalClaimableEth > 0 ? `${claimableState.totalClaimableEth.toFixed(5)} ${EVM_NATIVE_SYMBOL}` : '0.0000 ETH'}
                 </span>
               </div>
+              {stockClaimDisplay && stockClaimDisplay.mode !== 'eth' && stockClaimDisplay.secondary && (
+                <p className="text-[10px] text-[#8DA3CD] -mt-1.5" data-testid="claimable-rewards-secondary">{stockClaimDisplay.secondary}</p>
+              )}
 
               <button
                 onClick={handleClaimRewards}
@@ -2127,15 +2158,32 @@ const TokenPreviewPage = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tokenData?.mintAddress, connectedWallet]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!tokenData?.mintAddress || !rewardAssetInfo?.isStock) { setStockClaimDisplay(null); return; }
+    const totalWei = claimableState.unclaimedEpochs.reduce((acc, e) => acc + (e.amountWei ? BigInt(e.amountWei) : BigInt(Math.round(e.finalRewardEth * 1e18))), 0n);
+    fetchStockClaimDisplay(tokenData.mintAddress, totalWei, EVM_NATIVE_SYMBOL)
+      .then(({ display }) => { if (!cancelled) setStockClaimDisplay(display); })
+      .catch(() => { if (!cancelled) setStockClaimDisplay(null); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tokenData?.mintAddress, rewardAssetInfo?.isStock, rewardAssetInfo?.asset, claimableState.unclaimedEpochs]);
+
   const handleClaimCreatorFees = async () => {
     const wallet = connectedWallet || getWalletAccount();
-    if (!wallet || !tokenData?.mintAddress || !creatorFeeStatus || creatorFeeStatus.balanceWei === 0n) return;
+    if (!wallet || !tokenData?.mintAddress || !creatorFeeStatus) return;
+    if (creatorFeeStatus.balanceWei === 0n && !hasUncollectedFees(creatorFeeStatus)) return;
     try {
       setClaimingCreatorFees(true);
       setCreatorFeeMsg(null);
       const res = await claimCreatorFees(tokenData.mintAddress, wallet);
-      const shortTx = `${res.txHash.slice(0, 8)}...${res.txHash.slice(-6)}`;
-      setCreatorFeeMsg(`Claimed ${Number(res.claimedEth).toFixed(6)} ${EVM_NATIVE_SYMBOL} in creator fees (Tx: ${shortTx})`);
+      const short = (h: string) => `${h.slice(0, 8)}...${h.slice(-6)}`;
+      const collectPart = res.collectTxHash ? `Collected ${Number(res.collectedCreatorEth).toFixed(6)} ${EVM_NATIVE_SYMBOL} from the pool (Tx: ${short(res.collectTxHash)}). ` : '';
+      setCreatorFeeMsg(
+        res.txHash
+          ? `${collectPart}Claimed ${Number(res.claimedEth).toFixed(6)} ${EVM_NATIVE_SYMBOL} in creator fees (Tx: ${short(res.txHash)})`
+          : `${collectPart}Only token-side fees were collected; they become claimable ${EVM_NATIVE_SYMBOL} after the converter runs.`
+      );
       await loadCreatorFeeStatus();
       await refreshOnchainBalances();
     } catch (err: any) {
@@ -2152,6 +2200,11 @@ const TokenPreviewPage = () => {
     if (!connectedWallet || !creatorFeeStatus) return null;
     if (!creatorFeeStatus.isCreator && creatorFeeStatus.balanceWei === 0n) return null;
     const isV4 = creatorFeeStatus.source.kind === 'v4';
+    const isLegible = isV4 && creatorFeeStatus.source.kind === 'v4' && creatorFeeStatus.source.venue === 'legible';
+    const uncollected = creatorFeeStatus.uncollected;
+    const needsCollect = hasUncollectedFees(creatorFeeStatus);
+    const pendingTokens = creatorFeeStatus.pending?.pendingTokenWei ?? 0n;
+    const claimDisabled = claimingCreatorFees || (creatorFeeStatus.balanceWei === 0n && !needsCollect);
     return (
       <div className="bg-[#0B1120] border border-[#1D2940] rounded-2xl p-4 sm:p-5 shadow-xl shadow-black/20">
         <div className="flex items-center justify-between mb-1">
@@ -2166,18 +2219,32 @@ const TokenPreviewPage = () => {
           Signed and sent by your connected wallet.
         </p>
         <div className="rounded-xl bg-gradient-to-br from-[#0C1A30] to-[#0A1424] p-3.5 border border-[#23385D] space-y-2.5 text-xs">
-          <div className="flex items-center justify-between">
-            <span className="text-[#9FB0CF]">Accrued, unclaimed:</span>
+          {isLegible && (
+            <div className="flex items-center justify-between" data-testid="creator-fees-uncollected">
+              <span className="text-[#9FB0CF]">Accrued in pool (uncollected):</span>
+              <span className="text-white font-bold text-xs sm:text-sm">
+                {uncollected ? `${Number(formatEther(uncollected.creatorShare)).toFixed(6)} ${EVM_NATIVE_SYMBOL}` : '…'}
+              </span>
+            </div>
+          )}
+          {isLegible && uncollected && (uncollected.tokenFees > 0n || pendingTokens > 0n) && (
+            <p className="text-[10px] text-[#8DA3CD] -mt-1.5" data-testid="creator-fees-token-side">
+              + token-side fees ({Number(formatEther(uncollected.tokenFees + pendingTokens)).toLocaleString('en-US', { maximumFractionDigits: 0 })} {tokenData?.tokenSymbol || 'tokens'}) become {EVM_NATIVE_SYMBOL} when the converter runs; half is yours.
+            </p>
+          )}
+          <div className="flex items-center justify-between" data-testid="creator-fees-ready">
+            <span className="text-[#9FB0CF]">{isLegible ? 'Ready to claim:' : 'Accrued, unclaimed:'}</span>
             <span className="text-white font-bold text-xs sm:text-sm">
               {creatorFeeStatus.balanceWei > 0n ? `${creatorFeeStatus.balanceEth.toFixed(6)} ${EVM_NATIVE_SYMBOL}` : '0.000000 ETH'}
             </span>
           </div>
           <button
             onClick={handleClaimCreatorFees}
-            disabled={claimingCreatorFees || creatorFeeStatus.balanceWei === 0n}
+            disabled={claimDisabled}
+            data-testid="creator-fees-claim"
             className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#0EA5E9] to-[#0284C7] hover:from-[#0284C7] hover:to-[#0369A1] text-white font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2 shadow-md shadow-sky-500/20"
           >
-            {claimingCreatorFees ? <span>Claiming...</span> : <span>Claim Creator Fees</span>}
+            {claimingCreatorFees ? <span>{needsCollect ? 'Collecting & claiming...' : 'Claiming...'}</span> : <span>{needsCollect ? 'Collect & Claim Creator Fees (2 transactions)' : 'Claim Creator Fees'}</span>}
           </button>
           {creatorFeeMsg && <p className="text-center text-sky-300 text-[11px] font-medium">{creatorFeeMsg}</p>}
         </div>

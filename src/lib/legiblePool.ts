@@ -96,7 +96,7 @@ export function gasLimitWithHeadroom(estimate: bigint, floor: bigint = 0n): bigi
  * eth_estimateGas through the wallet provider, then +30% with a floor. Never returns the bare
  * estimate (see the module header for the 2026-09-07 out-of-gas at 194,373).
  */
-async function estimateGasWithHeadroom(
+export async function estimateGasWithHeadroom(
   provider: { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> },
   tx: { from: string; to: string; data: string; value?: string },
   floor: bigint

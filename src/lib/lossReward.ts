@@ -348,6 +348,26 @@ export const claimBatchRewards = async (
   return { success: true, txHash: txHashes[0], txHashes, claimedEth: formatEther(totalWei) };
 };
 
+export type LossPoolBalances = {
+  /** LossRewardPoolV2.getUnallocatedBalance(token) — null when V2 is not configured. */
+  v2UnallocatedWei: bigint | null;
+  /** The V1 pool's unallocated balance (drains per token, then stays 0). */
+  v1UnallocatedWei: bigint;
+};
+
+/**
+ * Per-pool unallocated balances for a token, read on-chain (no DB snapshot: the snapshot's
+ * loss_pool_tvl_eth predates V2 and cannot say which pool it describes).
+ */
+export const getLossPoolBalances = async (tokenAddress: string): Promise<LossPoolBalances> => {
+  const tokenAddr = getAddress(tokenAddress);
+  const read = async (pool: `0x${string}`) =>
+    BigInt((await publicClient.readContract({ address: pool, abi: LOSS_POOL_ABI, functionName: 'getUnallocatedBalance', args: [tokenAddr] } as any)) as bigint);
+  const v1 = await read(getAddress(LOSS_REWARD_POOL)).catch(() => 0n);
+  const v2 = isV2Configured() ? await read(getAddress(LOSS_REWARD_POOL_V2)).catch(() => null) : null;
+  return { v2UnallocatedWei: v2, v1UnallocatedWei: v1 };
+};
+
 /**
  * Query the total available ETH in the token's Loss Reward Pool.
  */

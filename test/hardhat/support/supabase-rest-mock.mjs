@@ -86,6 +86,13 @@ export function createSupabaseRestMock(supabaseUrl, passthroughFetch = globalThi
       const dot = raw.indexOf('.');
       const op = raw.slice(0, dot);
       const val = coercePrimitive(raw.slice(dot + 1));
+      // Ordering: numeric when both sides parse as numbers, else lexicographic (ISO timestamps,
+      // which PostgREST compares as timestamptz and which sort correctly as strings).
+      const cmp = (a, b) => {
+        const na = Number(a); const nb = Number(b);
+        if (a !== '' && b !== '' && !Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+        return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
+      };
       result = result.filter((row) => {
         const rv = normalize(row[key]);
         const cv = normalize(val);
@@ -93,13 +100,18 @@ export function createSupabaseRestMock(supabaseUrl, passthroughFetch = globalThi
           case 'eq':
             return rv === cv;
           case 'gt':
-            return Number(row[key]) > Number(val);
+            return cmp(row[key], val) > 0;
           case 'gte':
-            return Number(row[key]) >= Number(val);
+            return cmp(row[key], val) >= 0;
           case 'lt':
-            return Number(row[key]) < Number(val);
+            return cmp(row[key], val) < 0;
           case 'lte':
-            return Number(row[key]) <= Number(val);
+            return cmp(row[key], val) <= 0;
+          case 'in': {
+            // PostgREST: in.(a,b,c)
+            const list = String(raw.slice(dot + 1)).replace(/^\(|\)$/g, '').split(',').map((v) => normalize(coercePrimitive(v.trim().replace(/^"|"$/g, ''))));
+            return list.includes(rv);
+          }
           default:
             throw new Error(`[supabase-rest-mock] unsupported filter operator "${op}" for key "${key}"`);
         }

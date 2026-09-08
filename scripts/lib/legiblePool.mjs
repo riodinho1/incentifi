@@ -27,6 +27,18 @@ export const LEGIBLE_FACTORY_ABI = parseAbi([
 export const LEGIBLE_HOOK_ABI = parseAbi([
   'function curveStates(bytes32 poolId) view returns (address token, address creator, bool initialized, bool graduated, uint256 realEthReserve, uint256 realTokenReserve)',
   'function creatorBalances(address creator) view returns (uint256)',
+  'function poolIdOf(address token) view returns (bytes32)',
+  'function tokenStates(bytes32 poolId) view returns ((address token, address creator, bool initialized, bool curveSeeded, bool graduated, uint256 curveTokens, uint256 reserveTokens, uint256 finalEthReserve, uint256 finalTokenReserve, uint128 graduatedLiquidity))',
+  'function collect(address token)',
+  'function feeConverter() view returns (address)',
+  'event FeesCollected(bytes32 indexed poolId, uint256 ethFees, uint256 tokenFees, uint256 creatorShare, uint256 lossPoolShare)',
+]);
+
+export const LEGIBLE_CONVERTER_ABI = parseAbi([
+  'function pendingTokenFees(address token) view returns (uint256)',
+  'function checkpointEthValue(address token, uint256 tokenAmount) view returns (uint256)',
+  'function convert(address token, uint256 amount, uint256 minEthOut) returns (uint256 ethOut)',
+  'event Converted(address indexed token, uint256 tokensIn, uint256 ethOut, uint256 creatorShare, uint256 lossPoolShare)',
 ]);
 
 /**
@@ -46,7 +58,58 @@ export const TOKEN_LAUNCHED_EVENT = parseAbiItem('event TokenLaunched(address in
 const STATE_VIEW_ABI = parseAbi([
   'function getSlot0(bytes32 poolId) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)',
   'function getLiquidity(bytes32 poolId) view returns (uint128 liquidity)',
+  'function getPositionInfo(bytes32 poolId, address owner, int24 tickLower, int24 tickUpper, bytes32 salt) view returns (uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128)',
+  'function getFeeGrowthInside(bytes32 poolId, int24 tickLower, int24 tickUpper) view returns (uint256 feeGrowthInside0X128, uint256 feeGrowthInside1X128)',
 ]);
+
+// The hook's positions (IncentifiV4LegibleHook): the curve position [TICK_LOWER, TICK_UPPER] with
+// salt 0 before graduation; a full-range position with salt 1 after.
+export const LEGIBLE_TICK_LOWER = 174070;
+export const LEGIBLE_TICK_UPPER = 200310;
+export const LEGIBLE_TICK_SPACING = 10;
+export const LEGIBLE_CURVE_SALT = '0x0000000000000000000000000000000000000000000000000000000000000000';
+export const LEGIBLE_GRADUATED_SALT = '0x0000000000000000000000000000000000000000000000000000000000000001';
+const MIN_USABLE_TICK = -887270; // TickMath.minUsableTick(10)
+const MAX_USABLE_TICK = 887270;
+const MASK_256 = (1n << 256n) - 1n;
+
+/**
+ * Pure: what a collect() would take from a V4 position right now — Uniswap v4's
+ * FullMath.mulDiv(feeGrowthInside - feeGrowthInsideLast (mod 2^256), liquidity, Q128) per currency.
+ * currency0 = ETH, currency1 = the token. Exported for tests.
+ */
+export function uncollectedFeesFromGrowth({ liquidity, feeGrowthInside0X128, feeGrowthInside1X128, feeGrowthInside0LastX128, feeGrowthInside1LastX128 }) {
+  const L = BigInt(liquidity);
+  const d0 = (BigInt(feeGrowthInside0X128) - BigInt(feeGrowthInside0LastX128)) & MASK_256;
+  const d1 = (BigInt(feeGrowthInside1X128) - BigInt(feeGrowthInside1LastX128)) & MASK_256;
+  return { ethFees: (d0 * L) >> 128n, tokenFees: (d1 * L) >> 128n };
+}
+
+/** The hook's fee split (IncentifiV4LegibleHook._distribute): ETH 50/50 creator / loss pool; tokens to the converter. */
+export function splitCollectedFees(ethFees, tokenFees) {
+  const creatorShare = BigInt(ethFees) / 2n;
+  return { creatorShare, lossPoolShare: BigInt(ethFees) - creatorShare, tokenFeesToConverter: BigInt(tokenFees) };
+}
+
+/**
+ * Simulates hook.collect(token) without a transaction: reads the hook's position checkpoint and the
+ * pool's fee growth (StateView) and applies the same formula the PoolManager uses. Returns the ETH and
+ * token fees collect() would emit in FeesCollected, plus the split.
+ */
+export async function computeUncollectedLegibleFees(client, tokenAddress) {
+  const token = getAddress(tokenAddress);
+  const poolId = await client.readContract({ address: INCENTIFI_LEGIBLE_HOOK, abi: LEGIBLE_HOOK_ABI, functionName: 'poolIdOf', args: [token] });
+  const state = await client.readContract({ address: INCENTIFI_LEGIBLE_HOOK, abi: LEGIBLE_HOOK_ABI, functionName: 'tokenStates', args: [poolId] });
+  if (!state.curveSeeded) return { poolId, ethFees: 0n, tokenFees: 0n, creatorShare: 0n, lossPoolShare: 0n, tokenFeesToConverter: 0n, graduated: false, seeded: false, creator: state.creator };
+  const [tl, tu, salt] = state.graduated ? [MIN_USABLE_TICK, MAX_USABLE_TICK, LEGIBLE_GRADUATED_SALT] : [LEGIBLE_TICK_LOWER, LEGIBLE_TICK_UPPER, LEGIBLE_CURVE_SALT];
+  const [pos, inside] = await Promise.all([
+    client.readContract({ address: UNISWAP_V4_STATE_VIEW, abi: STATE_VIEW_ABI, functionName: 'getPositionInfo', args: [poolId, INCENTIFI_LEGIBLE_HOOK, tl, tu, salt] }),
+    client.readContract({ address: UNISWAP_V4_STATE_VIEW, abi: STATE_VIEW_ABI, functionName: 'getFeeGrowthInside', args: [poolId, tl, tu] }),
+  ]);
+  const { ethFees, tokenFees } = uncollectedFeesFromGrowth({ liquidity: pos[0], feeGrowthInside0X128: inside[0], feeGrowthInside1X128: inside[1], feeGrowthInside0LastX128: pos[1], feeGrowthInside1LastX128: pos[2] });
+  return { poolId, ethFees, tokenFees, ...splitCollectedFees(ethFees, tokenFees), graduated: Boolean(state.graduated), seeded: true, creator: state.creator };
+}
+
 
 export const TOTAL_TOKEN_SUPPLY = 1_000_000_000n * 10n ** 18n;
 export const GRADUATION_ETH_TARGET = 5_853_863_234_375_000_000n;
