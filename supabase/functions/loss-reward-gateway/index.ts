@@ -5,7 +5,6 @@ import {
   verifyMessage,
   createPublicClient,
   createWalletClient,
-  http,
   parseAbi,
   parseEther,
   formatEther,
@@ -13,6 +12,7 @@ import {
 import { privateKeyToAccount } from 'npm:viem@2.55.2/accounts';
 import { planClaimTransactions, poolAddressForRow } from './claim-plan.mjs';
 import { createAssetsProxy } from './assets-proxy.mjs';
+import { createFailoverRpc, parseRpcUrls } from './rpc-failover.mjs';
 
 // ----------------------------------------------------------------------------
 // CORS & Configuration
@@ -40,7 +40,11 @@ if (!SESSION_SECRET) {
   );
 }
 
-const RPC_URL = Deno.env.get('RPC_URL') || Deno.env.get('VITE_EVM_RPC_URL') || Deno.env.get('EVM_RPC_URL') || 'https://rpc.mainnet.chain.robinhood.com';
+// RPC_URLS (comma-separated) with failover — same module as the indexer/worker (rpc-failover.mjs is a copy
+// with the Deno import specifier; test/rpc-failover.test.mjs keeps them in sync). Legacy RPC_URL still works.
+const RPC_URLS: string[] = parseRpcUrls({ RPC_URLS: Deno.env.get('RPC_URLS') || '', RPC_URL: Deno.env.get('RPC_URL') || '', VITE_EVM_RPC_URL: Deno.env.get('VITE_EVM_RPC_URL') || '', EVM_RPC_URL: Deno.env.get('EVM_RPC_URL') || '' });
+const rpcFailover = createFailoverRpc(RPC_URLS, { name: 'gateway', timeoutMs: 15_000 });
+const rpcTransport = rpcFailover.transport;
 const LOSS_REWARD_POOL_ADDRESS = Deno.env.get('LOSS_REWARD_POOL_ADDRESS') || Deno.env.get('VITE_LOSS_REWARD_POOL') || '0x697bda9db5a297a9cd9ed969bbf2549d0527dcdf';
 // LossRewardPoolV2 — no fallback: not deployed yet. While unset, every epoch is a V1 epoch and a
 // row tagged with any other pool is refused rather than guessed.
@@ -571,7 +575,7 @@ export async function handleQuery(req: Request): Promise<Response> {
     const staleIds: number[] = [];
 
     if (candidateRows.length > 0) {
-      const publicClient = createPublicClient({ transport: http(RPC_URL) });
+      const publicClient = createPublicClient({ transport: rpcTransport });
 
       for (const d of candidateRows) {
         const epochNumber = Number(d.reward_epochs?.epoch_number || d.epoch_id);
@@ -747,7 +751,7 @@ export async function handleClaim(req: Request): Promise<Response> {
   // 2. Reconcile on-chain hasClaimed status (FAIL CLOSED ON RPC ERROR)
   let publicClient: any;
   try {
-    publicClient = createPublicClient({ transport: http(RPC_URL) });
+    publicClient = createPublicClient({ transport: rpcTransport });
   } catch (err: any) {
     console.error('Failed to initialize EVM public client:', err);
     return new Response(
@@ -837,7 +841,7 @@ export async function handleClaim(req: Request): Promise<Response> {
   const account = privateKeyToAccount(formattedKey);
   const walletClient = createWalletClient({
     account,
-    transport: http(RPC_URL),
+    transport: rpcTransport,
   });
 
   // 3b. One transaction per pool: V1 epochs -> claimReward/claimBatch on V1 (the V1 ABI has no

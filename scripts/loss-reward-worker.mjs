@@ -3,7 +3,6 @@ import {
   createPublicClient,
   parseAbiItem,
   createWalletClient,
-  http,
   parseAbi,
   getAddress,
   encodeAbiParameters,
@@ -17,6 +16,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { createServer as createViteServer } from 'vite';
 import fs from 'fs';
 import { isLegibleToken, fetchLegibleState, computeUncollectedLegibleFees, INCENTIFI_LEGIBLE_HOOK, INCENTIFI_LEGIBLE_FEE_CONVERTER, LEGIBLE_HOOK_ABI, LEGIBLE_CONVERTER_ABI } from './lib/legiblePool.mjs';
+import { createFailoverRpc, parseRpcUrls } from './lib/rpcFailover.mjs';
 
 // ============================================================================
 // CRASH-RECOVERY & IDEMPOTENCY MATRIX
@@ -95,7 +95,10 @@ if (fs.existsSync('.env.local')) {
 }
 
 // Environment Configuration with safe defaults
-const RPC_URL = process.env.VITE_EVM_RPC_URL || process.env.EVM_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com';
+// RPC_URLS (comma-separated) with failover (scripts/lib/rpcFailover.mjs); legacy single variable still honoured.
+const RPC_URLS = parseRpcUrls(process.env);
+export const rpcFailover = createFailoverRpc(RPC_URLS, { name: 'worker', timeoutMs: Number(process.env.RPC_TIMEOUT_MS || 20_000) });
+const rpcTransport = rpcFailover.transport;
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
 const OPERATOR_PRIVATE_KEY = process.env.OPERATOR_PRIVATE_KEY || '';
@@ -207,7 +210,7 @@ export function applyOnChainBalanceCap(holder, onChainBalanceTokens) {
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-const publicClient = createPublicClient({ transport: http(RPC_URL) });
+const publicClient = createPublicClient({ transport: rpcTransport });
 
 const ERC20_BALANCE_ABI = parseAbi(['function balanceOf(address account) view returns (uint256)']);
 
@@ -715,7 +718,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
             if (currentPoolEth >= requiredEth && requiredEth > 0) {
               console.log(`[PENDING EPOCH RESOLUTION] Pool ${pendingPool} funded (${currentPoolEth.toFixed(6)} ETH >= ${requiredEth.toFixed(6)} ETH). Publishing Epoch #${pending.epoch_number}...`);
               const account = privateKeyToAccount(OPERATOR_PRIVATE_KEY);
-              const walletClient = createWalletClient({ account, transport: http(RPC_URL) });
+              const walletClient = createWalletClient({ account, transport: rpcTransport });
               const totalAllocatedWei = BigInt(Math.round(requiredEth * 1e18));
 
               const txHash = await walletClient.writeContract({
@@ -1039,7 +1042,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
           const account = privateKeyToAccount(OPERATOR_PRIVATE_KEY);
           const walletClient = createWalletClient({
             account,
-            transport: http(RPC_URL),
+            transport: rpcTransport,
           });
 
           const totalAllocatedWei = allocatedWei; // exact sum of the leaves
@@ -1347,7 +1350,7 @@ export async function collectLegibleFees(options = {}) {
   let walletClient = options.walletClient ?? null;
   if (!walletClient && !dryRun) {
     if (!OPERATOR_PRIVATE_KEY) { log('[FEE COLLECT] OPERATOR_PRIVATE_KEY unset - skipping fee collection'); return []; }
-    walletClient = createWalletClient({ account: privateKeyToAccount(OPERATOR_PRIVATE_KEY), transport: http(RPC_URL) });
+    walletClient = createWalletClient({ account: privateKeyToAccount(OPERATOR_PRIVATE_KEY), transport: rpcTransport });
   }
   const account = walletClient ? walletClient.account : null;
 
