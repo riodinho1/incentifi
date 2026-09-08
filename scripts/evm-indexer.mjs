@@ -1,7 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import {
   createPublicClient,
-  http,
   parseAbi,
   parseAbiItem,
   getAddress,
@@ -15,6 +14,7 @@ import {
   LEGIBLE_HOOK_EVENTS,
   fetchLegibleState,
 } from './lib/legiblePool.mjs';
+import { createFailoverRpc, parseRpcUrls } from './lib/rpcFailover.mjs';
 
 // Robust .env.local loader
 if (fs.existsSync('.env.local')) {
@@ -35,7 +35,9 @@ if (fs.existsSync('.env.local')) {
 }
 
 // Environment variables
-const RPC_URL = process.env.VITE_EVM_RPC_URL || process.env.EVM_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com';
+// RPC_URLS (comma-separated) with failover; falls back to the single legacy variable / the public endpoint.
+const RPC_URLS = parseRpcUrls(process.env);
+export const rpcFailover = createFailoverRpc(RPC_URLS, { name: 'indexer', timeoutMs: Number(process.env.RPC_TIMEOUT_MS || 20_000) });
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
@@ -54,7 +56,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 });
 
 const client = createPublicClient({
-  transport: http(RPC_URL, { batch: true, retryCount: 3, retryDelay: 1000 }),
+  transport: rpcFailover.transport, // rotates endpoints on malformed / 5xx / timeout; see scripts/lib/rpcFailover.mjs
 });
 
 const FACTORY_ABI = parseAbi([
@@ -140,7 +142,10 @@ const REFERENCE_ETH_USD = 2500;
 // from a wide starting point and confirming it still finds the real, known TokenLaunched
 // events (TESTTT among them) with room to spare — comfortably before the V4 factory's
 // actual deployment, not an exact value that could go stale as more blocks pass.
-const V4_DISCOVERY_FLOOR_BLOCK = 54_600_000n;
+const V4_DISCOVERY_FLOOR_BLOCK = BigInt(process.env.V4_DISCOVERY_FLOOR_BLOCK || 54_600_000); // env override: tests
+// Discovery getLogs chunk. 2,000 blocks (was 5,000): the public RPC's per-call cost and failure rate grow
+// with the range, and a smaller chunk loses less on a rotation. Override with V4_DISCOVERY_CHUNK_BLOCKS.
+export const V4_DISCOVERY_CHUNK_BLOCKS = BigInt(process.env.V4_DISCOVERY_CHUNK_BLOCKS || 2000);
 
 // This process indexes on-chain trade events into `holder_cost_basis` for ALL
 // registered tokens in one loop (not one worker per token), so it reports a single
@@ -630,9 +635,11 @@ export async function recordIndexedToken({ tokenAddr, symbol, venue, hookAddr, f
       updated_at: new Date().toISOString(),
     };
     const { error } = await db.from('indexed_tokens').upsert(row, { onConflict: 'mint_address' });
-    if (error) console.warn(`[V4 DISCOVERY] indexed_tokens upsert skipped for ${tokenAddr}: ${error.message}`);
+    if (error) { console.warn(`[V4 DISCOVERY] indexed_tokens upsert skipped for ${tokenAddr}: ${error.message}`); return false; }
+    return true;
   } catch (err) {
     console.warn(`[V4 DISCOVERY] indexed_tokens upsert skipped for ${tokenAddr}: ${err.message}`);
+    return false;
   }
 }
 
@@ -648,7 +655,7 @@ export async function recordIndexedToken({ tokenAddr, symbol, venue, hookAddr, f
  * function is also used for the one-time historical catch-up, where there is no "next
  * tick" to self-heal on).
  */
-export async function discoverV4TokensInRange(fromBlock, toBlock, { chunkSize = 5000n, factory = INCENTIFI_V4_FACTORY, hook = null } = {}) {
+export async function discoverV4TokensInRange(fromBlock, toBlock, { chunkSize = V4_DISCOVERY_CHUNK_BLOCKS, factory = INCENTIFI_V4_FACTORY, hook = null } = {}) {
   // Which hook this factory's pools are bound to: the legible factory's is a known constant;
   // the GenericSell factory's is read from-chain (its `hook()` immutable) as before.
   const hookAddr = (hook || (factory.toLowerCase() === INCENTIFI_LEGIBLE_FACTORY.toLowerCase() ? INCENTIFI_LEGIBLE_HOOK : await getV4HookAddress())).toLowerCase();
@@ -681,9 +688,11 @@ export async function discoverV4TokensInRange(fromBlock, toBlock, { chunkSize = 
         v4TokenHook.set(tokenAddr, hookAddr);
         console.log(`[V4 DISCOVERY] Found V4 token ${symbol} (${tokenAddr}) on the ${label} hook ${hookAddr}, launched at block ${log.blockNumber}, poolId ${log.args.poolId}`);
         await tagTokenHookInDb(tokenAddr, hookAddr);
-        await recordIndexedToken({ tokenAddr, symbol, venue: label === 'legible' ? 'legible' : 'v4-generic', hookAddr, factory: getAddress(factory).toLowerCase(), creator: log.args.creator, poolId: log.args.poolId, block: log.blockNumber });
+        const recorded = await recordIndexedToken({ tokenAddr, symbol, venue: label === 'legible' ? 'legible' : 'v4-generic', hookAddr, factory: getAddress(factory).toLowerCase(), creator: log.args.creator, poolId: log.args.poolId, block: log.blockNumber });
+        if (!recorded) blockDiscoveryPersistence(`indexed_tokens row for ${tokenAddr} not written`);
       } catch (err) {
         console.warn(`[V4 DISCOVERY] Could not read symbol() for newly-discovered V4 token ${tokenAddr}: ${err.message}`);
+        blockDiscoveryPersistence(`token ${tokenAddr} at block ${log.blockNumber} not cached`);
       }
     }
 
@@ -815,11 +824,13 @@ export async function updateV4MarketSnapshot(tokenAddress, symbol, fetchV4CurveS
  * best-effort startup step.
  */
 export async function advanceV4Discovery(toBlock) {
+  await restoreDiscoveryState();
   let from = v4LastScannedBlock === null ? V4_DISCOVERY_FLOOR_BLOCK : v4LastScannedBlock + 1n;
   while (from <= toBlock) {
-    const to = from + 5000n > toBlock ? toBlock : from + 5000n;
+    const to = from + V4_DISCOVERY_CHUNK_BLOCKS > toBlock ? toBlock : from + V4_DISCOVERY_CHUNK_BLOCKS;
     await discoverV4TokensInRange(from, to, { factory: INCENTIFI_V4_FACTORY });
     v4LastScannedBlock = to;
+    await persistDiscoveryCursor(CURSOR_GENERIC_SELL, to);
     from = to + 1n;
   }
   // The legible factory (PR #17) is a second, independent source with the same guarantees:
@@ -827,11 +838,94 @@ export async function advanceV4Discovery(toBlock) {
   // discovered would have its trades skipped for good — the same phantom-payout hole).
   let lfrom = legibleLastScannedBlock === null ? LEGIBLE_DISCOVERY_FLOOR_BLOCK : legibleLastScannedBlock + 1n;
   while (lfrom <= toBlock) {
-    const to = lfrom + 5000n > toBlock ? toBlock : lfrom + 5000n;
+    const to = lfrom + V4_DISCOVERY_CHUNK_BLOCKS > toBlock ? toBlock : lfrom + V4_DISCOVERY_CHUNK_BLOCKS;
     await discoverV4TokensInRange(lfrom, to, { factory: INCENTIFI_LEGIBLE_FACTORY, hook: INCENTIFI_LEGIBLE_HOOK });
     legibleLastScannedBlock = to;
+    await persistDiscoveryCursor(CURSOR_LEGIBLE, to);
     lfrom = to + 1n;
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Discovery persistence (2026-09-08): the scanned-through cursors live in `indexer_cursors`
+// (supabase/indexer_cursors.sql) and the discovered tokens in `indexed_tokens`, so a restart resumes
+// instead of rescanning ~3M blocks from the floors through a rate-limited RPC. A cursor is adopted ONLY
+// if the token caches could be rebuilt from indexed_tokens (every row needs its pool_id); otherwise the
+// process falls back to a full rescan, which is always correct, just slow. Both tables are optional:
+// missing -> log once, behave exactly as before.
+// ---------------------------------------------------------------------------------------------
+export const CURSOR_GENERIC_SELL = 'v4_discovery_generic_sell';
+export const CURSOR_LEGIBLE = 'v4_discovery_legible';
+let discoveryRestoreAttempted = false;
+let cursorPersistWarned = false;
+// Set when a discovered token could not be cached or written to indexed_tokens: from then on this
+// process keeps its (correct) in-memory cursors but stops persisting them, so a restart resumes from
+// the last cursor BEFORE the missing token and rediscovers it. Persisting past it would lose the token
+// for good (the same phantom-payout hole PR #16 closed).
+let discoveryPersistBlocked = null;
+function blockDiscoveryPersistence(reason) {
+  if (discoveryPersistBlocked) return;
+  discoveryPersistBlocked = reason;
+  console.warn(`[V4 DISCOVERY] cursor persistence stopped for this process (${reason}); the next restart rescans from the last persisted cursor`);
+}
+
+export async function persistDiscoveryCursor(name, block, db = supabase) {
+  if (discoveryPersistBlocked) return;
+  try {
+    const { error } = await db.from('indexer_cursors').upsert({ name, block: Number(block), updated_at: new Date().toISOString() }, { onConflict: 'name' });
+    if (error && !cursorPersistWarned) { cursorPersistWarned = true; console.warn(`[V4 DISCOVERY] cursor not persisted (${error.message}); apply supabase/indexer_cursors.sql to make discovery resumable across restarts`); }
+  } catch (err) {
+    if (!cursorPersistWarned) { cursorPersistWarned = true; console.warn(`[V4 DISCOVERY] cursor not persisted (${err.message})`); }
+  }
+}
+
+/**
+ * Rebuilds the in-memory discovery caches from indexed_tokens and adopts the persisted cursors.
+ * Runs once per process (first advanceV4Discovery / warm-up). Exported for tests; `force` re-runs it.
+ */
+export async function restoreDiscoveryState({ db = supabase, force = false } = {}) {
+  if (discoveryRestoreAttempted && !force) return { restored: false, reason: 'already attempted' };
+  discoveryRestoreAttempted = true;
+  if (v4LastScannedBlock !== null || legibleLastScannedBlock !== null) return { restored: false, reason: 'in-memory state present' };
+  let cursors;
+  try {
+    const { data, error } = await db.from('indexer_cursors').select('name, block');
+    if (error) { console.log(`[V4 DISCOVERY] no persisted cursors (${error.message}); scanning from the floors`); return { restored: false, reason: error.message }; }
+    cursors = Object.fromEntries((data || []).map((r) => [r.name, BigInt(r.block)]));
+  } catch (err) {
+    console.log(`[V4 DISCOVERY] no persisted cursors (${err.message}); scanning from the floors`); return { restored: false, reason: err.message };
+  }
+  if (cursors[CURSOR_GENERIC_SELL] === undefined && cursors[CURSOR_LEGIBLE] === undefined) return { restored: false, reason: 'no cursor rows' };
+  let rows;
+  try {
+    const { data, error } = await db.from('indexed_tokens').select('mint_address, symbol, venue, hook_address, pool_id');
+    if (error) { console.log(`[V4 DISCOVERY] indexed_tokens unavailable (${error.message}); ignoring cursors and scanning from the floors`); return { restored: false, reason: error.message }; }
+    rows = data || [];
+  } catch (err) {
+    console.log(`[V4 DISCOVERY] indexed_tokens unavailable (${err.message}); ignoring cursors and scanning from the floors`); return { restored: false, reason: err.message };
+  }
+  const v4Rows = rows.filter((r) => r.venue === 'legible' || r.venue === 'v4-generic');
+  if (v4Rows.some((r) => !r.pool_id || !r.hook_address || !r.symbol)) {
+    console.log('[V4 DISCOVERY] indexed_tokens has rows without pool_id/hook/symbol; ignoring cursors and scanning from the floors');
+    return { restored: false, reason: 'incomplete indexed_tokens rows' };
+  }
+  for (const r of v4Rows) {
+    const tokenAddr = String(r.mint_address).toLowerCase(); const hookAddr = String(r.hook_address).toLowerCase(); const poolId = String(r.pool_id).toLowerCase();
+    v4TokenSymbolCache.set(tokenAddr, r.symbol);
+    v4PoolIdToToken.set(poolId, tokenAddr);
+    v4PoolIdToHook.set(poolId, hookAddr);
+    v4TokenHook.set(tokenAddr, hookAddr);
+  }
+  if (cursors[CURSOR_GENERIC_SELL] !== undefined && cursors[CURSOR_GENERIC_SELL] >= V4_DISCOVERY_FLOOR_BLOCK) v4LastScannedBlock = cursors[CURSOR_GENERIC_SELL];
+  if (cursors[CURSOR_LEGIBLE] !== undefined && cursors[CURSOR_LEGIBLE] >= LEGIBLE_DISCOVERY_FLOOR_BLOCK) legibleLastScannedBlock = cursors[CURSOR_LEGIBLE];
+  console.log(`[V4 DISCOVERY] resumed: ${v4Rows.length} token(s) from indexed_tokens; generic-sell scanned through ${v4LastScannedBlock ?? 'floor'}, legible through ${legibleLastScannedBlock ?? 'floor'}`);
+  return { restored: true, tokens: v4Rows.length, genericSell: v4LastScannedBlock, legible: legibleLastScannedBlock };
+}
+
+/** Tests: drop the in-memory discovery state as a fresh process would start. */
+export function _resetDiscoveryStateForTests() {
+  v4LastScannedBlock = null; legibleLastScannedBlock = null; discoveryRestoreAttempted = false; discoveryPersistBlocked = null;
+  v4TokenSymbolCache.clear(); v4PoolIdToToken.clear(); v4PoolIdToHook.clear(); v4TokenHook.clear();
 }
 
 /** True once V4 discovery (both factories) covers `block` — i.e. V4 trades in windows up to it can be indexed. */
@@ -1036,7 +1130,7 @@ export function createIndexer() {
  */
 export async function runIndexer() {
   console.log('--- Starting Incentifi EVM Indexer ---');
-  console.log(`RPC: ${RPC_URL}`);
+  console.log(`RPC endpoints (failover order): ${RPC_URLS.join(', ')}`);
   console.log(`Factory: ${INCENTIFI_BONDING_CURVE_FACTORY}`);
   console.log(`V4 Factory (GenericSell): ${INCENTIFI_V4_FACTORY}`);
   console.log(`V4 Factory (legible): ${INCENTIFI_LEGIBLE_FACTORY} -> hook ${INCENTIFI_LEGIBLE_HOOK}`);
@@ -1046,7 +1140,8 @@ export async function runIndexer() {
   // until discovery covers its window, so a failure here only delays, never disables.
   try {
     const head = await client.getBlockNumber();
-    console.log(`[V4 DISCOVERY] Warming up discovery (block ${V4_DISCOVERY_FLOOR_BLOCK} → ${head})...`);
+    await restoreDiscoveryState();
+    console.log(`[V4 DISCOVERY] Warming up discovery (from ${v4LastScannedBlock === null ? `floor ${V4_DISCOVERY_FLOOR_BLOCK}` : `persisted cursor ${v4LastScannedBlock}`} → ${head}, ${V4_DISCOVERY_CHUNK_BLOCKS}-block chunks)...`);
     await advanceV4Discovery(head);
     console.log(`[V4 DISCOVERY] Warm-up complete through block ${head}. Found ${v4TokenSymbolCache.size} V4 token(s) so far.`);
   } catch (err) {

@@ -15,7 +15,7 @@ export const UNISWAP_V4_STATE_VIEW = getAddress(process.env.VITE_UNISWAP_V4_STAT
 export const UNISWAP_V4_QUOTER = getAddress(process.env.VITE_UNISWAP_V4_QUOTER || '0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94');
 
 /** The legible factory was deployed in block 56,911,931; no TokenLaunched can precede it. */
-export const LEGIBLE_DISCOVERY_FLOOR_BLOCK = 56_911_900n;
+export const LEGIBLE_DISCOVERY_FLOOR_BLOCK = BigInt(process.env.LEGIBLE_DISCOVERY_FLOOR_BLOCK || 56_911_900); // env override: tests
 
 export const LEGIBLE_FACTORY_ABI = parseAbi([
   'function isLaunched(address token) view returns (bool)',
