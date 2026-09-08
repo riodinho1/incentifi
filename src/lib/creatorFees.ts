@@ -3,7 +3,8 @@ import { publicClient, getEvmProvider, ensureEvmChain, waitForTransactionReceipt
 import { INCENTIFI_V4_HOOK, INCENTIFI_LEGIBLE_HOOK } from './uniswapAddresses';
 import { getBondingCurveAddress } from './bondingCurve';
 import { isV4LaunchedToken, getV4PoolKey, computeV4PoolId } from './bondingCurveV4';
-import { getLegiblePoolKey } from './legiblePool';
+import { getLegiblePoolKey, estimateGasWithHeadroom, SWAP_GAS_FLOOR } from './legiblePool';
+import { computeUncollectedLegibleFees, fetchPendingConversion, LEGIBLE_FEE_HOOK_ABI, type UncollectedLegibleFees, type PendingConversion } from './legibleFees';
 import { resolveTokenVenue } from './tokenVenue';
 
 // ----------------------------------------------------------------------------
@@ -42,9 +43,17 @@ export type CreatorFeeStatus = {
   creator: `0x${string}`;
   /** Whether `walletAddress` is that creator. */
   isCreator: boolean;
-  /** creatorBalances(walletAddress) on the source contract (V4: across all the wallet's V4 tokens). */
+  /** creatorBalances(walletAddress) on the source contract (V4: across all the wallet's V4 tokens). "Ready to claim". */
   balanceWei: bigint;
   balanceEth: number;
+  /**
+   * Legible pools only: fees still sitting in the PoolManager position ("accrued in pool, uncollected"),
+   * from a simulated collect(). `creatorShare` is the ETH the creator receives when collect() runs;
+   * token-side fees become ETH only after the converter runs (see `pending`).
+   */
+  uncollected?: UncollectedLegibleFees;
+  /** Legible pools only: token-side fees already collected, waiting for convert(). */
+  pending?: PendingConversion;
 };
 
 /**
@@ -97,21 +106,58 @@ export async function fetchCreatorFeeStatus(tokenAddress: string, walletAddress:
     args: [wallet],
   } as any)) as bigint;
 
-  return { source, creator, isCreator: creator === wallet, balanceWei, balanceEth: Number(formatEther(balanceWei)) };
+  const status: CreatorFeeStatus = { source, creator, isCreator: creator === wallet, balanceWei, balanceEth: Number(formatEther(balanceWei)) };
+  if (source.kind === 'v4' && source.venue === 'legible') {
+    // Uncollected position fees + pending conversion: both read-only, both best-effort.
+    try {
+      status.uncollected = await computeUncollectedLegibleFees(token);
+    } catch (err) {
+      console.warn('Uncollected legible fees unavailable:', err);
+    }
+    try {
+      status.pending = await fetchPendingConversion(token);
+    } catch (err) {
+      console.warn('Pending conversion unavailable:', err);
+    }
+  }
+  return status;
 }
 
-export type CreatorFeeClaimResult = { txHash: string; claimedEth: string; source: CreatorFeeSource };
+/** True when a collect(token) would move something (ETH or token-side fees) out of the position. */
+export function hasUncollectedFees(status: CreatorFeeStatus | null | undefined): boolean {
+  const u = status?.uncollected;
+  return Boolean(u && u.seeded && (u.ethFees > 0n || u.tokenFees > 0n));
+}
+
+export type CreatorFeeClaimResult = {
+  /** The claimCreatorFees() transaction (null when only a collect ran and nothing was claimable after it). */
+  txHash: string | null;
+  /** The collect(token) transaction that ran first (legible pools with uncollected fees), else null. */
+  collectTxHash: string | null;
+  txHashes: string[];
+  claimedEth: string;
+  /** ETH the collect moved into creatorBalances before the claim ("0" when no collect ran). */
+  collectedCreatorEth: string;
+  source: CreatorFeeSource;
+};
 
 /**
  * Withdraw the connected wallet's accrued creator fees for this token's venue, signed and sent
  * by that wallet (same eth_sendTransaction mechanics as buys, sells and loss-reward claims).
  * On V4 this pays out the wallet's balance across ALL its V4 tokens, by contract design.
+ *
+ * Legible pools: fees accrue inside the PoolManager position until hook.collect(token) runs, so
+ * the claim is TWO transactions — collect(token) first (skipped when the simulated collect shows
+ * nothing uncollected), then claimCreatorFees(). Anyone may call collect; the creator's half of
+ * the ETH lands in creatorBalances, the loss pool's half in LossRewardPoolV2, token-side fees in
+ * the converter for a later convert().
  */
 export async function claimCreatorFees(tokenAddress: string, walletAddress: string): Promise<CreatorFeeClaimResult> {
   const wallet = getAddress(walletAddress);
-  const status = await fetchCreatorFeeStatus(tokenAddress, wallet);
+  let status = await fetchCreatorFeeStatus(tokenAddress, wallet);
   if (!status) throw new Error('This token has no Incentifi creator-fee contract to claim from.');
-  if (status.balanceWei === 0n) throw new Error('No accrued creator fees to claim for this wallet.');
+  const needsCollect = hasUncollectedFees(status);
+  if (status.balanceWei === 0n && !needsCollect) throw new Error('No accrued creator fees to claim for this wallet.');
 
   const provider = getEvmProvider();
   if (!provider) throw new Error('No EVM wallet detected. Please connect your wallet.');
@@ -126,6 +172,37 @@ export async function claimCreatorFees(tokenAddress: string, walletAddress: stri
     );
   }
 
+  const txHashes: string[] = [];
+  let collectTxHash: string | null = null;
+  let collectedCreatorEth = '0';
+
+  // ---- 1. collect(token): only for legible pools with something uncollected ----
+  if (needsCollect) {
+    const token = getAddress(tokenAddress);
+    const hook = status.source.contract;
+    const collectData = encodeFunctionData({ abi: LEGIBLE_FEE_HOOK_ABI, functionName: 'collect', args: [token] });
+    try {
+      await publicClient.simulateContract({ address: hook, abi: LEGIBLE_FEE_HOOK_ABI, functionName: 'collect', args: [token], account: wallet } as any);
+    } catch (err: any) {
+      throw new Error(`collect(token) would revert on-chain: ${err?.shortMessage || err?.message || String(err)}`);
+    }
+    const gas = await estimateGasWithHeadroom(provider, { from: sender, to: hook, data: collectData }, SWAP_GAS_FLOOR);
+    collectTxHash = (await provider.request({ method: 'eth_sendTransaction', params: [{ from: sender, to: hook, data: collectData, gas }] })) as string;
+    txHashes.push(collectTxHash);
+    await waitForTransactionReceipt(collectTxHash, {
+      description: 'Fee collection',
+      revertedMessage: 'collect(token) reverted on-chain. Nothing moved; your claimable balance is unchanged.',
+    });
+    collectedCreatorEth = formatEther(status.uncollected?.creatorShare ?? 0n);
+    // Re-read: the claimable balance now includes the creator's half of the collected ETH.
+    status = (await fetchCreatorFeeStatus(tokenAddress, wallet)) || status;
+    if (status.balanceWei === 0n) {
+      // Only token-side fees were collected (they become ETH after the converter runs) — nothing to claim yet.
+      return { txHash: null, collectTxHash, txHashes, claimedEth: '0', collectedCreatorEth, source: status.source };
+    }
+  }
+
+  // ---- 2. claimCreatorFees() ----
   // Pre-flight as the sender so a revert is decoded by name before the wallet prompts.
   try {
     await publicClient.simulateContract({ address: status.source.contract, abi: CREATOR_FEES_ABI, functionName: 'claimCreatorFees', account: wallet } as any);
@@ -140,11 +217,12 @@ export async function claimCreatorFees(tokenAddress: string, walletAddress: stri
     method: 'eth_sendTransaction',
     params: [{ from: sender, to: status.source.contract, data }],
   })) as string;
+  txHashes.push(txHash);
 
   await waitForTransactionReceipt(txHash, {
     description: 'Creator fee claim',
     revertedMessage: 'Creator fee claim reverted on-chain. Nothing was paid out.',
   });
 
-  return { txHash, claimedEth: formatEther(status.balanceWei), source: status.source };
+  return { txHash, collectTxHash, txHashes, claimedEth: formatEther(status.balanceWei), collectedCreatorEth, source: status.source };
 }

@@ -10,11 +10,13 @@ import {
   parseAbiParameters,
   keccak256,
   concat,
+  decodeEventLog,
+  formatEther,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { createServer as createViteServer } from 'vite';
 import fs from 'fs';
-import { isLegibleToken, fetchLegibleState } from './lib/legiblePool.mjs';
+import { isLegibleToken, fetchLegibleState, computeUncollectedLegibleFees, INCENTIFI_LEGIBLE_HOOK, INCENTIFI_LEGIBLE_FEE_CONVERTER, LEGIBLE_HOOK_ABI, LEGIBLE_CONVERTER_ABI } from './lib/legiblePool.mjs';
 
 // ============================================================================
 // CRASH-RECOVERY & IDEMPOTENCY MATRIX
@@ -108,6 +110,14 @@ const LOSS_REWARD_POOL_V2_ADDRESS = process.env.LOSS_REWARD_POOL_V2_ADDRESS || '
 // every path below behaves exactly as before (V1 only).
 const LOSS_REWARD_POOL_V1_ADDRESS = LOSS_REWARD_POOL_ADDRESS;
 const WORKER_NAME = 'loss-reward-worker';
+// Legible-pool fee collection (see collectLegibleFees below). Fees on a legible pool sit inside the
+// PoolManager position until hook.collect(token) is called, and token-side fees sit in the
+// converter until convert(token, 0, 0): nothing on-chain does either. The worker does, when the
+// value clears a multiple of the gas it costs.
+const FEE_COLLECT_ENABLED = String(process.env.FEE_COLLECT_ENABLED || 'true').toLowerCase() !== 'false';
+const FEE_COLLECT_MIN_MULTIPLE = Number(process.env.FEE_COLLECT_MIN_MULTIPLE || 10);
+const FEE_COLLECT_LOOKBACK_HOURS = Number(process.env.FEE_COLLECT_LOOKBACK_HOURS || 24);
+const FEE_TX_GAS_FLOOR = 300_000n; // same rule as every legible-pool transaction: estimate + 30%, never below this
 
 /**
  * Indexer freshness gate: scripts/evm-indexer.mjs (worker_name 'evm-indexer') upserts a
@@ -1159,10 +1169,188 @@ export async function runEpochWorker(options = {}) {
       results.push({ tokenAddress: String(t.mint_address).toLowerCase(), skipped: true, reason: 'error', detail: err.message });
     }
   }
+  // Legible-pool fee collection: collect() + convert() for tokens with recent trades, when the
+  // fees are worth the gas. After the epochs (a failure here never delays a payout), before the
+  // monitor. Never throws.
+  if (!options.skipFeeCollection) {
+    try {
+      await collectLegibleFees(options.feeCollection || {});
+    } catch (err) {
+      console.error(`[FEE COLLECT] cycle failed: ${err.message}`);
+    }
+  }
   // V2 fallback-rate monitor (no-op until LOSS_REWARD_POOL_V2_ADDRESS is set). Runs after the
   // epochs so a monitoring failure can never delay a payout.
   if (!options.skipFallbackMonitor) await monitorFallbackEvents(options.fallbackMonitor || {});
   return results;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Legible-pool fee collection.
+//
+// On the legible pool the 2% LP fee accrues INSIDE the hook's PoolManager position. Nothing moves
+// until someone calls hook.collect(token) (ETH half -> creatorBalances / LossRewardPool, token half
+// -> converter) and then converter.convert(token, 0, 0) (token-side fees sold for ETH, split the
+// same way). In production nobody did, so creatorBalances and V2.totalDeposited stayed 0 despite
+// trades. Each tick the worker, for every legible token with recent trades:
+//   1. simulates collect() from state (position checkpoint + fee growth, the PoolManager's own
+//      formula) and sends collect(token) when ETH fees >= FEE_COLLECT_MIN_MULTIPLE x gas cost;
+//   2. reads converter.pendingTokenFees(token), values it at the converter's checkpoint price, and
+//      sends convert(token, 0, 0) on the same rule (the converter enforces its own TWAP-style floor).
+// Gas: node estimate + 30%, never below 300,000 (the 2026-09-07 out-of-gas lesson).
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Pure: is `valueWei` worth spending `gasEstimate` at `gasPriceWei`? Exported for tests.
+ * Returns { send, costWei, ratio } where ratio = value / cost (Infinity when cost is 0).
+ */
+export function decideFeeAction({ valueWei, gasEstimate, gasPriceWei, minMultiple = FEE_COLLECT_MIN_MULTIPLE }) {
+  const value = BigInt(valueWei || 0n);
+  const costWei = BigInt(gasEstimate || 0n) * BigInt(gasPriceWei || 0n);
+  if (value <= 0n) return { send: false, costWei, ratio: 0, reason: 'nothing to collect' };
+  if (costWei === 0n) return { send: true, costWei, ratio: Infinity, reason: 'zero gas cost' };
+  const ratio = Number(value) / Number(costWei);
+  const send = value >= costWei * BigInt(Math.ceil(minMultiple));
+  return { send, costWei, ratio, reason: send ? `value ${ratio.toFixed(1)}x gas` : `value only ${ratio.toFixed(1)}x gas (< ${minMultiple}x)` };
+}
+
+/** estimate + 30%, floor FEE_TX_GAS_FLOOR — the gas policy for every legible-pool transaction. */
+export function feeTxGasLimit(estimate, floor = FEE_TX_GAS_FLOOR) {
+  const padded = BigInt(estimate) + (BigInt(estimate) * 30n) / 100n;
+  return padded < floor ? floor : padded;
+}
+
+/**
+ * Legible tokens that traded in the last `lookbackHours` (token_trades_evm.block_time), de-duplicated.
+ * `tokens.hook_address` (PR #21) tags legible launches; tokens without the tag are checked on-chain.
+ */
+export async function findRecentlyTradedLegibleTokens({ client = publicClient, db = supabase, lookbackHours = FEE_COLLECT_LOOKBACK_HOURS, now = () => Date.now() } = {}) {
+  const since = new Date(now() - lookbackHours * 3600 * 1000).toISOString();
+  const { data: trades, error } = await db.from('token_trades_evm').select('token_address').gte('block_time', since);
+  if (error) throw new Error(`token_trades_evm query failed: ${error.message}`);
+  const candidates = [...new Set((trades || []).map((t) => String(t.token_address || '').toLowerCase()).filter(Boolean))];
+  if (!candidates.length) return [];
+  const { data: rows } = await db.from('tokens').select('mint_address, hook_address').in('mint_address', candidates.map((a) => getAddress(a)));
+  const tagged = new Map((rows || []).map((r) => [String(r.mint_address || '').toLowerCase(), String(r.hook_address || '').toLowerCase()]));
+  const legibleHook = INCENTIFI_LEGIBLE_HOOK.toLowerCase();
+  const out = [];
+  for (const addr of candidates) {
+    const tag = tagged.get(addr);
+    if (tag === legibleHook) { out.push(getAddress(addr)); continue; }
+    if (tag) continue; // tagged with another hook
+    if (await isLegibleToken(client, getAddress(addr)).catch(() => false)) out.push(getAddress(addr));
+  }
+  return out;
+}
+
+/**
+ * One fee-collection pass. Options (all optional, for tests): client, walletClient (viem, with
+ * account), tokens (explicit list; skips the DB), minMultiple, gasFloor, dryRun, log, alert, now.
+ * Returns one summary per token. Never throws for a single token's failure.
+ */
+export async function collectLegibleFees(options = {}) {
+  const client = options.client ?? publicClient;
+  const log = options.log ?? ((m) => console.log(m));
+  const alert = options.alert ?? sendAlert;
+  const minMultiple = options.minMultiple ?? FEE_COLLECT_MIN_MULTIPLE;
+  const gasFloor = options.gasFloor ?? FEE_TX_GAS_FLOOR;
+  const dryRun = Boolean(options.dryRun);
+  if (!(options.enabled ?? FEE_COLLECT_ENABLED)) return [];
+  let walletClient = options.walletClient ?? null;
+  if (!walletClient && !dryRun) {
+    if (!OPERATOR_PRIVATE_KEY) { log('[FEE COLLECT] OPERATOR_PRIVATE_KEY unset - skipping fee collection'); return []; }
+    walletClient = createWalletClient({ account: privateKeyToAccount(OPERATOR_PRIVATE_KEY), transport: http(RPC_URL) });
+  }
+  const account = walletClient ? walletClient.account : null;
+
+  const tokens = options.tokens ?? (await findRecentlyTradedLegibleTokens({ client, db: options.db ?? supabase, lookbackHours: options.lookbackHours, now: options.now }));
+  if (!tokens.length) { log('[FEE COLLECT] no legible tokens with recent trades'); return []; }
+  const gasPriceWei = BigInt(options.gasPriceWei ?? (await client.getGasPrice()));
+  const results = [];
+  for (const tokenRaw of tokens) {
+    const token = getAddress(tokenRaw);
+    const summary = { token, collect: null, convert: null };
+    results.push(summary);
+    try {
+      // ---- 1. collect() ----
+      const fees = await computeUncollectedLegibleFees(client, token);
+      if (!fees.seeded) { summary.collect = { sent: false, reason: 'curve not seeded' }; continue; }
+      let collectDecision = decideFeeAction({ valueWei: fees.ethFees, gasEstimate: 0n, gasPriceWei, minMultiple });
+      if (fees.ethFees > 0n) {
+        let gasEstimate;
+        try {
+          gasEstimate = await client.estimateContractGas({ address: INCENTIFI_LEGIBLE_HOOK, abi: LEGIBLE_HOOK_ABI, functionName: 'collect', args: [token], account: account?.address ?? account ?? undefined });
+        } catch (err) {
+          summary.collect = { sent: false, reason: `collect() would revert: ${err.shortMessage || err.message}`, ethFees: fees.ethFees.toString() };
+          log(`[FEE COLLECT] ${token}: collect() simulation reverted (${err.shortMessage || err.message}); skipping`);
+          continue;
+        }
+        collectDecision = decideFeeAction({ valueWei: fees.ethFees, gasEstimate, gasPriceWei, minMultiple });
+        log(`[FEE COLLECT] ${token}: uncollected ${formatEther(fees.ethFees)} ETH + ${formatEther(fees.tokenFees)} tokens; collect gas ~${gasEstimate} @ ${gasPriceWei} wei = ${formatEther(collectDecision.costWei)} ETH -> ${collectDecision.reason}`);
+        if (collectDecision.send && !dryRun) {
+          const gas = feeTxGasLimit(gasEstimate, gasFloor);
+          const hash = await walletClient.writeContract({ address: INCENTIFI_LEGIBLE_HOOK, abi: LEGIBLE_HOOK_ABI, functionName: 'collect', args: [token], gas, chain: null });
+          const receipt = await client.waitForTransactionReceipt({ hash });
+          if (receipt.status !== 'success') throw new Error(`collect(${token}) reverted on-chain: ${hash}`);
+          const ev = decodeReceiptEvents(receipt, INCENTIFI_LEGIBLE_HOOK, LEGIBLE_HOOK_ABI).find((e) => e.eventName === 'FeesCollected');
+          summary.collect = { sent: true, hash, gas: gas.toString(), gasUsed: receipt.gasUsed.toString(), ethFees: (ev?.args?.ethFees ?? fees.ethFees).toString(), tokenFees: (ev?.args?.tokenFees ?? fees.tokenFees).toString(), creatorShare: (ev?.args?.creatorShare ?? fees.creatorShare).toString(), lossPoolShare: (ev?.args?.lossPoolShare ?? fees.lossPoolShare).toString() };
+          log(`[FEE COLLECT] ${token}: collect() sent ${hash} (gas limit ${gas}, used ${receipt.gasUsed}) -> ethFees ${formatEther(BigInt(summary.collect.ethFees))} (creator ${formatEther(BigInt(summary.collect.creatorShare))}, loss pool ${formatEther(BigInt(summary.collect.lossPoolShare))}), tokenFees ${formatEther(BigInt(summary.collect.tokenFees))} to the converter`);
+        } else {
+          summary.collect = { sent: false, reason: dryRun && collectDecision.send ? 'dry run' : collectDecision.reason, ethFees: fees.ethFees.toString(), tokenFees: fees.tokenFees.toString(), costWei: collectDecision.costWei.toString() };
+        }
+      } else {
+        summary.collect = { sent: false, reason: 'nothing to collect', tokenFees: fees.tokenFees.toString() };
+      }
+
+      // ---- 2. convert() ----
+      const pending = BigInt(await client.readContract({ address: INCENTIFI_LEGIBLE_FEE_CONVERTER, abi: LEGIBLE_CONVERTER_ABI, functionName: 'pendingTokenFees', args: [token] }));
+      if (pending === 0n) { summary.convert = { sent: false, reason: 'nothing pending' }; continue; }
+      let valueWei = 0n;
+      try {
+        valueWei = BigInt(await client.readContract({ address: INCENTIFI_LEGIBLE_FEE_CONVERTER, abi: LEGIBLE_CONVERTER_ABI, functionName: 'checkpointEthValue', args: [token, pending] }));
+      } catch (err) {
+        summary.convert = { sent: false, reason: `no price checkpoint (${err.shortMessage || err.message})`, pendingTokenWei: pending.toString() };
+        log(`[FEE CONVERT] ${token}: ${summary.convert.reason}`);
+        continue;
+      }
+      let convertGas;
+      try {
+        convertGas = await client.estimateContractGas({ address: INCENTIFI_LEGIBLE_FEE_CONVERTER, abi: LEGIBLE_CONVERTER_ABI, functionName: 'convert', args: [token, 0n, 0n], account: account?.address ?? account ?? undefined });
+      } catch (err) {
+        summary.convert = { sent: false, reason: `convert() would revert: ${err.shortMessage || err.message}`, pendingTokenWei: pending.toString(), pendingEthValueWei: valueWei.toString() };
+        log(`[FEE CONVERT] ${token}: convert() simulation reverted (${err.shortMessage || err.message}); skipping`);
+        continue;
+      }
+      const convertDecision = decideFeeAction({ valueWei, gasEstimate: convertGas, gasPriceWei, minMultiple });
+      log(`[FEE CONVERT] ${token}: pending ${formatEther(pending)} tokens ~ ${formatEther(valueWei)} ETH at checkpoint; convert gas ~${convertGas} = ${formatEther(convertDecision.costWei)} ETH -> ${convertDecision.reason}`);
+      if (convertDecision.send && !dryRun) {
+        const gas = feeTxGasLimit(convertGas, gasFloor);
+        const hash = await walletClient.writeContract({ address: INCENTIFI_LEGIBLE_FEE_CONVERTER, abi: LEGIBLE_CONVERTER_ABI, functionName: 'convert', args: [token, 0n, 0n], gas, chain: null });
+        const receipt = await client.waitForTransactionReceipt({ hash });
+        if (receipt.status !== 'success') throw new Error(`convert(${token}) reverted on-chain: ${hash}`);
+        const ev = decodeReceiptEvents(receipt, INCENTIFI_LEGIBLE_FEE_CONVERTER, LEGIBLE_CONVERTER_ABI).find((e) => e.eventName === 'Converted');
+        summary.convert = { sent: true, hash, gas: gas.toString(), gasUsed: receipt.gasUsed.toString(), tokensIn: (ev?.args?.tokensIn ?? pending).toString(), ethOut: (ev?.args?.ethOut ?? 0n).toString(), creatorShare: (ev?.args?.creatorShare ?? 0n).toString(), lossPoolShare: (ev?.args?.lossPoolShare ?? 0n).toString() };
+        log(`[FEE CONVERT] ${token}: convert() sent ${hash} (gas limit ${gas}, used ${receipt.gasUsed}) -> ${formatEther(BigInt(summary.convert.tokensIn))} tokens -> ${formatEther(BigInt(summary.convert.ethOut))} ETH (creator ${formatEther(BigInt(summary.convert.creatorShare))}, loss pool ${formatEther(BigInt(summary.convert.lossPoolShare))})`);
+      } else {
+        summary.convert = { sent: false, reason: dryRun && convertDecision.send ? 'dry run' : convertDecision.reason, pendingTokenWei: pending.toString(), pendingEthValueWei: valueWei.toString(), costWei: convertDecision.costWei.toString() };
+      }
+    } catch (err) {
+      summary.error = err.message;
+      console.error(`[FEE COLLECT] ${token}: ${err.message}`);
+      await alert(`Legible fee collection failed for ${token}: ${err.message}`);
+    }
+  }
+  return results;
+}
+
+/** Decodes every log a receipt carries from `address` against `abi` (unknown logs skipped). */
+function decodeReceiptEvents(receipt, address, abi) {
+  const out = [];
+  for (const l of receipt.logs || []) {
+    if (String(l.address).toLowerCase() !== String(address).toLowerCase()) continue;
+    try { out.push(decodeEventLog({ abi, data: l.data, topics: l.topics })); } catch { /* not ours */ }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------
