@@ -118,6 +118,14 @@ const FEE_COLLECT_ENABLED = String(process.env.FEE_COLLECT_ENABLED || 'true').to
 const FEE_COLLECT_MIN_MULTIPLE = Number(process.env.FEE_COLLECT_MIN_MULTIPLE || 10);
 const FEE_COLLECT_LOOKBACK_HOURS = Number(process.env.FEE_COLLECT_LOOKBACK_HOURS || 24);
 const FEE_TX_GAS_FLOOR = 300_000n; // same rule as every legible-pool transaction: estimate + 30%, never below this
+// Operator runway alert (audit 2026-09-08 finding 2): alert when the operator wallet holds less than
+// OPERATOR_MIN_RUNWAY_DAYS of gas at the observed cadence (publishes + collects + converts in the last
+// 24 h, floored at one continuously-underwater token = 288 publishes/day).
+const OPERATOR_MIN_RUNWAY_DAYS = Number(process.env.OPERATOR_MIN_RUNWAY_DAYS || 3);
+const OPERATOR_ALERT_INTERVAL_MS = Number(process.env.OPERATOR_ALERT_INTERVAL_MS || 6 * 3600 * 1000);
+export const PUBLISH_GAS_ESTIMATE = 80_000n;   // measured 79,812 (tx 0x019b0d24…)
+export const COLLECT_GAS_ESTIMATE = 180_000n;  // measured estimate 178,993
+export const CONVERT_GAS_ESTIMATE = 250_000n;
 
 /**
  * Indexer freshness gate: scripts/evm-indexer.mjs (worker_name 'evm-indexer') upserts a
@@ -1148,12 +1156,92 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
 }
 
 /**
+ * The worker's token universe: the client-written `tokens` table UNION the indexer's discovery
+ * table `indexed_tokens` (scripts/evm-indexer.mjs upserts every TokenLaunched it sees). A token
+ * exists for the worker as soon as the chain says so, so a deleted or never-written `tokens` row
+ * can no longer strand the loss-reward funds of a real token (audit 2026-09-08 finding 5). Hidden
+ * tokens (tokens.hidden = true) are included on purpose: hiding is a listing decision, not a funds
+ * decision. Tolerates a not-yet-created indexed_tokens table.
+ */
+export async function listWorkerTokens({ db = supabase } = {}) {
+  const seen = new Map();
+  const { data: rows, error } = await db.from('tokens').select('mint_address');
+  if (error) { console.error(`[WORKER] tokens query failed: ${error.message}`); }
+  for (const t of rows || []) if (t.mint_address) seen.set(String(t.mint_address).toLowerCase(), { mint_address: t.mint_address, source: 'tokens' });
+  try {
+    const { data: idx, error: idxErr } = await db.from('indexed_tokens').select('mint_address, venue');
+    if (idxErr) console.warn(`[WORKER] indexed_tokens unavailable (${idxErr.message}); using tokens only`);
+    for (const t of idx || []) {
+      const k = String(t.mint_address || '').toLowerCase();
+      if (k && !seen.has(k)) seen.set(k, { mint_address: t.mint_address, source: 'indexed_tokens', venue: t.venue });
+    }
+  } catch (err) {
+    console.warn(`[WORKER] indexed_tokens unavailable (${err.message}); using tokens only`);
+  }
+  const list = [...seen.values()];
+  const fromIndex = list.filter((t) => t.source === 'indexed_tokens').length;
+  if (fromIndex) console.log(`[WORKER] ${fromIndex} token(s) come from indexed_tokens only (no tokens row): ${list.filter((t) => t.source === 'indexed_tokens').map((t) => t.mint_address).join(', ')}`);
+  return list;
+}
+
+/**
+ * Pure: days of runway for `balanceWei` given the actions of the last 24 h. Cadence floor = one
+ * continuously-underwater token (288 publishes/day) so a quiet day cannot hide the risk. Exported
+ * for tests.
+ */
+export function estimateOperatorRunway({ balanceWei, gasPriceWei, publishes24h = 0, collects24h = 0, converts24h = 0, minDailyPublishes = 288 }) {
+  const publishes = BigInt(Math.max(Number(publishes24h) || 0, minDailyPublishes));
+  const dailyGas = publishes * PUBLISH_GAS_ESTIMATE + BigInt(collects24h || 0) * COLLECT_GAS_ESTIMATE + BigInt(converts24h || 0) * CONVERT_GAS_ESTIMATE;
+  const dailyCostWei = dailyGas * BigInt(gasPriceWei || 0n);
+  const runwayDays = dailyCostWei === 0n ? Infinity : Number(BigInt(balanceWei) * 1000n / dailyCostWei) / 1000;
+  return { dailyCostWei, dailyGas, publishes: Number(publishes), runwayDays };
+}
+
+let lastOperatorAlertAt = 0;
+/**
+ * Reads the operator's balance, the last-24h cadence from reward_epochs (published rows) and the
+ * chain's gas price, and alerts when runway < OPERATOR_MIN_RUNWAY_DAYS (re-alerts every
+ * OPERATOR_ALERT_INTERVAL_MS while it stays low). Options for tests: client, db, alert, now,
+ * operatorAddress, minRunwayDays, collects24h/converts24h (default: FeesCollected/Converted are
+ * not counted from the DB; the fee-collection summaries of this process are used when passed).
+ */
+export async function checkOperatorRunway(options = {}) {
+  const client = options.client ?? publicClient;
+  const db = options.db ?? supabase;
+  const alert = options.alert ?? sendAlert;
+  const now = options.now ?? (() => Date.now());
+  const minRunwayDays = options.minRunwayDays ?? OPERATOR_MIN_RUNWAY_DAYS;
+  let operatorAddress = options.operatorAddress;
+  if (!operatorAddress) {
+    if (!OPERATOR_PRIVATE_KEY) return null;
+    operatorAddress = privateKeyToAccount(OPERATOR_PRIVATE_KEY).address;
+  }
+  const [balanceWei, gasPriceWei] = await Promise.all([client.getBalance({ address: getAddress(operatorAddress) }), client.getGasPrice()]);
+  const since = new Date(now() - 24 * 3600 * 1000).toISOString();
+  const { data: published } = await db.from('reward_epochs').select('epoch_id').eq('status', 'published').gte('created_at', since);
+  const publishes24h = (published || []).length;
+  const est = estimateOperatorRunway({ balanceWei, gasPriceWei, publishes24h, collects24h: options.collects24h ?? 0, converts24h: options.converts24h ?? 0 });
+  const summary = { operatorAddress, balanceEth: formatEther(balanceWei), gasPriceWei: gasPriceWei.toString(), publishes24h, dailyCostEth: formatEther(est.dailyCostWei), runwayDays: est.runwayDays, low: est.runwayDays < minRunwayDays };
+  console.log(`[OPERATOR] ${operatorAddress} balance ${summary.balanceEth} ETH; cadence ${est.publishes} publishes/day -> ${summary.dailyCostEth} ETH/day; runway ${est.runwayDays === Infinity ? 'inf' : est.runwayDays.toFixed(2)} days (alert below ${minRunwayDays})`);
+  if (summary.low && now() - lastOperatorAlertAt >= (options.alertIntervalMs ?? OPERATOR_ALERT_INTERVAL_MS)) {
+    lastOperatorAlertAt = now();
+    await alert(`Operator wallet ${operatorAddress} LOW: ${summary.balanceEth} ETH = ${est.runwayDays.toFixed(2)} days of runway at the current cadence (${est.publishes} publishes/day, ${summary.dailyCostEth} ETH/day, gas ${gasPriceWei} wei). Top up before epochs start failing silently.`);
+  }
+  return summary;
+}
+
+/**
  * Main 5-minute epoch cron runner
  */
 export async function runEpochWorker(options = {}) {
   console.log('--- Incentifi 5-Minute Loss-Reward Worker Started ---');
-  const { data: tokens, error: tokErr } = await supabase.from('tokens').select('mint_address');
-  if (tokErr || !tokens) return [];
+  const tokens = await listWorkerTokens({ db: options.db ?? supabase });
+  if (!tokens.length) return [];
+
+  // Operator runway check first: an empty operator means silent no-row epochs (audit finding 2).
+  if (!options.skipBalanceCheck) {
+    try { await checkOperatorRunway(options.balanceCheck || {}); } catch (err) { console.error(`[OPERATOR] runway check failed: ${err.message}`); }
+  }
 
   const results = [];
   for (const t of tokens) {
@@ -1275,8 +1363,16 @@ export async function collectLegibleFees(options = {}) {
       // ---- 1. collect() ----
       const fees = await computeUncollectedLegibleFees(client, token);
       if (!fees.seeded) { summary.collect = { sent: false, reason: 'curve not seeded' }; continue; }
-      let collectDecision = decideFeeAction({ valueWei: fees.ethFees, gasEstimate: 0n, gasPriceWei, minMultiple });
-      if (fees.ethFees > 0n) {
+      // Value of a collect() = ETH fees + the token-side fees at the converter's checkpoint price
+      // (audit finding 3: sells leave token-only fees that never cleared the ETH-only bar).
+      let tokenSideValueWei = 0n;
+      if (fees.tokenFees > 0n) {
+        try { tokenSideValueWei = BigInt(await client.readContract({ address: INCENTIFI_LEGIBLE_FEE_CONVERTER, abi: LEGIBLE_CONVERTER_ABI, functionName: 'checkpointEthValue', args: [token, fees.tokenFees] })); }
+        catch { tokenSideValueWei = 0n; }
+      }
+      const collectValueWei = fees.ethFees + tokenSideValueWei;
+      let collectDecision = decideFeeAction({ valueWei: collectValueWei, gasEstimate: 0n, gasPriceWei, minMultiple });
+      if (collectValueWei > 0n) {
         let gasEstimate;
         try {
           gasEstimate = await client.estimateContractGas({ address: INCENTIFI_LEGIBLE_HOOK, abi: LEGIBLE_HOOK_ABI, functionName: 'collect', args: [token], account: account?.address ?? account ?? undefined });
@@ -1285,8 +1381,8 @@ export async function collectLegibleFees(options = {}) {
           log(`[FEE COLLECT] ${token}: collect() simulation reverted (${err.shortMessage || err.message}); skipping`);
           continue;
         }
-        collectDecision = decideFeeAction({ valueWei: fees.ethFees, gasEstimate, gasPriceWei, minMultiple });
-        log(`[FEE COLLECT] ${token}: uncollected ${formatEther(fees.ethFees)} ETH + ${formatEther(fees.tokenFees)} tokens; collect gas ~${gasEstimate} @ ${gasPriceWei} wei = ${formatEther(collectDecision.costWei)} ETH -> ${collectDecision.reason}`);
+        collectDecision = decideFeeAction({ valueWei: collectValueWei, gasEstimate, gasPriceWei, minMultiple });
+        log(`[FEE COLLECT] ${token}: uncollected ${formatEther(fees.ethFees)} ETH + ${formatEther(fees.tokenFees)} tokens (~${formatEther(tokenSideValueWei)} ETH at checkpoint); collect gas ~${gasEstimate} @ ${gasPriceWei} wei = ${formatEther(collectDecision.costWei)} ETH -> ${collectDecision.reason}`);
         if (collectDecision.send && !dryRun) {
           const gas = feeTxGasLimit(gasEstimate, gasFloor);
           const hash = await walletClient.writeContract({ address: INCENTIFI_LEGIBLE_HOOK, abi: LEGIBLE_HOOK_ABI, functionName: 'collect', args: [token], gas, chain: null });
@@ -1296,7 +1392,7 @@ export async function collectLegibleFees(options = {}) {
           summary.collect = { sent: true, hash, gas: gas.toString(), gasUsed: receipt.gasUsed.toString(), ethFees: (ev?.args?.ethFees ?? fees.ethFees).toString(), tokenFees: (ev?.args?.tokenFees ?? fees.tokenFees).toString(), creatorShare: (ev?.args?.creatorShare ?? fees.creatorShare).toString(), lossPoolShare: (ev?.args?.lossPoolShare ?? fees.lossPoolShare).toString() };
           log(`[FEE COLLECT] ${token}: collect() sent ${hash} (gas limit ${gas}, used ${receipt.gasUsed}) -> ethFees ${formatEther(BigInt(summary.collect.ethFees))} (creator ${formatEther(BigInt(summary.collect.creatorShare))}, loss pool ${formatEther(BigInt(summary.collect.lossPoolShare))}), tokenFees ${formatEther(BigInt(summary.collect.tokenFees))} to the converter`);
         } else {
-          summary.collect = { sent: false, reason: dryRun && collectDecision.send ? 'dry run' : collectDecision.reason, ethFees: fees.ethFees.toString(), tokenFees: fees.tokenFees.toString(), costWei: collectDecision.costWei.toString() };
+          summary.collect = { sent: false, reason: dryRun && collectDecision.send ? 'dry run' : collectDecision.reason, ethFees: fees.ethFees.toString(), tokenFees: fees.tokenFees.toString(), tokenSideValueWei: tokenSideValueWei.toString(), costWei: collectDecision.costWei.toString() };
         }
       } else {
         summary.collect = { sent: false, reason: 'nothing to collect', tokenFees: fees.tokenFees.toString() };

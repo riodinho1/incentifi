@@ -41,6 +41,9 @@ const rpcServer = http.createServer((req, res) => {
       switch (item.method) {
         case 'eth_chainId': return { jsonrpc: '2.0', id: item.id, result: hex(4663) };
         case 'eth_blockNumber': return { jsonrpc: '2.0', id: item.id, result: hex(HEAD) };
+        // PR #21 added a legible-factory isLaunched()/hook() read to discovery; answer every view call
+        // with a zero word (false / address(0)) so discovery exercises only the getLogs path under test.
+        case 'eth_call': return { jsonrpc: '2.0', id: item.id, result: '0x' + '0'.repeat(64) };
         case 'eth_getLogs': {
           rpcState.getLogsCalls += 1;
           rpcState.chunkSeen += 1;

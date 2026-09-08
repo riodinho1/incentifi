@@ -269,7 +269,11 @@ console.log('  ✓ 8 trades / 2 holders / 6 candles — unchanged\n');
 // Safety net: every Supabase call this process made went to the mock, and only to tables
 // this code path is supposed to touch.
 const touched = [...new Set(mock.calls.map((c) => c.tableName))].sort();
-assert.deepEqual(touched, ['holder_cost_basis', 'token_candles_1m', 'token_trades_evm'], `unexpected tables touched: ${touched.join(', ')}`);
+// PR #21 tags tokens.hook_address on discovery and the audit remediation records every discovered
+// token in indexed_tokens; both are bookkeeping writes, not trade/holder mutations.
+const allowed = ['holder_cost_basis', 'indexed_tokens', 'token_candles_1m', 'token_trades_evm', 'tokens'];
+assert.deepEqual(touched.filter((t) => !allowed.includes(t)), [], `unexpected tables touched: ${touched.join(', ')}`);
+assert.ok(['holder_cost_basis', 'token_candles_1m', 'token_trades_evm'].every((t) => touched.includes(t)), `trade tables must be touched: ${touched.join(', ')}`);
 
 console.log('======================================================');
 console.log('  ALL 7/7 V4 TRADE REPLAY TESTS PASSED');

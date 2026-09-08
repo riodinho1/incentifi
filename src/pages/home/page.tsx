@@ -112,7 +112,10 @@ const HomePage = () => {
         const mintsNeedingLiveFallback: string[] = [];
 
         const tenMinutes = 10 * 60 * 1000;
-        const tokensList = ((tokensRes.data || []).map((row: Record<string, unknown>) => {
+        // tokens.hidden = true keeps a token off the home page and lists (its page, indexing and loss-reward
+        // epochs continue). Client-side so a pre-migration schema (no `hidden` column) still lists everything.
+        const visibleRows = (tokensRes.data || []).filter((row: Record<string, unknown>) => row.hidden !== true);
+        const tokensList = (visibleRows.map((row: Record<string, unknown>) => {
           const createdAt = row.created_at || new Date();
           const mint = String(row.mint_address || '').toLowerCase();
           const snap = snapshotsByMint.get(mint);

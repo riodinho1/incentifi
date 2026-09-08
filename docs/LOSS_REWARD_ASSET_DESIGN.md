@@ -1,6 +1,6 @@
 # Creator-selected Loss-Reward payout asset — Design Doc (Phase B, pre-Solidity)
 
-**Status:** Phase B approved with three amendments (A, B, C below); **Phase C implemented in this PR**: `LossRewardPoolV2`, `RewardSwapperUniswapV3`, deploy + re-point scripts, 24 fork tests green. **Nothing deployed.** Measured numbers in §C5.
+**Status (updated 2026-09-08):** Phase B approved with three amendments (A, B, C below); Phase C shipped (PR #22) and **DEPLOYED**: LossRewardPoolV2 `0x5d94246C…` + `RewardSwapperUniswapV3` `0xEDe37d70…` live since 2026-09-07, hook re-pointed the same day, 26 stock routes configured (§C10), fee automation live (§C11). Audit and remediation: `docs/AUDIT_2026-09-08.md`, §C12. Measured numbers in §C5.
 **Scope:** a new `LossRewardPoolV2` at a new address that pays claims in ETH (as today) or in a creator-selected Robinhood stock token (AAPL, TSLA, NVDA at launch). The loss calculation, epoch/Merkle mechanism, eligibility, leaf format and operator model are **unchanged**. Only what the claimant receives changes.
 **Not in scope:** creator fees (they live in the hook's `creatorBalances`, never touch the pool, and stay ETH — there is no coupling to design), MSFT (deferred: no deep direct WETH pool; the two-hop needs an unaudited third-party hook), any change to PR #17's curve or fee mechanics.
 
@@ -223,14 +223,14 @@ Three things bubble up instead of falling back, all the user's own: `MinOutNotMe
 
 V1 keeps its ETH (0.0222 ETH today) and its published epochs; **no funds move between pools**. V1 has no sweep, so any ETH left unallocated there can only ever leave via epochs published *there*. The cutover is therefore a per-token drain-then-switch, not a flag flip.
 
-1. **Deploy V2** with the deploy script (owner = hardware EOA, operator = `0x78a4E4BCC8ab559B6d3B1Cb9eab0A04a2411c726`, routes AAPL/TSLA/NVDA validated on-chain, `assetSetters = {legible factory}`, `minStockRewardWei = 0.002 ETH`). Verify on Blockscout. Fork-test against the deployed address.
+1. **Deploy V2** with the deploy script (owner = the deploying EOA — in practice the `incentifi-owner` software keystore `0x78a4E4BC…`, hardware wallet pending; operator = `0x78a4E4BCC8ab559B6d3B1Cb9eab0A04a2411c726` until `SplitOperator` moves it to a dedicated key, routes AAPL/TSLA/NVDA validated on-chain, `assetSetters = {legible factory}`, `minStockRewardWei = 0.002 ETH`). Verify on Blockscout. Fork-test against the deployed address.
 2. **DB migration:** `reward_epochs.pool_address` (default V1 for existing rows), `tokens.reward_asset` / `reward_asset_symbol`.
 3. **Worker, dual-pool mode, from block N:** per token and per run, if `V1.getUnallocatedBalance(token) ≥ MIN_EPOCH_PAYOUT_WEI` publish this epoch **on V1** (draining it), else publish **on V2**. Each `reward_epochs` row records its `pool_address`. Pending-funding FIFO resolution runs per pool. Once V1's unallocated balance for a token is under the dust guard, that token is V2-only forever. No epoch is ever split across pools.
 4. **Gateway `/query`** returns `poolAddress` with each unclaimed epoch; **frontend** groups epochs by pool and sends one transaction per pool: V1 → `claimBatch` (unchanged), V2 → `claimBatchAs`. The panel shows a "Legacy pool" sub-section while any V1 epochs remain; when none remain it disappears. Old-pool claims are always ETH.
 5. **Hook re-point**, only after 1–4 are live and verified: `RepointHookLossRewardPool.s.sol` calls `legibleHook.setLossRewardPool(V2)`. From that transaction every `collect()` and converter deposit for every token on that hook lands in V2. The live GenericSell hook cannot be re-pointed (immutable); its single token (TESTINGG) keeps feeding V1, which the dual-pool worker keeps draining — no special case.
 6. **Indexer** sums both pools for `loss_pool_tvl_eth`.
 
-**Every place the V1 address is hardcoded** (from `grep`), and what to do:
+**Every place the V1 address is hardcoded** (from `grep`), and what the original plan said to do. **Superseded (2026-09-08):** the dual-pool design (§C8) keeps V1 hardcoded on purpose at the runtime sites (V1 claims + the per-token drain) and gives V2 **no fallback anywhere**; the `LOSS_REWARD_POOL_LEGACY*` names below were never implemented and do not exist in code. Kept for history only:
 
 | Site | Action |
 |---|---|
@@ -377,7 +377,7 @@ Pointing the hook back at V1 later is possible (`setLossRewardPool` is not one-w
 
 ## C10. Payout-asset universe: every routable Robinhood stock (2026-09-08)
 
-**Deployed state.** LossRewardPoolV2 `0x5d94246CD31064Da02E953DB357F0001F0E9A631` (owner = operator = `0x78a4E4BC…`, `minStockRewardWei` 0.002 ETH, `assetSetters(legible factory) == true`), `RewardSwapperUniswapV3` `0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe`; hook and converter both read `lossRewardPool() == V2` (re-point tx `0xfbc1bd47f83d79c16b023851bda0cff2901aa287ea611bf90b8f5a022e47ea02`). Routes live at the time of writing: AAPL / TSLA / NVDA only. Records: `broadcast/DeployLossRewardPoolV2.s.sol/4663/run-latest.json`, `broadcast/RepointHookLossRewardPool.s.sol/4663/run-latest.json`.
+**Deployed state.** LossRewardPoolV2 `0x5d94246CD31064Da02E953DB357F0001F0E9A631` (owner = operator = `0x78a4E4BC…`, `minStockRewardWei` 0.002 ETH, `assetSetters(legible factory) == true`), `RewardSwapperUniswapV3` `0xEDe37d70Ca99E25D501c780D6Ed24307C63A3aDe`; hook and converter both read `lossRewardPool() == V2` (re-point tx `0xfbc1bd47f83d79c16b023851bda0cff2901aa287ea611bf90b8f5a022e47ea02`). Routes live at the time of writing: AAPL / TSLA / NVDA only — **all 26 routes configured on 2026-09-08 (commit 505d2d5); QUBT and BE disabled again the same day, see §C12.** Records: `broadcast/DeployLossRewardPoolV2.s.sol/4663/run-latest.json`, `broadcast/RepointHookLossRewardPool.s.sol/4663/run-latest.json`.
 
 **The ask:** offer every stock on Robinhood Chain as a payout asset, not just AAPL/TSLA/NVDA. **What the chain allows** (read-only census by `scripts/ops/enumerate-stock-venues.mjs`: StockFactory `Deployed` events via Blockscout, then multicalled on-chain state; chain head 57 190 155):
 
@@ -417,4 +417,17 @@ So "every stock" is bounded by venues, not by the pool design: **26 stocks** can
 **Creator Fees panel.** Two lines for legible tokens: *Accrued in pool (uncollected)* = the creator's half of the simulated `collect()` (plus a note for token-side fees awaiting conversion) and *Ready to claim* = `creatorBalances(wallet)`. *Collect & Claim Creator Fees (2 transactions)* sends `collect(token)` (anyone may; gas headroom rule) and then `claimCreatorFees()`; the first is skipped when nothing is uncollected. `claimCreatorFees()` in `src/lib/creatorFees.ts` returns `{ collectTxHash, txHash, txHashes, claimedEth, collectedCreatorEth }`.
 
 **Loss-Reward panel for stock tokens.** *Claimable Rewards* shows `≈ N GOOGL` (QuoterV2 on the live route pool for the whole claimable batch, × `uiMultiplier()` / 1e18) with the ETH allocation underneath; when the batch is below `minStockRewardWei` (0.002 ETH) it shows **"Below 0.002 ETH — paid in ETH"** instead of a stock estimate, because the pool pays ETH there by design (BelowMinimum). *Loss Pool Balance (V2, unallocated)* is `LossRewardPoolV2.getUnallocatedBalance(token)`, with a *Legacy pool remainder (V1, unallocated)* line while V1 still holds anything. `src/lib/lossRewardDisplay.ts` (`buildStockClaimDisplay` pure, `fetchStockClaimDisplay` live), `getLossPoolBalances` in `src/lib/lossReward.ts`. Tests: `test/loss-reward-panels.test.mjs`, fork test §3–§4.
+
+## C12. Audit remediation (2026-09-08, after `docs/AUDIT_2026-09-08.md`)
+
+| Audit finding | Remediation |
+|---|---|
+| 1 — one hot key owns and operates everything | Runbook steps `SplitOperatorDryRun` / `SplitOperatorBroadcast -NewOperator 0x…` (`script/SetOperator.s.sol`): `V1.setOperator` + `V2.setOperator` from the owner keystore, read back, and the exact Railway change printed (`OPERATOR_PRIVATE_KEY` = the **new** key; the owner key leaves Railway). Hardware-wallet `transferOwnership` remains a manual follow-up. |
+| 2 — operator runway, no alert | Worker `checkOperatorRunway()` on every tick: balance ÷ (last-24 h cadence × measured gas, floored at 288 publishes/day) → `sendAlert` below `OPERATOR_MIN_RUNWAY_DAYS` (3), re-alerting every 6 h while low. |
+| 3 — token-side-only fees never collected | `collectLegibleFees()` values the token side with `converter.checkpointEthValue(tokenFees)`; ETH + token value must clear the 10× gas bar. |
+| 4 — Blockscout verification | V2 was already verified (Blockscout answered "already verified" to the resubmission; its API had been rate-limiting the audit's status reads). Converter and V1 resubmitted from the standard-JSON inputs — outcome recorded in the PR. V1 was deployed from the same `contracts/LossRewardPool.sol` (unchanged since e1a711d) with constructor arg = the operator. |
+| 5 — deleted `tokens` rows strand funds | Migration `supabase/tokens_hidden_and_indexed_tokens.sql`: `tokens.hidden` (home page and lists filter it client-side; the token page, indexer and worker still see hidden tokens), `indexed_tokens` (the indexer upserts every `TokenLaunched` it discovers), and the four deleted rows restored as hidden. The worker iterates **tokens ∪ indexed_tokens**. **Policy: never delete a `tokens` row — set `hidden = true`.** |
+| 7 — QUBT / BE venues | `config/loss-reward-stock-routes.overrides.json` (`disabled` list + reasons, honoured by the generator); census gains `--min-liquidity` (raw in-range L ≥ 1e17) on top of the TWAP requirement; runbook `SetRouteEnabledDryRun` / `SetRouteEnabledBroadcast -Assets QUBT,BE -Enabled false` (`script/SetAssetEnabled.s.sol`). |
+| 8, 9 — harness drift, `permit2.ts` | `integration-layer` expects the rewired factory/router; the discovery-retry fake RPC answers `eth_call`; `v4-trade-replay` allows the bookkeeping tables; `permit2.ts` reads cast like the rest of `src/lib` (`as any`), `uint48` expiration passed as a number. |
+| 10, 11 — stale docs / runbook | This section, the status lines of both design docs, INTEGRATION.md, and the runbook's Preflight (V1 before / V2 after the re-point, neither fails). |
 

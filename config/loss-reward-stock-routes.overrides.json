@@ -1,0 +1,17 @@
+{
+  "_comment": "Hand-maintained overrides for scripts/ops/generate-stock-routes.mjs. `disabled` assets are excluded from config/loss-reward-stock-routes.json and the frontend candidate list even when the census would admit them; disable them on-chain with Deploy-LossRewardV2.ps1 -Step SetRouteEnabledBroadcast -Assets <symbols> -Enabled false (script/SetAssetEnabled.s.sol). Remove an entry (and re-enable on-chain) to bring an asset back.",
+  "disabled": [
+    {
+      "symbol": "QUBT",
+      "asset": "0x59818904ab4cE163b3cE4FfB64f2D6Ca02c434B4",
+      "since": "2026-09-08",
+      "reason": "docs/AUDIT_2026-09-08.md finding 7: the QUBT/WETH 1% pool serves neither a 30 m nor a 10 m TWAP (observe() reverts), so every claim would pay ETH (ReferenceUnavailable); 1.59 WETH in the pool."
+    },
+    {
+      "symbol": "BE",
+      "asset": "0x822CC93fFD030293E9842c30BBD678F530701867",
+      "since": "2026-09-08",
+      "reason": "docs/AUDIT_2026-09-08.md finding 7: 0.98 WETH in the BE/WETH 0.3% pool - a claim above ~0.03 ETH moves the price past the 3% bound (BelowProtocolBound -> ETH)."
+    }
+  ]
+}

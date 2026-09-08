@@ -610,6 +610,33 @@ async function getLogsWithRetry(params, { retries = 3, baseDelayMs = 500 } = {})
 }
 
 /**
+ * Durable discovery record (audit 2026-09-08 finding 5): every TokenLaunched the indexer sees is
+ * upserted into `indexed_tokens`, the loss-reward worker's second token source (tokens ∪
+ * indexed_tokens), so a deleted or never-written `tokens` row cannot strand a real token's
+ * loss-reward funds. Best-effort and tolerant of the table not existing yet (migration
+ * supabase/tokens_hidden_and_indexed_tokens.sql): a failure is logged, never thrown into the tick.
+ */
+export async function recordIndexedToken({ tokenAddr, symbol, venue, hookAddr, factory, creator, poolId, block, db = supabase }) {
+  try {
+    const row = {
+      mint_address: getAddress(tokenAddr),
+      symbol: symbol ?? null,
+      venue,
+      hook_address: hookAddr ? String(hookAddr).toLowerCase() : null,
+      factory_address: factory ? String(factory).toLowerCase() : null,
+      creator_address: creator ? getAddress(creator) : null,
+      pool_id: poolId ? String(poolId).toLowerCase() : null,
+      first_block: block !== undefined && block !== null ? Number(block) : null,
+      updated_at: new Date().toISOString(),
+    };
+    const { error } = await db.from('indexed_tokens').upsert(row, { onConflict: 'mint_address' });
+    if (error) console.warn(`[V4 DISCOVERY] indexed_tokens upsert skipped for ${tokenAddr}: ${error.message}`);
+  } catch (err) {
+    console.warn(`[V4 DISCOVERY] indexed_tokens upsert skipped for ${tokenAddr}: ${err.message}`);
+  }
+}
+
+/**
  * Scans [fromBlock, toBlock] in 5,000-block chunks (this RPC's per-call range cap, same
  * limit already respected everywhere else in this file) for real TokenLaunched events on
  * the V4 factory, resolving and caching each newly-discovered token's real ERC20 symbol()
@@ -654,6 +681,7 @@ export async function discoverV4TokensInRange(fromBlock, toBlock, { chunkSize = 
         v4TokenHook.set(tokenAddr, hookAddr);
         console.log(`[V4 DISCOVERY] Found V4 token ${symbol} (${tokenAddr}) on the ${label} hook ${hookAddr}, launched at block ${log.blockNumber}, poolId ${log.args.poolId}`);
         await tagTokenHookInDb(tokenAddr, hookAddr);
+        await recordIndexedToken({ tokenAddr, symbol, venue: label === 'legible' ? 'legible' : 'v4-generic', hookAddr, factory: getAddress(factory).toLowerCase(), creator: log.args.creator, poolId: log.args.poolId, block: log.blockNumber });
       } catch (err) {
         console.warn(`[V4 DISCOVERY] Could not read symbol() for newly-discovered V4 token ${tokenAddr}: ${err.message}`);
       }
@@ -808,7 +836,12 @@ export async function advanceV4Discovery(toBlock) {
 
 /** True once V4 discovery (both factories) covers `block` — i.e. V4 trades in windows up to it can be indexed. */
 export function isV4DiscoveryReadyThrough(block) {
-  return v4LastScannedBlock !== null && v4LastScannedBlock >= block && legibleLastScannedBlock !== null && legibleLastScannedBlock >= block;
+  const genericReady = v4LastScannedBlock !== null && v4LastScannedBlock >= block;
+  // The legible factory did not exist before LEGIBLE_DISCOVERY_FLOOR_BLOCK, so for any earlier block
+  // its scan is trivially complete (there is nothing to scan) - otherwise a chain head below the floor
+  // could never be "ready" even though generic-sell discovery has fully caught up.
+  const legibleReady = block < LEGIBLE_DISCOVERY_FLOOR_BLOCK || (legibleLastScannedBlock !== null && legibleLastScannedBlock >= block);
+  return genericReady && legibleReady;
 }
 
 /** Tests: the in-memory discovery state (token -> symbol, token -> hook). */

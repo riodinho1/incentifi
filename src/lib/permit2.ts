@@ -73,20 +73,22 @@ export async function getExternalBotSellingStatus(
   const token = getAddress(tokenAddress);
   const owner = getAddress(ownerAddress);
 
-  const erc20Allowance = await publicClient.readContract({
+  // `as any`: viem's ReadContractParameters typing in this repo's version demands `authorizationList`
+  // (a 7702 field) on every read; the runtime call is a plain eth_call. Same cast as the rest of src/lib.
+  const erc20Allowance = (await publicClient.readContract({
     address: token,
     abi: ERC20_ALLOWANCE_ABI,
     functionName: 'allowance',
     args: [owner, PERMIT2_ADDRESS],
-  });
+  } as any)) as bigint;
   const erc20ApprovedToPermit2 = erc20Allowance > NEAR_MAX_UINT256_THRESHOLD;
 
-  const [amount, expiration] = await publicClient.readContract({
+  const [amount, expiration] = (await publicClient.readContract({
     address: PERMIT2_ADDRESS,
     abi: PERMIT2_ABI,
     functionName: 'allowance',
     args: [owner, token, UNIVERSAL_ROUTER_ADDRESS],
-  });
+  } as any)) as readonly [bigint, number, number];
   const expirationBig = BigInt(expiration);
   const nowSeconds = BigInt(Math.floor(Date.now() / 1000));
   const permit2ApprovedToRouter =
@@ -149,7 +151,7 @@ export async function enableExternalBotSelling(
     const data = encodeFunctionData({
       abi: PERMIT2_ABI,
       functionName: 'approve',
-      args: [token, UNIVERSAL_ROUTER_ADDRESS, MAX_UINT160, expiration],
+      args: [token, UNIVERSAL_ROUTER_ADDRESS, MAX_UINT160, Number(expiration)], // uint48 -> number in viem's ABI typing
     });
     const txHash = (await provider.request({
       method: 'eth_sendTransaction',

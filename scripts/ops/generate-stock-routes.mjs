@@ -10,6 +10,10 @@
  *   - Robinhood API status ACTIVE when the API answered (enrichment; --include-unlisted to skip)
  *   - a Uniswap V3 WETH/asset pool with in-range liquidity > 0 and >= --min-weth WETH in it
  *   - the pool can serve the adapter's TWAP reference (observe over 1800 s, or the 600 s fallback)
+ *   - in-range liquidity >= --min-liquidity (raw L, default 1e17 ~ a pool that can absorb a 0.05 ETH
+ *     claim inside the 3 % bound) - audit 2026-09-08 finding 7 (BE: L 3e16, 0.98 WETH)
+ *   - not listed in config/loss-reward-stock-routes.overrides.json `disabled` (hand-maintained; a
+ *     disabled asset stays out even if the census admits it - re-enable on-chain and remove the entry)
  *   - the asset address sorts ABOVE WETH (0x0Bd7D308...): RewardSwapperUniswapV3 only swaps pools where
  *     WETH is token0 (validateRoute rejects the others). 7 of 203 stocks sort below WETH (VTI JNJ TTD
  *     AMC FLY SMH RDDT); they need a token-order-agnostic adapter before they can be routed.
@@ -26,6 +30,10 @@ const arg = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] :
 const IN = arg('--in', '');
 if (!IN) { console.error('usage: --in <stock-venues.json> [--min-weth 1] [--include-unlisted] [--routes-out path] [--candidates-out path]'); process.exit(2); }
 const MIN_WETH = Number(arg('--min-weth', '1'));
+const MIN_LIQUIDITY = BigInt(arg('--min-liquidity', '100000000000000000')); // raw in-range L
+const OVERRIDES_FILE = arg('--overrides', 'config/loss-reward-stock-routes.overrides.json');
+const overrides = fs.existsSync(OVERRIDES_FILE) ? JSON.parse(fs.readFileSync(OVERRIDES_FILE, 'utf8')) : { disabled: [] };
+const disabledByAsset = new Map((overrides.disabled || []).map((d) => [String(d.asset).toLowerCase(), d]));
 const INCLUDE_UNLISTED = args.includes('--include-unlisted');
 const ROUTES_OUT = arg('--routes-out', 'config/loss-reward-stock-routes.json');
 const CANDIDATES_OUT = arg('--candidates-out', 'src/lib/stockRewardCandidates.generated.json');
@@ -42,12 +50,15 @@ for (const s of venues.stocks) {
   if (s.apiStatus !== null && s.apiStatus !== undefined && s.apiStatus !== 'ASSET_STATUS_ACTIVE') why.push(`API status ${s.apiStatus}`);
   if ((s.apiStatus === null || s.apiStatus === undefined) && !INCLUDE_UNLISTED) why.push('not in the Robinhood API list');
   if (BigInt(s.address) < BigInt(WETH)) why.push('asset address sorts below WETH (asset would be token0); RewardSwapperUniswapV3 requires WETH as token0 - needs a token-order-agnostic adapter');
-  const qualifying = (s.pools || []).filter((p) => p.initialized && BigInt(p.liquidity || 0) > 0n && Number(p.wethBalance || 0) >= MIN_WETH && (p.twap30mAvailable || p.twap10mAvailable));
+  const override = disabledByAsset.get(String(s.address).toLowerCase());
+  if (override) why.push(`manually disabled (${OVERRIDES_FILE}, since ${override.since || '?'}): ${override.reason || 'no reason given'}`);
+  const qualifying = (s.pools || []).filter((p) => p.initialized && BigInt(p.liquidity || 0) >= MIN_LIQUIDITY && Number(p.wethBalance || 0) >= MIN_WETH && (p.twap30mAvailable || p.twap10mAvailable));
   if (!qualifying.length) {
     if (!(s.pools || []).length) why.push('no Uniswap V3 WETH pool');
     else {
       const best = [...s.pools].sort((a, b) => Number(b.wethBalance || 0) - Number(a.wethBalance || 0))[0];
       if (BigInt(best.liquidity || 0) === 0n) why.push('V3 WETH pool has no in-range liquidity');
+      else if (BigInt(best.liquidity || 0) < MIN_LIQUIDITY) why.push(`V3 WETH pool in-range liquidity ${best.liquidity} < ${MIN_LIQUIDITY} (too thin for the 3 % bound)`);
       else if (Number(best.wethBalance || 0) < MIN_WETH) why.push(`V3 WETH pool holds ${Number(best.wethBalance).toFixed(3)} WETH < ${MIN_WETH}`);
       else why.push('V3 WETH pool cannot serve a 30 m / 10 m TWAP yet (widen with increaseObservationCardinalityNext)');
     }
@@ -61,7 +72,8 @@ routes.sort((a, b) => a.symbol.localeCompare(b.symbol));
 const routesJson = {
   generatedAt: new Date().toISOString(),
   source: { venuesFile: path.basename(IN), chainHead: venues.chainHead, generatedAt: venues.generatedAt },
-  criteria: { minWethInPool: MIN_WETH, requireTwap: true, requireApiActive: !INCLUDE_UNLISTED },
+  criteria: { minWethInPool: MIN_WETH, minInRangeLiquidity: MIN_LIQUIDITY.toString(), requireTwap: true, requireApiActive: !INCLUDE_UNLISTED, overridesFile: OVERRIDES_FILE },
+  disabled: (overrides.disabled || []).map((d) => ({ symbol: d.symbol, asset: d.asset, since: d.since, reason: d.reason })),
   twapWindow: TWAP_WINDOW,
   maxDeviationBps: MAX_DEVIATION_BPS,
   count: routes.length,
