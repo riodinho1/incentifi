@@ -403,7 +403,7 @@ const LaunchPage = () => {
                         >
                           {rewardAssetOptions.map((opt) => (
                             <option key={opt.address} value={opt.address} disabled={!opt.enabled}>
-                              {opt.symbol}{opt.enabled ? '' : ` — unavailable (${opt.reason})`}
+                              {opt.symbol}{opt.name ? ` · ${opt.name}` : ''}{opt.enabled ? '' : ` — unavailable (${opt.reason})`}
                             </option>
                           ))}
                         </select>
@@ -414,7 +414,6 @@ const LaunchPage = () => {
                         </p>
                       ) : null}
                       {showStockDropdown ? null : (
-                      ) : (
                         <select
                           name="lossRewardAsset"
                           value="ETH"

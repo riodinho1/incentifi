@@ -1,0 +1,9 @@
+{
+  "_comment": "TEST FIXTURE ONLY - NVDA deliberately pointed at AAPL's pool; ConfigureStockRoutes must revert RouteRejectedByAdapter",
+  "count": 1,
+  "twapWindow": 1800,
+  "maxDeviationBps": 300,
+  "routes": [
+    { "symbol": "NVDA", "asset": "0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC", "pool": "0x8bb3514e2204E1cDF3Ac149EFEe7Ff04D91B719f", "fee": 500 }
+  ]
+}

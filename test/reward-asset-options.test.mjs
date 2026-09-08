@@ -128,6 +128,24 @@ try {
     console.log('5. proxy first, direct fallback, both errors reported when neither answers  OK');
   }
 
+  // 6. the FULL generated candidate universe (config/loss-reward-stock-routes.json): every routed stock
+  //    is offered; API unreachable -> all enabled; API listing only some -> the rest disabled by name
+  {
+    assert.ok(m.STOCK_REWARD_CANDIDATE_LIST.length >= 3);
+    for (const sym of ['AAPL', 'TSLA', 'NVDA', 'SPY']) assert.ok(m.STOCK_REWARD_CANDIDATES[sym], `${sym} in the generated universe`);
+    for (const c of m.STOCK_REWARD_CANDIDATE_LIST) { assert.equal(c.symbol, c.symbol.toUpperCase()); assert.ok(c.name && !/Robinhood Token/.test(c.name), `${c.symbol} name stripped`); }
+    const all = await m.getRewardAssetOptions({ flagEnabled: true, legibleEnabled: true, v2Configured: true, canonical: async () => true, selectable: async () => true, fetchActive: async () => { throw new Error('down'); }, warn: () => {} });
+    assert.equal(all.length, 1 + m.STOCK_REWARD_CANDIDATE_LIST.length);
+    assert.ok(all.slice(1).every((o) => o.enabled && o.note === m.NOTE_API_UNREACHABLE));
+    assert.deepEqual(all.slice(1).map((o) => o.symbol), [...all.slice(1).map((o) => o.symbol)].sort(), 'enabled stocks A-Z');
+    const onlyTwo = new Map([['AAPL', AAPL], ['NVDA', NVDA]]);
+    const some = await m.getRewardAssetOptions({ flagEnabled: true, legibleEnabled: true, v2Configured: true, canonical: async () => true, selectable: async () => true, fetchActive: async () => onlyTwo });
+    assert.deepEqual(some.filter((o) => o.enabled).map((o) => o.symbol), ['ETH', 'AAPL', 'NVDA']);
+    assert.ok(some.filter((o) => !o.enabled).every((o) => o.reason === m.REASON_API_INACTIVE));
+    assert.ok(some.findIndex((o) => !o.enabled) > some.map((o) => o.enabled).lastIndexOf(true), 'disabled options listed after the enabled ones');
+    console.log(`6. full universe: ${m.STOCK_REWARD_CANDIDATE_LIST.length} routed stocks offered; API down -> all enabled; API partial -> rest disabled with the API reason  OK`);
+  }
+
   console.log('\nreward-asset-options tests passed');
 } finally {
   await vite.close();
