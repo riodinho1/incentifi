@@ -62,8 +62,10 @@ const rpcServer = http.createServer((req, res) => {
 });
 await new Promise((r) => rpcServer.listen(0, '127.0.0.1', r));
 const RPC_URL = `http://127.0.0.1:${rpcServer.address().port}`;
+process.env.RPC_GETLOGS_MIN_INTERVAL_MS = '0'; // no getLogs pacing in tests
 process.env.VITE_EVM_RPC_URL = RPC_URL; // .env.local does not define this key, so it survives the indexer's loader
-process.env.V4_DISCOVERY_CHUNK_BLOCKS = '5000'; // this test's chunk arithmetic (3 chunks of 5,000/5,000/2,000) predates the 2,000 default
+process.env.V4_DISCOVERY_CHUNK_BLOCKS = '5000';
+process.env.V4_DISCOVERY_BLOCKING = 'true'; // this test asserts the blocking precondition; the default is now decoupled (see indexer-discovery-decoupled.test.mjs) // this test's chunk arithmetic (3 chunks of 5,000/5,000/2,000) predates the 2,000 default
 
 // ---- Supabase mock (installed BEFORE the indexer is imported) ---------------------------------
 function readEnvLocal(key) {

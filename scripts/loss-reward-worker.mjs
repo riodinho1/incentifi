@@ -16,7 +16,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { createServer as createViteServer } from 'vite';
 import fs from 'fs';
 import { isLegibleToken, fetchLegibleState, computeUncollectedLegibleFees, INCENTIFI_LEGIBLE_HOOK, INCENTIFI_LEGIBLE_FEE_CONVERTER, LEGIBLE_HOOK_ABI, LEGIBLE_CONVERTER_ABI } from './lib/legiblePool.mjs';
-import { createFailoverRpc, parseRpcUrls } from './lib/rpcFailover.mjs';
+import { createFailoverRpc, parseRpcUrls, failoverOptionsFromEnv } from './lib/rpcFailover.mjs';
 import { readBalanceReliably } from './lib/reliableBalance.mjs';
 
 // ============================================================================
@@ -98,7 +98,7 @@ if (fs.existsSync('.env.local')) {
 // Environment Configuration with safe defaults
 // RPC_URLS (comma-separated) with failover (scripts/lib/rpcFailover.mjs); legacy single variable still honoured.
 const RPC_URLS = parseRpcUrls(process.env);
-export const rpcFailover = createFailoverRpc(RPC_URLS, { name: 'worker', timeoutMs: Number(process.env.RPC_TIMEOUT_MS || 20_000) });
+export const rpcFailover = createFailoverRpc(RPC_URLS, { name: 'worker', ...failoverOptionsFromEnv(process.env) });
 const rpcTransport = rpcFailover.transport;
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';

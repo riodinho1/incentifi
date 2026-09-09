@@ -23,7 +23,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import fs from 'node:fs';
 import { createPublicClient, keccak256, RpcRequestError } from 'viem';
-import { createFailoverRpc, parseRpcUrls, retryableReason } from '../scripts/lib/rpcFailover.mjs';
+import { createFailoverRpc, parseRpcUrls, retryableReason, isHistoricalRequest, parseRetryAfterMs, failoverOptionsFromEnv } from '../scripts/lib/rpcFailover.mjs';
 
 const hits = { A: 0, B: 0, C: 0, D: 0, E: 0, F: 0 };
 const eth = (id, result) => JSON.stringify({ jsonrpc: '2.0', id, result });
@@ -69,7 +69,7 @@ try {
   assert.deepEqual(parseRpcUrls({}), ['https://rpc.mainnet.chain.robinhood.com']);
   assert.equal(retryableReason({ jsonError: { code: 3, message: 'execution reverted', data: '0x1234' } }), null, 'revert is final');
   assert.equal(retryableReason({ jsonError: { code: -32000, message: 'execution reverted', data: '0x08c379a0' } }), null, '-32000 WITH data is an execution error');
-  assert.match(retryableReason({ jsonError: { code: -32000, message: 'header not found' } }), /rpc error -32000/, '-32000 without data is retryable');
+  assert.match(retryableReason({ jsonError: { code: -32000, message: 'header not found' } }), /rpc error -32000|non-archive/, '-32000 without data is retryable ("header not found" now classified as a non-archive answer)');
   console.log('1. parseRpcUrls + retryableReason classification  OK');
 
   // 2. rotation A -> B -> C -> D -> E
@@ -114,7 +114,7 @@ try {
   console.log('3. cooldown expires with the clock and doubles per consecutive failure  OK');
 
   // 4. rotate on 429 / rate-limit code / method-not-available / archive token; revert is final with data
-  for (const [mode, expect] of [['http429', /HTTP 429/], ['rate', /rpc rate limit|rpc error -32029/], ['nomethod', /endpoint cannot serve|rpc error -32601/], ['archive', /endpoint cannot serve request: Archive requests/]]) {
+  for (const [mode, expect] of [['http429', /HTTP 429/], ['rate', /rpc rate limit|rpc error -32029/], ['nomethod', /endpoint cannot serve|rpc error -32601/], ['archive', /non-archive: Archive requests/]]) {
     fMode = mode; const l = [];
     const r = createFailoverRpc([F.url, E.url], { timeoutMs: 400, log: (m) => l.push(m), now: () => clock, sleep: async (ms) => { clock += ms; }, name: mode });
     assert.equal(await r.provider.request({ method: 'eth_chainId', params: [] }), '0x1237', mode);
@@ -176,6 +176,55 @@ try {
   eMode = 'ok';
   G.s.close();
   console.log('7b. response with a foreign id -> malformed + rotate; requestVia targets one endpoint and throws on failure  OK');
+
+  // 7c. pacing (concurrency 1 + min interval), Retry-After, non-archive routing
+  assert.equal(parseRetryAfterMs('7', 0), 7000); assert.equal(parseRetryAfterMs(null), null); assert.equal(parseRetryAfterMs('Thu, 01 Jan 1970 00:00:10 GMT', 0), 10_000);
+  assert.deepEqual(failoverOptionsFromEnv({ RPC_GETLOGS_MIN_INTERVAL_MS: '250', RPC_NON_ARCHIVE_URLS: 'a.example,b.example', RPC_HISTORY_DEPTH_BLOCKS: '64' }).paceMs, { eth_getLogs: 250 });
+  assert.deepEqual(failoverOptionsFromEnv({}).nonArchive, ['robinhood.api.pocket.network', 'publicnode.com']);
+  assert.equal(isHistoricalRequest('eth_getLogs', [{ fromBlock: '0x10', toBlock: '0x20' }], 10_000n, 256), true);
+  assert.equal(isHistoricalRequest('eth_getLogs', [{ fromBlock: '0x2700', toBlock: 'latest' }], 10_000n, 256), false, 'recent range to latest is a head read');
+  assert.equal(isHistoricalRequest('eth_getLogs', [{ fromBlock: '0x10', toBlock: '0x20' }], null, 256), true, 'head unknown -> conservative');
+  assert.equal(isHistoricalRequest('eth_call', [{ to: '0x' + '1'.repeat(40), data: '0x' }, '0x2700'], 10_000n, 256), false);
+  assert.equal(isHistoricalRequest('eth_call', [{ to: '0x' + '1'.repeat(40), data: '0x' }, '0x10'], 10_000n, 256), true);
+  assert.equal(isHistoricalRequest('eth_call', [{ to: '0x' + '1'.repeat(40), data: '0x' }, 'latest'], 10_000n, 256), false);
+  // pacing: E answers everything; three getLogs with paceMs 300 -> the 2nd and 3rd wait, eth_chainId does not
+  const pl = []; let pclock = 5_000_000; const slept = [];
+  const rp = createFailoverRpc([E.url], { timeoutMs: 400, log: (m) => pl.push(m), now: () => pclock, sleep: async (ms) => { slept.push(ms); pclock += ms; }, paceMs: { eth_getLogs: 300 }, name: 'pace' });
+  await Promise.all([rp.provider.request({ method: 'eth_getLogs', params: [{ fromBlock: 'latest', toBlock: 'latest' }] }), rp.provider.request({ method: 'eth_getLogs', params: [{ fromBlock: 'latest', toBlock: 'latest' }] }), rp.provider.request({ method: 'eth_getLogs', params: [{ fromBlock: 'latest', toBlock: 'latest' }] }), rp.provider.request({ method: 'eth_chainId', params: [] })]);
+  assert.equal(rp.state.paced, 2, 'two of three getLogs had to wait'); assert.ok(slept.every((ms) => ms <= 300 && ms > 0), `waits are the remaining interval (${slept})`);
+  // Retry-After: 429 with Retry-After: 7 -> cooldown >= 7s (not the 2s base)
+  let raMode = 'ra'; const RA = await serve('F', (q, res) => { if (raMode === 'ra') { res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '7' }); return res.end('{"error":"slow down"}'); } res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(eth(q.id, '0x1237')); });
+  const rl = []; let rclock = 6_000_000;
+  const rr2 = createFailoverRpc([RA.url, E.url], { timeoutMs: 400, log: (m) => rl.push(m), now: () => rclock, sleep: async (ms) => { rclock += ms; }, name: 'ra' });
+  assert.equal(await rr2.provider.request({ method: 'eth_chainId', params: [] }), '0x1237');
+  assert.equal(rr2.state.cooldownUntil[0] - rclock, 7000, 'Retry-After honoured over the 2s base'); assert.ok(rl.some((x) => /Retry-After 7s/.test(x)));
+  // backoff does not reset on an intervening success: fail, succeed elsewhere, fail again within 60s -> level 2
+  rclock += 7001; rr2.state.current = 0;
+  await rr2.provider.request({ method: 'eth_chainId', params: [] });
+  assert.equal(rr2.state.consecutiveFailures[0], 2, 'second failure within backoffResetMs keeps doubling');
+  RA.s.close();
+  // non-archive routing: P (non-archive pattern) + E (archive). Head learned from eth_blockNumber = 0x371bde6.
+  const hitsP = { n: 0, hist: 0 }; const P = await serve('F', (q, res) => { hitsP.n++; if (q.method === 'eth_getLogs' && q.params[0].toBlock !== 'latest') hitsP.hist++; res.writeHead(200, { 'Content-Type': 'application/json' }); if (q.method === 'eth_blockNumber') return res.end(eth(q.id, '0x371bde6')); res.end(eth(q.id, q.method === 'eth_getLogs' ? [] : '0x1237')); });
+  const nl = []; const na = createFailoverRpc([P.url, E.url], { timeoutMs: 400, log: (m) => nl.push(m), now: () => clock, sleep: async (ms) => { clock += ms; }, nonArchive: ['127.0.0.1:' + new URL(P.url).port], historyDepthBlocks: 256, name: 'arch' });
+  assert.deepEqual(na.state.nonArchive, [true, false]);
+  await na.provider.request({ method: 'eth_blockNumber', params: [] }); assert.equal(na.state.head, 0x371bde6n, 'head learned');
+  const eBefore = hits.E;
+  await na.provider.request({ method: 'eth_getLogs', params: [{ fromBlock: '0x10', toBlock: '0x20' }] }); // historical -> must go to E
+  assert.equal(hits.E, eBefore + 1, 'historical getLogs served by the archive endpoint'); assert.equal(hitsP.hist, 0, 'the non-archive endpoint never saw a historical range');
+  assert.ok(nl.some((x) => /historical eth_getLogs;.*is non-archive/.test(x)), 'routing logged');
+  na.state.current = 0; // back on P (the provider otherwise stays where it last succeeded)
+  const pBefore = hitsP.n;
+  await na.provider.request({ method: 'eth_getLogs', params: [{ fromBlock: '0x371bde0', toBlock: 'latest' }] }); // head read -> P allowed
+  assert.equal(hitsP.n, pBefore + 1, 'non-archive endpoint still used for head reads'); assert.equal(hitsP.hist, 0);
+  // learned at runtime: an endpoint answering "historical state is not available" is marked non-archive
+  const learn = await serve('F', (q, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); if (q.method === 'eth_getLogs') return res.end(JSON.stringify({ jsonrpc: '2.0', id: q.id, error: { code: -32000, message: 'historical state is not available' } })); res.end(eth(q.id, '0x371bde6')); });
+  const ll = []; const la = createFailoverRpc([learn.url, P.url], { timeoutMs: 400, log: (m) => ll.push(m), now: () => clock, sleep: async (ms) => { clock += ms; }, nonArchive: ['127.0.0.1:' + new URL(P.url).port], name: 'learn' });
+  await la.provider.request({ method: 'eth_blockNumber', params: [] });
+  await assert.rejects(la.provider.request({ method: 'eth_getLogs', params: [{ fromBlock: '0x10', toBlock: '0x20' }] }), /non-archive|every configured endpoint is non-archive/);
+  assert.deepEqual(la.state.nonArchive, [true, true], 'learned from the error message'); assert.ok(ll.some((x) => /marking it non-archive/.test(x)));
+  assert.ok(['0x1237', '0x371bde6'].includes(await la.provider.request({ method: 'eth_chainId', params: [] })), 'head reads still work (either endpoint may answer)');
+  P.s.close(); learn.s.close();
+  console.log('7c. pacing waits per method; Retry-After honoured; backoff keeps doubling across a success; non-archive endpoints skipped for historical ranges/state and learned at runtime  OK');
 
   // 8. gateway copy in sync
   const norm = (s) => s.replace(/\r\n/g, '\n').replace(/from 'npm:viem@2\.55\.2';/, "from 'viem';");

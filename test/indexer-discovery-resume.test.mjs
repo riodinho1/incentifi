@@ -76,6 +76,7 @@ const rpc = http.createServer((req, res) => {
 });
 await new Promise((r) => rpc.listen(0, '127.0.0.1', r));
 
+process.env.RPC_GETLOGS_MIN_INTERVAL_MS = '0'; // no getLogs pacing in tests
 process.env.RPC_URLS = `http://127.0.0.1:${rpc.address().port}`;
 process.env.V4_DISCOVERY_FLOOR_BLOCK = '1000';
 process.env.LEGIBLE_DISCOVERY_FLOOR_BLOCK = '2000';

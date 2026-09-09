@@ -114,6 +114,7 @@ const rpc = http.createServer((req, res) => {
   });
 });
 await new Promise((r) => rpc.listen(0, '127.0.0.1', r));
+process.env.RPC_GETLOGS_MIN_INTERVAL_MS = '0'; // no getLogs pacing in tests
 process.env.VITE_EVM_RPC_URL = `http://127.0.0.1:${rpc.address().port}`;
 
 // ---- Supabase mock (installed BEFORE the indexer is imported) -------------------------------
@@ -142,6 +143,7 @@ mock.seed('tokens', [
   { id: 2, mint_address: TOKEN_B.toLowerCase(), symbol: 'LEGB', hook_address: null },
 ]);
 
+process.env.V4_DISCOVERY_BLOCKING = 'true'; // this test asserts discovery completes within the tick (the default is now decoupled; see indexer-discovery-decoupled.test.mjs)
 const indexer = await import('../scripts/evm-indexer.mjs');
 const idx = indexer.createIndexer();
 
