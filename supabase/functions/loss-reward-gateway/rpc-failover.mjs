@@ -20,6 +20,14 @@
  * Use: `const rpc = createFailoverRpc(parseRpcUrls(process.env)); createPublicClient({ transport: rpc.transport })`.
  * The active endpoint is logged on first use and on every switch ("[RPC] ...").
  *
+ * Pacing (2026-09-09): `paceMs` serialises a method (concurrency 1) and enforces a minimum interval
+ * between its calls (`eth_getLogs` 300 ms by default via failoverOptionsFromEnv); a 429/503 honours
+ * Retry-After; per-endpoint backoff doubles for failures inside `backoffResetMs` and is capped at
+ * `cooldownMaxMs`. Non-archive endpoints (`nonArchive` patterns, or learned at runtime from
+ * "historical state is not available"-style errors) are skipped for historical requests — getLogs
+ * ranges or state reads older than `historyDepthBlocks` behind the last seen head — and kept for
+ * head reads.
+ *
  * The copy under supabase/functions/loss-reward-gateway/ differs only in the viem import specifier
  * (Deno needs `npm:viem@2.55.2`); test/rpc-failover.test.mjs asserts the two stay identical otherwise.
  */
@@ -46,6 +54,53 @@ export function parseRpcUrls(env = process.env) {
   return single ? [single] : [...DEFAULT_RPC_URLS];
 }
 
+export const DEFAULT_NON_ARCHIVE_HOSTS = ['robinhood.api.pocket.network', 'publicnode.com'];
+const NON_ARCHIVE_MESSAGE = /historical state is not available|archive requests require|missing trie node|state (is )?not available|pruned|block not found|header not found|not available for block/i;
+const HISTORICAL_STATE_METHODS = new Set(['eth_call', 'eth_getBalance', 'eth_getCode', 'eth_getStorageAt', 'eth_getTransactionCount']);
+
+/** Failover options from the environment (both services read the same variables). */
+export function failoverOptionsFromEnv(env = (typeof process !== 'undefined' ? process.env : {})) {
+  const list = (v, d) => (v === undefined || v === null ? d : String(v).split(',').map((x) => x.trim()).filter(Boolean));
+  return {
+    paceMs: { eth_getLogs: Number(env.RPC_GETLOGS_MIN_INTERVAL_MS ?? 300) },
+    nonArchive: list(env.RPC_NON_ARCHIVE_URLS, DEFAULT_NON_ARCHIVE_HOSTS),
+    historyDepthBlocks: Number(env.RPC_HISTORY_DEPTH_BLOCKS ?? 256),
+    cooldownMaxMs: Number(env.RPC_COOLDOWN_MAX_MS ?? 120_000),
+    timeoutMs: Number(env.RPC_TIMEOUT_MS ?? 20_000),
+  };
+}
+
+/** Parses an HTTP Retry-After header (seconds or HTTP-date) into milliseconds, or null. */
+export function parseRetryAfterMs(value, nowMs = Date.now()) {
+  if (value === null || value === undefined || value === '') return null;
+  const secs = Number(value);
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
+  const at = Date.parse(String(value));
+  return Number.isFinite(at) ? Math.max(0, at - nowMs) : null;
+}
+
+const hexToBig = (h) => (typeof h === 'string' && /^0x[0-9a-fA-F]+$/.test(h) ? BigInt(h) : null);
+/**
+ * Does this request need state or logs older than `depth` blocks behind `head`? With no head known
+ * yet, any explicit block number counts as historical (conservative: prefer an archive endpoint).
+ */
+export function isHistoricalRequest(method, params, head, depth) {
+  const old = (bn) => (bn === null ? false : head === null ? true : bn < head - BigInt(depth));
+  if (method === 'eth_getLogs') {
+    const f = params && params[0];
+    if (!f || typeof f !== 'object') return false;
+    const to = hexToBig(f.toBlock);
+    const from = hexToBig(f.fromBlock);
+    if (to !== null) return old(to);
+    return from !== null && old(from); // fromBlock..latest still needs history from fromBlock
+  }
+  if (HISTORICAL_STATE_METHODS.has(method)) {
+    const tag = params && params[params.length - 1];
+    return old(hexToBig(typeof tag === 'string' ? tag : tag && tag.blockNumber));
+  }
+  return false;
+}
+
 /** Classifies a failure. Returns a short reason string when the request should rotate, else null. */
 export function retryableReason({ httpStatus, jsonError, parseError, networkError, timedOut } = {}) {
   if (timedOut) return 'timeout';
@@ -59,6 +114,7 @@ export function retryableReason({ httpStatus, jsonError, parseError, networkErro
     // a node that has already seen this signed transaction answered on purpose: final (the caller
     // decides what "already known" means; request() turns it into success after a re-send)
     if (ALREADY_KNOWN.test(msg)) return null;
+    if (NON_ARCHIVE_MESSAGE.test(msg)) return `non-archive: ${msg.slice(0, 80)}`;
     if (/rate limit|too many requests|capacity|overloaded|try again/i.test(msg)) return `rpc rate limit: ${msg.slice(0, 80)}`;
     // an endpoint that cannot serve this request class (publicnode: "Archive requests require a personal
     // token"; pocket: relay errors; nodes that do not support the method) -> another endpoint can
@@ -95,6 +151,11 @@ export function createFailoverRpc(urls, opts = {}) {
   const now = opts.now ?? (() => Date.now());
   const sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const name = opts.name ?? 'rpc';
+  const paceMs = opts.paceMs ?? {};
+  const backoffResetMs = opts.backoffResetMs ?? 60_000;
+  const historyDepthBlocks = opts.historyDepthBlocks ?? 256;
+  const nonArchivePatterns = (opts.nonArchive ?? []).map((x) => (x instanceof RegExp ? x : String(x).toLowerCase()));
+  const matchesNonArchive = (url) => nonArchivePatterns.some((x) => (x instanceof RegExp ? x.test(url) : url.toLowerCase().includes(x)));
 
   const state = {
     endpoints,
@@ -105,25 +166,52 @@ export function createFailoverRpc(urls, opts = {}) {
     requests: 0,
     failures: 0,
     announced: false,
+    lastFailureAt: endpoints.map(() => 0),
+    nonArchive: endpoints.map((u) => matchesNonArchive(u)),
+    head: null, // latest block number seen from eth_blockNumber / eth_getBlockByNumber('latest')
+    historicalSkips: 0,
+    paced: 0,
     get activeUrl() { return endpoints[state.current]; },
   };
   let idCounter = 0;
+  const lanes = new Map(); // method -> { last, queue } for paced methods (concurrency 1 + min interval)
+  async function paced(method, fn) {
+    const interval = Number(paceMs[method] || 0);
+    if (!(interval > 0)) return fn();
+    if (!lanes.has(method)) lanes.set(method, { last: 0, queue: Promise.resolve() });
+    const lane = lanes.get(method);
+    const run = lane.queue.then(async () => {
+      const wait = lane.last + interval - now();
+      if (wait > 0) { state.paced++; await sleep(wait); }
+      lane.last = now();
+      try { return await fn(); } finally { lane.last = now(); }
+    });
+    lane.queue = run.catch(() => {});
+    return run;
+  }
 
-  function pickEndpoint() {
+  const eligible = (i, historical) => !(historical && state.nonArchive[i]);
+  function pickEndpoint(historical = false) {
     const t = now();
-    if (state.cooldownUntil[state.current] <= t) return state.current;
-    // first non-cooling endpoint after the current one
+    if (state.cooldownUntil[state.current] <= t && eligible(state.current, historical)) return state.current;
+    // first non-cooling eligible endpoint after the current one
     for (let k = 1; k <= endpoints.length; k++) {
       const i = (state.current + k) % endpoints.length;
-      if (state.cooldownUntil[i] <= t) return i;
+      if (state.cooldownUntil[i] <= t && eligible(i, historical)) return i;
     }
-    return -1; // everybody is cooling
+    return -1; // everybody eligible is cooling
   }
-  function fail(i, reason) {
+  function fail(i, reason, retryAfterMs = null) {
+    const t = now();
     state.failures++;
+    // Exponential per endpoint: doubles for failures that follow each other within backoffResetMs;
+    // a success does NOT reset it (an endpoint alternating 200/429 would otherwise sit at 2s forever).
+    if (t - state.lastFailureAt[i] > backoffResetMs) state.consecutiveFailures[i] = 0;
     state.consecutiveFailures[i]++;
-    const cool = Math.min(cooldownMaxMs, cooldownBaseMs * 2 ** (state.consecutiveFailures[i] - 1));
-    state.cooldownUntil[i] = now() + cool;
+    state.lastFailureAt[i] = t;
+    let cool = Math.min(cooldownMaxMs, cooldownBaseMs * 2 ** (state.consecutiveFailures[i] - 1));
+    if (retryAfterMs !== null && retryAfterMs > cool) cool = Math.min(cooldownMaxMs * 5, retryAfterMs); // honour Retry-After
+    state.cooldownUntil[i] = t + cool;
     return cool;
   }
   function switchTo(from, to, reason, cool) {
@@ -150,7 +238,11 @@ export function createFailoverRpc(urls, opts = {}) {
       if (timer) clearTimeout(timer);
     }
     const text = await res.text().catch(() => '');
-    if (!res.ok && (res.status === 429 || res.status >= 500)) return { retry: retryableReason({ httpStatus: res.status }), body };
+    if (!res.ok && (res.status === 429 || res.status >= 500)) {
+      const retryAfterMs = parseRetryAfterMs(res.headers && typeof res.headers.get === 'function' ? res.headers.get('retry-after') : null, now());
+      if (NON_ARCHIVE_MESSAGE.test(text)) return { retry: `non-archive: HTTP ${res.status} ${text.slice(0, 60).replace(/\s+/g, ' ')}`, body, retryAfterMs };
+      return { retry: retryableReason({ httpStatus: res.status }), body, retryAfterMs };
+    }
     let json;
     try { json = JSON.parse(text); } catch { return { retry: retryableReason({ parseError: `non-JSON body: ${text.slice(0, 60).replace(/\s+/g, ' ')}` }), body }; }
     if (!json || typeof json !== 'object' || Array.isArray(json) || (!('result' in json) && !('error' in json))) {
@@ -165,31 +257,53 @@ export function createFailoverRpc(urls, opts = {}) {
       if (retry) return { retry, body, error: json.error };
       return { final: json.error, body };
     }
+    if (method === 'eth_blockNumber') { const h = hexToBig(json.result); if (h !== null) state.head = h; }
+    if (method === 'eth_getBlockByNumber' && params && params[0] === 'latest' && json.result && typeof json.result === 'object') { const h = hexToBig(json.result.number); if (h !== null) state.head = h; }
     return { result: json.result, body };
   }
 
   async function request({ method, params }) {
+    return paced(method, () => requestNow({ method, params }));
+  }
+
+  async function requestNow({ method, params }) {
     state.requests++;
     let lastReason = 'no endpoint';
     let sentRawTo = null; // eth_sendRawTransaction: an endpoint that may have broadcast before failing
+    const historical = isHistoricalRequest(method, params, state.head, historyDepthBlocks);
+    if (historical && state.nonArchive.every(Boolean)) {
+      const err = new Error(`[RPC] ${name}: ${method} needs historical data (older than ${historyDepthBlocks} blocks behind head ${state.head ?? 'unknown'}) but every configured endpoint is non-archive (${endpoints.join(', ')}); configure an archive endpoint in RPC_URLS`);
+      err.code = -32603;
+      throw err;
+    }
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      let i = pickEndpoint();
+      let i = pickEndpoint(historical);
       if (i === -1) {
-        // every endpoint is cooling: wait for the soonest one
-        const soonest = state.cooldownUntil.reduce((a, c, idx) => (c < state.cooldownUntil[a] ? idx : a), 0);
+        // every eligible endpoint is cooling: wait for the soonest one
+        const candidates = state.cooldownUntil.map((c, idx) => idx).filter((idx) => eligible(idx, historical));
+        if (!candidates.length) {
+          // every endpoint was (just) learned to be non-archive
+          const err = new Error(`[RPC] ${name}: ${method} needs historical data but every configured endpoint is non-archive (${endpoints.join(', ')}); configure an archive endpoint in RPC_URLS (last: ${lastReason})`);
+          err.code = -32603;
+          throw err;
+        }
+        const soonest = candidates.reduce((a, c) => (state.cooldownUntil[c] < state.cooldownUntil[a] ? c : a), candidates[0]);
         const wait = Math.max(0, Math.min(allBusyWaitMs, state.cooldownUntil[soonest] - now()));
         log(`[RPC] ${name}: all ${endpoints.length} endpoint(s) cooling down; waiting ${Math.round(wait)}ms for ${endpoints[soonest]}`);
         await sleep(wait);
         state.cooldownUntil[soonest] = now();
         i = soonest;
       }
-      if (i !== state.current) { log(`[RPC] ${name}: using ${endpoints[i]}`); state.current = i; }
+      if (i !== state.current) {
+        if (historical && state.nonArchive[state.current]) state.historicalSkips++;
+        log(`[RPC] ${name}: using ${endpoints[i]}${historical && state.nonArchive[state.current] ? ` (historical ${method}; ${endpoints[state.current]} is non-archive)` : ''}`);
+        state.current = i;
+      }
       if (!state.announced) { state.announced = true; log(`[RPC] ${name}: using ${endpoints[i]} (${endpoints.length} endpoint(s) configured)`); }
       const url = endpoints[i];
       const out = await call(url, method, params);
       if ('result' in out) {
-        state.consecutiveFailures[i] = 0;
-        return out.result;
+        return out.result; // backoff level is left to decay by time (see fail())
       }
       if (out.final) {
         // A node produced this error on purpose (revert, bad params, ...). For a re-sent raw tx,
@@ -204,9 +318,13 @@ export function createFailoverRpc(urls, opts = {}) {
       // Any retryable failure of a raw send (timeout, garbage body, 5xx, ...) may have happened AFTER the
       // node accepted the transaction, so remember the endpoint: a later "already known" is then success.
       if (method === 'eth_sendRawTransaction' && sentRawTo === null) sentRawTo = i;
-      const cool = fail(i, out.retry);
-      const next = pickEndpoint();
-      switchTo(i, next === -1 ? i : next, out.retry, cool);
+      if (String(out.retry).startsWith('non-archive') && !state.nonArchive[i]) {
+        state.nonArchive[i] = true;
+        log(`[RPC] ${name}: ${url} cannot serve historical data (${out.retry}); marking it non-archive - it stays in rotation for head reads only`);
+      }
+      const cool = fail(i, out.retry, out.retryAfterMs ?? null);
+      const next = pickEndpoint(historical);
+      switchTo(i, next === -1 ? i : next, out.retry + (out.retryAfterMs ? `, Retry-After ${Math.round(out.retryAfterMs / 1000)}s` : ''), cool);
       if (next === i || next === -1) await sleep(Math.min(cool, allBusyWaitMs));
     }
     const err = new Error(`[RPC] ${name}: ${method} failed on every endpoint after ${maxAttempts} attempts (last: ${lastReason})`);

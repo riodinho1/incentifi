@@ -14,7 +14,7 @@ import {
   LEGIBLE_HOOK_EVENTS,
   fetchLegibleState,
 } from './lib/legiblePool.mjs';
-import { createFailoverRpc, parseRpcUrls } from './lib/rpcFailover.mjs';
+import { createFailoverRpc, parseRpcUrls, failoverOptionsFromEnv } from './lib/rpcFailover.mjs';
 import { readBalanceReliably } from './lib/reliableBalance.mjs';
 
 // Robust .env.local loader
@@ -38,7 +38,7 @@ if (fs.existsSync('.env.local')) {
 // Environment variables
 // RPC_URLS (comma-separated) with failover; falls back to the single legacy variable / the public endpoint.
 const RPC_URLS = parseRpcUrls(process.env);
-export const rpcFailover = createFailoverRpc(RPC_URLS, { name: 'indexer', timeoutMs: Number(process.env.RPC_TIMEOUT_MS || 20_000) });
+export const rpcFailover = createFailoverRpc(RPC_URLS, { name: 'indexer', ...failoverOptionsFromEnv(process.env) });
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
@@ -57,6 +57,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 });
 
 const client = createPublicClient({
+  cacheTime: 0, // one eth_blockNumber per tick; viem's 4 s block cache would make a fast second tick reuse the previous head
   transport: rpcFailover.transport, // rotates endpoints on malformed / 5xx / timeout; see scripts/lib/rpcFailover.mjs
 });
 
@@ -668,6 +669,72 @@ export async function recordIndexedToken({ tokenAddr, symbol, venue, hookAddr, f
  * function is also used for the one-time historical catch-up, where there is no "next
  * tick" to self-heal on).
  */
+// ---------------------------------------------------------------------------------------------
+// Discovery / trade-indexing decoupling (2026-09-09). Until now every tick REQUIRED V4 discovery to
+// have scanned through the tick's window before any trade was indexed, and runIndexer awaited a full
+// warm-up before the first tick - so a rescan from the floors through rate-limited public RPCs froze
+// trade indexing for every known token for hours (holder_cost_basis went stale while the worker kept
+// paying). Now trades of KNOWN pools are indexed immediately; discovery runs in the background (one
+// pass at a time); a token discovered later whose launch block is at or before the trade cursor is
+// BACKFILLED from its launch block before the next window is indexed, and its live logs are held
+// back until then, so its trades are applied in order and nothing is skipped for good.
+// V4_DISCOVERY_BLOCKING=true restores the old hard precondition.
+// ---------------------------------------------------------------------------------------------
+export const V4_DISCOVERY_BLOCKING = String(process.env.V4_DISCOVERY_BLOCKING || 'false').toLowerCase() === 'true';
+let tradeCursorBlock = null; // last block the tick has indexed trades through (null before the first tick)
+export function setTradeCursorBlock(block) { tradeCursorBlock = block === null || block === undefined ? null : BigInt(block); }
+export const pendingBackfills = new Map(); // poolId -> { token, hook, fromBlock, symbol }
+let discoveryInFlight = null;
+/** Resolves when no background discovery pass is running (tests). */
+export function whenDiscoveryIdle() { return discoveryInFlight ? discoveryInFlight.then(() => undefined, () => undefined) : Promise.resolve(); }
+/** Starts a discovery pass in the background unless one is already running; never throws. */
+export function kickDiscovery(toBlock) {
+  advanceV4Discovery(toBlock).catch((err) => console.warn(`[V4 DISCOVERY] background pass failed (retrying next tick): ${err.message}`));
+}
+export function discoveryLagMessage(block) {
+  if (isV4DiscoveryReadyThrough(block)) return '';
+  return `; V4 discovery behind (generic-sell through ${v4LastScannedBlock ?? 'none yet'}, legible through ${legibleLastScannedBlock ?? 'none yet'}, need ${block}; new launches are backfilled when found${pendingBackfills.size ? `, ${pendingBackfills.size} backfill(s) pending` : ''})`;
+}
+
+/**
+ * Indexes one pool's Bought/Sold from `fromBlock` to `toBlock` (chunked, poolId topic filter, so it is
+ * cheap even over a long range) and releases the pool for live windows. Throws on failure; the pool
+ * stays queued and its live logs stay held back.
+ */
+export async function backfillPoolTrades(poolId, toBlock) {
+  const entry = pendingBackfills.get(poolId);
+  if (!entry) return 0;
+  const events = entry.hook === LEGIBLE_HOOK_LOWER ? LEGIBLE_HOOK_EVENTS : V4_HOOK_TRADE_EVENTS;
+  const tradeEvents = events.filter((e) => e.name === 'Bought' || e.name === 'Sold');
+  let ingested = 0;
+  let from = entry.fromBlock;
+  const to = BigInt(toBlock);
+  if (from > to) { pendingBackfills.delete(poolId); return 0; }
+  console.log(`[V4 BACKFILL] ${entry.symbol} (${entry.token}) pool ${poolId}: blocks ${from} -> ${to} on hook ${entry.hook}`);
+  while (from <= to) {
+    const chunkTo = from + V4_DISCOVERY_CHUNK_BLOCKS > to ? to : from + V4_DISCOVERY_CHUNK_BLOCKS;
+    const logs = [];
+    for (const event of tradeEvents) {
+      logs.push(...await getLogsWithRetry({ address: getAddress(entry.hook), event, args: { poolId }, fromBlock: from, toBlock: chunkTo }));
+    }
+    logs.sort((a, b) => (a.blockNumber === b.blockNumber ? Number(a.logIndex ?? 0) - Number(b.logIndex ?? 0) : (a.blockNumber < b.blockNumber ? -1 : 1)));
+    ingested += await ingestHookTradeLogs(logs, entry.hook, { onlyPoolId: poolId });
+    from = chunkTo + 1n;
+  }
+  pendingBackfills.delete(poolId);
+  console.log(`[V4 BACKFILL] ${entry.symbol}: ${ingested} trade(s) backfilled through block ${to}; pool released to live indexing`);
+  return ingested;
+}
+/** Runs every queued backfill through `toBlock`; a failure keeps that pool queued. Never throws. */
+export async function runPendingBackfills(toBlock) {
+  const result = { done: 0, failed: 0 };
+  for (const poolId of [...pendingBackfills.keys()]) {
+    try { await backfillPoolTrades(poolId, toBlock); result.done++; }
+    catch (err) { result.failed++; console.warn(`[V4 BACKFILL] pool ${poolId} failed (kept queued, its live logs stay held back): ${err.message}`); }
+  }
+  return result;
+}
+
 export async function discoverV4TokensInRange(fromBlock, toBlock, { chunkSize = V4_DISCOVERY_CHUNK_BLOCKS, factory = INCENTIFI_V4_FACTORY, hook = null } = {}) {
   // Which hook this factory's pools are bound to: the legible factory's is a known constant;
   // the GenericSell factory's is read from-chain (its `hook()` immutable) as before.
@@ -700,6 +767,12 @@ export async function discoverV4TokensInRange(fromBlock, toBlock, { chunkSize = 
         v4PoolIdToHook.set(log.args.poolId.toLowerCase(), hookAddr);
         v4TokenHook.set(tokenAddr, hookAddr);
         console.log(`[V4 DISCOVERY] Found V4 token ${symbol} (${tokenAddr}) on the ${label} hook ${hookAddr}, launched at block ${log.blockNumber}, poolId ${log.args.poolId}`);
+        // Launched at or before what the tick has already indexed (or before the first tick ran):
+        // its trades since launch must be backfilled before its live logs are taken.
+        if (tradeCursorBlock === null || BigInt(log.blockNumber) <= tradeCursorBlock) {
+          pendingBackfills.set(log.args.poolId.toLowerCase(), { token: tokenAddr, hook: hookAddr, fromBlock: BigInt(log.blockNumber), symbol });
+          console.log(`[V4 DISCOVERY] ${symbol} launched at block ${log.blockNumber}, at or before the trade cursor (${tradeCursorBlock ?? 'first tick pending'}): queued for backfill`);
+        }
         await tagTokenHookInDb(tokenAddr, hookAddr);
         const recorded = await recordIndexedToken({ tokenAddr, symbol, venue: label === 'legible' ? 'legible' : 'v4-generic', hookAddr, factory: getAddress(factory).toLowerCase(), creator: log.args.creator, poolId: log.args.poolId, block: log.blockNumber });
         if (!recorded) blockDiscoveryPersistence(`indexed_tokens row for ${tokenAddr} not written`);
@@ -745,7 +818,7 @@ export async function indexV4TradesInRange(fromBlock, toBlock) {
   return matched;
 }
 
-async function ingestHookTradeLogs(logs, hookLower) {
+async function ingestHookTradeLogs(logs, hookLower, { onlyPoolId = null } = {}) {
   let matched = 0;
   for (const log of logs) {
     const poolId = log.args.poolId.toLowerCase();
@@ -753,6 +826,9 @@ async function ingestHookTradeLogs(logs, hookLower) {
     // A pool this process never discovered (e.g. a token from another factory bound to the
     // same hook), or a pool that belongs to the OTHER hook — not ours to index here.
     if (!tokenAddr || v4PoolIdToHook.get(poolId) !== hookLower) continue;
+    // Live window: a pool queued for backfill is held back (its older trades must land first).
+    // Backfill: only the requested pool.
+    if (onlyPoolId ? poolId !== onlyPoolId : pendingBackfills.has(poolId)) continue;
     if (log.eventName === 'FeesConverted') {
       // The legible fee converter selling collected token-side fees back into the pool:
       // protocol plumbing, never a holder trade. Logged for visibility, NOT a trade row and
@@ -836,7 +912,12 @@ export async function updateV4MarketSnapshot(tokenAddress, symbol, fetchV4CurveS
  * fully sold. V4 discovery is now a hard precondition of every tick (below), never a
  * best-effort startup step.
  */
-export async function advanceV4Discovery(toBlock) {
+export function advanceV4Discovery(toBlock) {
+  if (discoveryInFlight) return discoveryInFlight;
+  discoveryInFlight = advanceV4DiscoveryNow(toBlock).finally(() => { discoveryInFlight = null; });
+  return discoveryInFlight;
+}
+async function advanceV4DiscoveryNow(toBlock) {
   await restoreDiscoveryState();
   let from = v4LastScannedBlock === null ? V4_DISCOVERY_FLOOR_BLOCK : v4LastScannedBlock + 1n;
   while (from <= toBlock) {
@@ -938,6 +1019,7 @@ export async function restoreDiscoveryState({ db = supabase, force = false } = {
 /** Tests: drop the in-memory discovery state as a fresh process would start. */
 export function _resetDiscoveryStateForTests() {
   v4LastScannedBlock = null; legibleLastScannedBlock = null; discoveryRestoreAttempted = false; discoveryPersistBlocked = null;
+  pendingBackfills.clear(); tradeCursorBlock = null;
   v4TokenSymbolCache.clear(); v4PoolIdToToken.clear(); v4PoolIdToHook.clear(); v4TokenHook.clear();
 }
 
@@ -1078,6 +1160,7 @@ export function createIndexer() {
           lastPolledBlock = currentBlock > 50n ? currentBlock - 50n : 0n;
           console.log(`[INDEXER INIT] Starting fresh from block ${lastPolledBlock}`);
         }
+        setTradeCursorBlock(lastPolledBlock);
       }
 
       if (currentBlock <= lastPolledBlock) return;
@@ -1093,11 +1176,20 @@ export function createIndexer() {
       // heartbeat "error", cursor unchanged, retried next tick (resumably, see
       // advanceV4Discovery) — so the loss-reward worker is blocked by its freshness gate for
       // exactly as long as V4 holder data cannot be trusted.
-      try {
-        await advanceV4Discovery(toBlock);
-      } catch (err) {
-        throw new Error(`V4 discovery not ready (generic-sell scanned through ${v4LastScannedBlock ?? 'none yet'}, legible through ${legibleLastScannedBlock ?? 'none yet'}, need ${toBlock}): ${err.message}`);
+      if (V4_DISCOVERY_BLOCKING) {
+        try {
+          await advanceV4Discovery(toBlock);
+        } catch (err) {
+          throw new Error(`V4 discovery not ready (generic-sell scanned through ${v4LastScannedBlock ?? 'none yet'}, legible through ${legibleLastScannedBlock ?? 'none yet'}, need ${toBlock}): ${err.message}`);
+        }
+      } else {
+        // Decoupled (2026-09-09): known pools are indexed now; discovery advances in the background
+        // and a token found later is backfilled from its launch block before the next window. The
+        // persisted caches must be in memory BEFORE this window is read (restore is a no-op after once).
+        await restoreDiscoveryState();
+        kickDiscovery(toBlock);
       }
+      await runPendingBackfills(lastPolledBlock);
 
       // V4 market snapshots: display-only, so a hiccup here (module load, RPC) is logged and
       // retried next tick without blocking trade indexing.
@@ -1205,12 +1297,13 @@ export function createIndexer() {
 
       // Successfully processed all events for range; advance block pointer safely
       lastPolledBlock = toBlock;
+      setTradeCursorBlock(toBlock);
       // Periodic chain reconciliation of holder balances at the block just indexed (see reconcileHolderBalances).
       if (Date.now() - lastReconcileAt >= HOLDER_RECONCILE_INTERVAL_MS) {
         lastReconcileAt = Date.now();
         try { await reconcileHolderBalances({ blockNumber: lastPolledBlock }); } catch (err) { console.warn(`[RECONCILE] pass failed (will retry next interval): ${err.message}`); }
       }
-      await upsertIndexerHeartbeat('ok', `Indexed through block ${toBlock}`);
+      await upsertIndexerHeartbeat('ok', `Indexed through block ${toBlock}${discoveryLagMessage(toBlock)}`);
       return { ok: true, indexedThrough: toBlock };
     } catch (err) {
       console.error('Indexer loop error (will retry next interval without advancing block):', err.message);
@@ -1237,17 +1330,24 @@ export async function runIndexer() {
   console.log(`V4 Factory (GenericSell): ${INCENTIFI_V4_FACTORY}`);
   console.log(`V4 Factory (legible): ${INCENTIFI_LEGIBLE_FACTORY} -> hook ${INCENTIFI_LEGIBLE_HOOK}`);
 
-  // Best-effort warm-up of V4 discovery to chain head so the first ticks are fast. NOT
-  // load-bearing: every tick re-runs advanceV4Discovery (resumable) and refuses to index
-  // until discovery covers its window, so a failure here only delays, never disables.
+  // V4 discovery warm-up. Decoupled mode (default): caches are restored from indexed_tokens, the
+  // scan to head runs in the BACKGROUND (paced getLogs, one pass at a time) and ticks start at once,
+  // indexing trades of every known pool; tokens found later are backfilled. V4_DISCOVERY_BLOCKING=true
+  // awaits the warm-up and makes every tick require discovery through its window (the old behaviour).
   try {
     const head = await client.getBlockNumber();
     await restoreDiscoveryState();
-    console.log(`[V4 DISCOVERY] Warming up discovery (from ${v4LastScannedBlock === null ? `floor ${V4_DISCOVERY_FLOOR_BLOCK}` : `persisted cursor ${v4LastScannedBlock}`} → ${head}, ${V4_DISCOVERY_CHUNK_BLOCKS}-block chunks)...`);
-    await advanceV4Discovery(head);
-    console.log(`[V4 DISCOVERY] Warm-up complete through block ${head}. Found ${v4TokenSymbolCache.size} V4 token(s) so far.`);
+    console.log(`[V4 DISCOVERY] ${V4_DISCOVERY_BLOCKING ? 'Warming up (blocking)' : 'Starting background'} discovery (from ${v4LastScannedBlock === null ? `floor ${V4_DISCOVERY_FLOOR_BLOCK}` : `persisted cursor ${v4LastScannedBlock}`} → ${head}, ${V4_DISCOVERY_CHUNK_BLOCKS}-block chunks, getLogs paced ${failoverOptionsFromEnv(process.env).paceMs.eth_getLogs} ms)...`);
+    if (V4_DISCOVERY_BLOCKING) {
+      await advanceV4Discovery(head);
+      console.log(`[V4 DISCOVERY] Warm-up complete through block ${head}. Found ${v4TokenSymbolCache.size} V4 token(s) so far.`);
+    } else {
+      advanceV4Discovery(head)
+        .then(() => console.log(`[V4 DISCOVERY] Background warm-up complete through block ${head}. ${v4TokenSymbolCache.size} V4 token(s) known.`))
+        .catch((err) => console.warn(`[V4 DISCOVERY] Background warm-up incomplete (scanned through ${v4LastScannedBlock ?? 'none yet'}); every tick keeps advancing it: ${err.message}`));
+    }
   } catch (err) {
-    console.error(`[V4 DISCOVERY] Warm-up incomplete (scanned through ${v4LastScannedBlock ?? 'none yet'}); every tick will keep retrying and the heartbeat reports "error" until discovery is ready:`, err.message);
+    console.error(`[V4 DISCOVERY] Warm-up could not start (scanned through ${v4LastScannedBlock ?? 'none yet'}); every tick will keep retrying:`, err.message);
   }
 
   const indexer = createIndexer();
