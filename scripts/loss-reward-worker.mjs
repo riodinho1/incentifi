@@ -17,6 +17,7 @@ import { createServer as createViteServer } from 'vite';
 import fs from 'fs';
 import { isLegibleToken, fetchLegibleState, computeUncollectedLegibleFees, INCENTIFI_LEGIBLE_HOOK, INCENTIFI_LEGIBLE_FEE_CONVERTER, LEGIBLE_HOOK_ABI, LEGIBLE_CONVERTER_ABI } from './lib/legiblePool.mjs';
 import { createFailoverRpc, parseRpcUrls } from './lib/rpcFailover.mjs';
+import { readBalanceReliably } from './lib/reliableBalance.mjs';
 
 // ============================================================================
 // CRASH-RECOVERY & IDEMPOTENCY MATRIX
@@ -331,8 +332,9 @@ export function capAllocationsToAvailable(theoreticalWeiList, availableWei) {
  * once. The gateway treats a null pool_address as V1, which is what an un-migrated deployment is.
  */
 let warnedPoolAddressColumn = false;
-async function insertRewardEpoch(row, select = null) {
-  let q = supabase.from('reward_epochs').insert(row);
+async function insertRewardEpoch(row, select = null, { upsert = false } = {}) {
+  const write = (r) => (upsert ? supabase.from('reward_epochs').upsert(r, { onConflict: 'token_address,epoch_number' }) : supabase.from('reward_epochs').insert(r));
+  let q = write(row);
   let res = select ? await q.select(select).single() : await q;
   if (res.error && row.pool_address !== undefined && /pool_address|column/i.test(res.error.message || '')) {
     if (!warnedPoolAddressColumn) {
@@ -340,7 +342,7 @@ async function insertRewardEpoch(row, select = null) {
       warnedPoolAddressColumn = true;
     }
     const { pool_address, ...rest } = row;
-    q = supabase.from('reward_epochs').insert(rest);
+    q = write(rest);
     res = select ? await q.select(select).single() : await q;
   }
   return res;
@@ -644,8 +646,8 @@ export async function getTokenBenchmarkPriceEth(tokenAddress) {
   if (!curveAddr || curveAddr === '0x0000000000000000000000000000000000000000') {
     try {
       const v4 = await getV4Module();
-      if (await v4.isV4LaunchedToken(token)) {
-        const state = await v4.fetchV4CurveState(token);
+      if (await v4.isV4LaunchedToken(token, { client: publicClient })) {
+        const state = await v4.fetchV4CurveState(token, undefined, { client: publicClient });
         if (state.currentPriceEth > 0) {
           return {
             priceEth: state.currentPriceEth,
@@ -711,7 +713,8 @@ export async function readUnallocatedWithRetry(poolAddr, tokenAddress, { client 
 /** Adds `addBackEth` to a wallet's recorded investment (undoing a depletion that was never paid). */
 async function restoreCostBasis(db, token, wallet, addBackEth, log) {
   const { data: row, error } = await db.from('holder_cost_basis').select('token_balance, total_invested_eth, avg_cost_basis_eth').eq('token_address', token).eq('wallet_address', wallet.toLowerCase()).maybeSingle();
-  if (error || !row) { log(`[PENDING] could not restore ${addBackEth} ETH of cost basis for ${wallet}: ${error ? error.message : 'no holder_cost_basis row'}`); return; }
+  if (error) { log(`[PENDING] could not restore ${addBackEth} ETH of cost basis for ${wallet}: ${error.message}`); return false; }
+  if (!row) { log(`[PENDING] no holder_cost_basis row for ${wallet}; nothing to restore`); return true; }
   const invested = Number(row.total_invested_eth || 0) + addBackEth;
   const balance = Number(row.token_balance || 0);
   const { error: upErr } = await db.from('holder_cost_basis').update({
@@ -719,133 +722,43 @@ async function restoreCostBasis(db, token, wallet, addBackEth, log) {
     avg_cost_basis_eth: balance > 0 ? invested / balance : Number(row.avg_cost_basis_eth || 0),
     last_updated_at: new Date().toISOString(),
   }).eq('token_address', token).eq('wallet_address', wallet.toLowerCase());
-  if (upErr) log(`[PENDING] could not restore cost basis for ${wallet}: ${upErr.message}`);
+  if (upErr) { log(`[PENDING] could not restore cost basis for ${wallet}: ${upErr.message}`); return false; }
+  return true;
 }
 
 /**
- * Publishes this token's `pending_funding` epochs, oldest first, on the pool each was recorded on,
- * for whatever that pool holds now:
- *   - the per-holder amounts come from epoch_holder_rewards (the snapshot is NOT recomputed);
- *   - if the pool covers the recorded total the stored root is published unchanged;
- *   - otherwise the stored amounts are scaled pro rata in exact wei (capAllocationsToAvailable),
- *     the Merkle tree is rebuilt from them, proofs are rewritten, and the part of each holder's
- *     depletion that is not being paid is given back to holder_cost_basis;
- *   - an epoch already on-chain (crash between tx and DB) is reconciled without a new tx;
- *   - when the pool holds less than dust the remaining pending epochs wait, and the caller must not
- *     compute a new epoch (it would compete with them for the same fees).
- * Returns { published: [{ epochNumber, pool, allocatedWei, scalingFactor, txHash, root }], blocked, pendingLeft }.
+ * Legacy `pending_funding` epochs (2026-09-09): their stored per-holder amounts came from holder rows
+ * that turned out to be stale or double-counted, so they are NOT published as stored. This reverses
+ * the cost-basis depletion each of them applied (the old worker depleted before paying) and deletes
+ * their epoch_holder_rewards rows; the epoch row stays `pending_funding` and executeEpochForToken
+ * rebuilds the oldest one as this run's epoch from fresh, confirmed chain reads (anyone who fully
+ * sold gets nothing), funded pro rata. Row-level: a holder row is deleted only after its restore
+ * succeeded, so a crash mid-way never restores twice and never loses a restore.
+ * Returns { pending, epochsReversed, rowsReversed, restoredEth }.
  */
-export async function resolvePendingEpochs(tokenAddress, options = {}) {
+export async function reversePendingEpochs(tokenAddress, { db = supabase, dryRun = false, log = (m) => console.log(m) } = {}) {
   const token = tokenAddress.toLowerCase();
-  const db = options.db ?? supabase;
-  const client = options.client ?? publicClient;
-  const dustWei = options.dustWei ?? MIN_EPOCH_PAYOUT_WEI;
-  const log = options.log ?? ((m) => console.log(m));
-  const dryRun = Boolean(options.dryRun);
-  const result = { published: [], blocked: false, pendingLeft: 0 };
-
-  const cols = 'epoch_id, epoch_number, total_distributed_eth, total_theoretical_reward_eth, merkle_root, status';
-  let pendingRes = await db.from('reward_epochs').select(`${cols}, pool_address`).eq('token_address', token).eq('status', 'pending_funding').order('epoch_number', { ascending: true });
-  if (pendingRes.error && /pool_address|column/i.test(pendingRes.error.message || '')) {
-    pendingRes = await db.from('reward_epochs').select(cols).eq('token_address', token).eq('status', 'pending_funding').order('epoch_number', { ascending: true });
-  }
-  if (pendingRes.error) throw new Error(`[PENDING] reward_epochs query failed: ${pendingRes.error.message}`);
-  const pending = pendingRes.data || [];
-  if (!pending.length) return result;
-  result.pendingLeft = pending.length;
-
-  let walletClient = options.walletClient ?? null;
-  if (!walletClient && !dryRun) {
-    if (!OPERATOR_PRIVATE_KEY) { log(`[PENDING] OPERATOR_PRIVATE_KEY unset - ${pending.length} pending epoch(s) for ${token} cannot be published`); result.blocked = true; return result; }
-    walletClient = createWalletClient({ account: privateKeyToAccount(OPERATOR_PRIVATE_KEY), transport: rpcTransport });
-  }
-
-  const remainingByPool = new Map();
-  for (const ep of pending) {
-    const pool = getAddress(ep.pool_address || LOSS_REWARD_POOL_V1_ADDRESS);
-    if (!remainingByPool.has(pool)) remainingByPool.set(pool, await readUnallocatedWithRetry(pool, token, { client, ...(options.read || {}) }));
-    const remainingBefore = remainingByPool.get(pool);
-    const epochNumber = BigInt(ep.epoch_number);
-
-    const { data: rows, error: rowsErr } = await db.from('epoch_holder_rewards').select('id, wallet_address, final_reward_eth, theoretical_reward_eth').eq('epoch_id', ep.epoch_id).order('id', { ascending: true });
+  const { data: pending, error } = await db.from('reward_epochs').select('epoch_id, epoch_number, total_distributed_eth').eq('token_address', token).eq('status', 'pending_funding').order('epoch_number', { ascending: true });
+  if (error) throw new Error(`[PENDING] reward_epochs query failed: ${error.message}`);
+  const result = { pending: (pending || []).length, epochsReversed: 0, rowsReversed: 0, restoredEth: 0 };
+  for (const ep of pending || []) {
+    const { data: rows, error: rowsErr } = await db.from('epoch_holder_rewards').select('id, wallet_address, final_reward_eth').eq('epoch_id', ep.epoch_id);
     if (rowsErr) throw new Error(`[PENDING] epoch_holder_rewards query failed for epoch #${ep.epoch_number}: ${rowsErr.message}`);
-    const holders = (rows || []).filter((r) => Number(r.final_reward_eth) > 0);
-    const storedWei = holders.map((r) => BigInt(Math.round(Number(r.final_reward_eth) * 1e18)));
-    const storedTotal = storedWei.reduce((a, b) => a + b, 0n);
-    if (storedTotal === 0n) {
-      log(`[PENDING] epoch #${ep.epoch_number} has no holder allocations; closing it as completed_empty`);
-      if (!dryRun) await db.from('reward_epochs').update({ status: 'completed_empty' }).eq('epoch_id', ep.epoch_id);
-      result.pendingLeft--;
-      continue;
+    if (!rows || !rows.length) continue;
+    log(`[PENDING] epoch #${ep.epoch_number}: discarding ${rows.length} stored allocation(s) (${Number(ep.total_distributed_eth || 0).toFixed(6)} ETH) and reversing their cost-basis depletion; the epoch will be rebuilt from fresh chain reads`);
+    if (dryRun) continue;
+    for (const r of rows) {
+      const eth = Number(r.final_reward_eth || 0);
+      if (eth > 0) {
+        const ok = await restoreCostBasis(db, token, r.wallet_address, eth, log);
+        if (!ok) throw new Error(`[PENDING] could not reverse the depletion of ${r.wallet_address} for epoch #${ep.epoch_number}; leaving its row for the next run`);
+      }
+      const { error: delErr } = await db.from('epoch_holder_rewards').delete().eq('id', r.id);
+      if (delErr) throw new Error(`[PENDING] could not delete epoch_holder_rewards row ${r.id}: ${delErr.message}`);
+      result.rowsReversed++;
+      result.restoredEth += eth;
     }
-    const treeFor = (weiList) => new MerkleTree(holders.map((r, i) => hashLeaf(token, epochNumber, r.wallet_address, weiList[i])));
-    const storedTree = treeFor(storedWei);
-
-    let finalWei; let scalingFactor; let allocatedWei; let tree; let txHash = null;
-    const onchainRoot = await client.readContract({ address: pool, abi: POOL_ABI, functionName: 'epochMerkleRoots', args: [getAddress(token), epochNumber] });
-    if (onchainRoot && onchainRoot !== ZERO_ROOT) {
-      // Crash recovery: the tx went through but the DB was not updated. Recognise the root as either
-      // the stored allocation or a pro-rata cut to what the contract says was allocated.
-      const onchainAllocated = BigInt(await client.readContract({ address: pool, abi: POOL_ABI, functionName: 'epochAllocatedAmounts', args: [getAddress(token), epochNumber] }));
-      const capped = stabilizeLeafWei(capAllocationsToAvailable(storedWei, onchainAllocated).finalWei, onchainAllocated);
-      const cappedTree = treeFor(capped.finalWei);
-      if (onchainRoot.toLowerCase() === storedTree.getRoot().toLowerCase()) { finalWei = storedWei; scalingFactor = 1; allocatedWei = storedTotal; tree = storedTree; }
-      else if (onchainRoot.toLowerCase() === cappedTree.getRoot().toLowerCase()) { finalWei = capped.finalWei; scalingFactor = Number(capped.allocatedWei) / Number(storedTotal); allocatedWei = capped.allocatedWei; tree = cappedTree; }
-      else {
-        log(`[PENDING] epoch #${ep.epoch_number} is on-chain on ${pool} with root ${onchainRoot}, matching neither the stored allocation nor a pro-rata cut of it; leaving it pending for manual review`);
-        result.blocked = true;
-        break;
-      }
-      log(`[PENDING] epoch #${ep.epoch_number} was already published on ${pool} (root ${tree.getRoot()}, ${fmtEth(allocatedWei)} ETH); reconciling the database only`);
-    } else {
-      if (remainingBefore < dustWei) {
-        log(`[PENDING] epoch #${ep.epoch_number} needs ${fmtEth(storedTotal)} ETH; ${pool} has ${fmtEth(remainingBefore)} ETH unallocated (below dust) - waiting for fees. ${result.pendingLeft} pending epoch(s) stay ahead of any new epoch for ${token}.`);
-        result.blocked = true;
-        break;
-      }
-      const capped = capAllocationsToAvailable(storedWei, remainingBefore);
-      const stable = stabilizeLeafWei(capped.finalWei, remainingBefore);
-      finalWei = stable.finalWei; allocatedWei = stable.allocatedWei;
-      scalingFactor = storedTotal === 0n ? 1 : Number(allocatedWei) / Number(storedTotal);
-      tree = finalWei.every((w, i) => w === storedWei[i]) ? storedTree : treeFor(finalWei);
-      if (tree === storedTree) scalingFactor = 1;
-      log(`[PENDING] publishing epoch #${ep.epoch_number} on ${pool}: ${fmtEth(allocatedWei)} of the recorded ${fmtEth(storedTotal)} ETH (${(scalingFactor * 100).toFixed(2)}%; pool unallocated ${fmtEth(remainingBefore)} ETH)`);
-      if (!dryRun) {
-        txHash = await walletClient.writeContract({ address: pool, abi: POOL_ABI, functionName: 'setEpochMerkleRoot', args: [getAddress(token), epochNumber, tree.getRoot(), allocatedWei] });
-        const receipt = await client.waitForTransactionReceipt({ hash: txHash });
-        if (receipt.status !== 'success') throw new Error(`[PENDING] setEpochMerkleRoot for epoch #${ep.epoch_number} reverted (${txHash})`);
-        log(`[PENDING] epoch #${ep.epoch_number} published on ${pool} (tx ${txHash}, block ${receipt.blockNumber})`);
-      }
-      remainingByPool.set(pool, remainingBefore - allocatedWei);
-    }
-    const root = tree.getRoot();
-
-    if (!dryRun) {
-      // Proofs first, so a crash after the tx still leaves a reconcilable, claimable epoch.
-      const rootChanged = root.toLowerCase() !== String(ep.merkle_root || '').toLowerCase();
-      for (let i = 0; i < holders.length; i++) {
-        const paidEth = Number(finalWei[i]) / 1e18;
-        if (scalingFactor !== 1 || rootChanged) {
-          const { error } = await db.from('epoch_holder_rewards').update({ final_reward_eth: paidEth, merkle_proof: tree.getProof(i) }).eq('id', holders[i].id);
-          if (error) throw new Error(`[PENDING] epoch_holder_rewards update failed for ${holders[i].wallet_address}: ${error.message}`);
-        }
-        // The pending row depleted this wallet's cost basis by the FULL recorded reward when it was
-        // created (the old code depleted before payment); give back what is not being paid.
-        const unpaidEth = Number(holders[i].final_reward_eth) - paidEth;
-        if (unpaidEth > 0) await restoreCostBasis(db, token, holders[i].wallet_address, unpaidEth, log);
-      }
-      const { error: upErr } = await db.from('reward_epochs').update({
-        status: 'published',
-        onchain_tx_hash: txHash,
-        merkle_root: root,
-        total_distributed_eth: Number(allocatedWei) / 1e18,
-        scaling_factor: scalingFactor,
-        available_pool_eth: Number(remainingBefore) / 1e18,
-      }).eq('epoch_id', ep.epoch_id);
-      if (upErr) throw new Error(`[PENDING] reward_epochs update failed for epoch #${ep.epoch_number}: ${upErr.message}`);
-    }
-    result.published.push({ epochNumber: ep.epoch_number, pool, allocatedWei, scalingFactor, txHash, root });
-    result.pendingLeft--;
+    result.epochsReversed++;
   }
   return result;
 }
@@ -853,18 +766,24 @@ export async function resolvePendingEpochs(tokenAddress, options = {}) {
 export async function executeEpochForToken(tokenAddress, options = {}) {
   const dryRun = Boolean(options.dryRun);
   const token = tokenAddress.toLowerCase();
+  // Every line this run logs carries the token so concurrent/interleaved runs stay readable.
+  const tag = `[${token}]`;
+  const tlog = (m) => console.log(`${tag} ${m}`);
+  const twarn = (m) => console.warn(`${tag} ${m}`);
+  const terror = (m) => console.error(`${tag} ${m}`);
+  const fmtTok = (wei) => (Number(wei) / 1e18).toLocaleString('en-US', { maximumFractionDigits: 6 });
 
   // 1. Concurrency Guard
   if (activeTokenLocks.has(token)) {
-    console.warn(`[CONCURRENCY LOCK] Token ${token} is already processing an epoch. Skipping concurrent invocation.`);
+    twarn(`[CONCURRENCY LOCK] Token ${token} is already processing an epoch. Skipping concurrent invocation.`);
     return { skipped: true, reason: 'concurrency_locked' };
   }
 
   activeTokenLocks.add(token);
 
   try {
-    console.log(`\n======================================================`);
-    console.log(`[EPOCH WORKER] Processing Loss-Reward Epoch for ${token} (DRY RUN = ${dryRun})`);
+    tlog(`\n======================================================`);
+    tlog(`[EPOCH WORKER] Processing Loss-Reward Epoch for ${token} (DRY RUN = ${dryRun})`);
 
     // 1a. Indexer freshness gate — checked FIRST, before any chain or DB work below.
     // holder_cost_basis (queried further down) is populated exclusively by
@@ -878,40 +797,39 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
       const freshness = await checkIndexerFreshness();
       if (!freshness.fresh) {
         await sendAlert(`Loss-reward snapshot for ${token} BLOCKED — indexer data is not fresh. ${freshness.reason}`);
-        console.error(`[FRESHNESS GATE] Refusing to run epoch for ${token}: ${freshness.reason}`);
+        terror(`[FRESHNESS GATE] Refusing to run epoch for ${token}: ${freshness.reason}`);
         return { skipped: true, reason: 'indexer_stale', detail: freshness.reason, ageSeconds: freshness.ageSeconds };
       }
-      console.log(`[FRESHNESS GATE] Indexer heartbeat is fresh (${freshness.ageSeconds.toFixed(1)}s old, threshold ${INDEXER_FRESHNESS_THRESHOLD_SECONDS}s). Proceeding.`);
+      tlog(`[FRESHNESS GATE] Indexer heartbeat is fresh (${freshness.ageSeconds.toFixed(1)}s old, threshold ${INDEXER_FRESHNESS_THRESHOLD_SECONDS}s). Proceeding.`);
     }
 
-    // 1b. Pending epochs first, FIFO. Legacy `pending_funding` rows were recorded at full demand
-    // when the pool could not cover it (and depleted cost basis for it). They are published now for
-    // whatever their pool holds, pro rata, from their stored allocations; nothing new is computed
-    // for this token until they are all out of the way (see resolvePendingEpochs).
+    // 1b. Legacy `pending_funding` epochs: the per-holder amounts they stored came from holder rows
+    // we no longer trust (2026-09-09: stale and double-counted balances). Reverse the cost-basis
+    // depletion they applied and drop their rows; step 3 then rebuilds the oldest one as THIS run's
+    // epoch from fresh, confirmed chain reads (see reversePendingEpochs).
     if (LOSS_REWARD_POOL_ADDRESS) {
-      let pendingResult;
       try {
-        pendingResult = await resolvePendingEpochs(token, { dryRun, walletClient: options.walletClient, read: options.poolRead });
+        const rev = await reversePendingEpochs(token, { dryRun, log: tlog });
+        if (rev.epochsReversed) tlog(`[PENDING] reversed ${rev.rowsReversed} stored allocation(s) across ${rev.epochsReversed} pending epoch(s), ${rev.restoredEth.toFixed(6)} ETH of depletion given back`);
       } catch (err) {
-        console.error(`[PENDING RESOLUTION ERROR] ${err.message} - skipping ${token} this run.`);
-        return { skipped: true, reason: 'pending_resolution_failed', detail: err.message };
+        terror(`[PENDING REVERSAL ERROR] ${err.message} - skipping ${token} this run.`);
+        return { skipped: true, reason: 'pending_reversal_failed', detail: err.message };
       }
-      if (pendingResult.blocked || pendingResult.pendingLeft > 0) {
-        console.log(`[EPOCH WORKER] ${pendingResult.pendingLeft} pending epoch(s) still unfunded for ${token}; no new epoch this run (${pendingResult.published.length} published).`);
-        return { skipped: true, reason: 'pending_epochs_unfunded', published: pendingResult.published, pendingLeft: pendingResult.pendingLeft };
-      }
-      if (pendingResult.published.length) console.log(`[EPOCH WORKER] ${pendingResult.published.length} pending epoch(s) published for ${token}; continuing with a new epoch.`);
     }
+
+    // One block for every balance read of this run (never "latest": a run that rotates between
+    // endpoints must read one consistent state; see scripts/lib/reliableBalance.mjs).
+    const snapshotBlock = (await publicClient.getBlockNumber()) - 1n;
 
     // 2. Fetch authoritative benchmark price (Curve getCurrentPrice pre-graduation, Uniswap V3 post-graduation)
     const priceRes = await getTokenBenchmarkPriceEth(token);
     const benchmarkPriceEth = priceRes.priceEth;
 
     if (benchmarkPriceEth <= 0) {
-      console.log(`[EPOCH WORKER] No valid benchmark price for ${token}. Skipping epoch.`);
+      tlog(`[EPOCH WORKER] No valid benchmark price for ${token}. Skipping epoch.`);
       return { skipped: true, reason: 'invalid_price' };
     }
-    console.log(`[PRICE BENCHMARK] ${priceRes.isGraduated ? 'Graduated' : 'Pre-Graduation'} Price: ${benchmarkPriceEth.toExponential(6)} ETH per token (Source: ${priceRes.source})`);
+    tlog(`[PRICE BENCHMARK] ${priceRes.isGraduated ? 'Graduated' : 'Pre-Graduation'} Price: ${benchmarkPriceEth.toExponential(6)} ETH per token (Source: ${priceRes.source})`);
 
     // 3. Reconcile On-Chain vs Database Epoch State
     const { data: latestDbEpoch, error: dbEpochErr } = await supabase
@@ -927,7 +845,22 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
     }
 
     const latestDbEpochNumber = latestDbEpoch?.epoch_number || 0;
-    const candidateEpochNumber = latestDbEpochNumber + 1;
+    // A pending_funding row (legacy) is rebuilt in place, oldest first, before any new epoch number.
+    const { data: oldestPending, error: pendingErr } = await supabase
+      .from('reward_epochs')
+      .select('epoch_id, epoch_number')
+      .eq('token_address', token)
+      .eq('status', 'pending_funding')
+      .order('epoch_number', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (pendingErr) {
+      throw new Error(`[DB ERROR] Failed to query pending epochs from reward_epochs: ${pendingErr.code} ${pendingErr.message}`);
+    }
+    const rebuildingEpoch = oldestPending || null;
+    const candidateEpochNumber = rebuildingEpoch ? Number(rebuildingEpoch.epoch_number) : latestDbEpochNumber + 1;
+    const persistEpoch = (row, select = null) => insertRewardEpoch(row, select, { upsert: Boolean(rebuildingEpoch) });
+    if (rebuildingEpoch) tlog(`[REBUILD] Epoch #${candidateEpochNumber} was pending_funding; rebuilding it from fresh chain reads at block ${snapshotBlock}`);
 
     // Check on-chain root for candidate epoch — on EVERY pool this worker can publish to, since a
     // crash between publish and DB persistence could have left it on either (State 3 below).
@@ -947,7 +880,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
           break;
         }
       } catch (err) {
-        console.warn(`[ON-CHAIN READ WARNING] Could not read candidate epoch root on ${poolAddr}: ${err.message}`);
+        twarn(`[ON-CHAIN READ WARNING] Could not read candidate epoch root on ${poolAddr}: ${err.message}`);
       }
     }
 
@@ -956,7 +889,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
       onchainCandidateRoot !== '0x0000000000000000000000000000000000000000000000000000000000000000'
     );
 
-    console.log(`[EPOCH RECONCILIATION] DB Latest Epoch: #${latestDbEpochNumber} | Candidate Epoch: #${candidateEpochNumber} | On-Chain Published: ${isCandidatePublishedOnchain}`);
+    tlog(`[EPOCH RECONCILIATION] DB Latest Epoch: #${latestDbEpochNumber} | Candidate Epoch: #${candidateEpochNumber} | On-Chain Published: ${isCandidatePublishedOnchain}`);
 
     // 4. Query all eligible underwater holders
     const { data: holders, error: holdersErr } = await supabase
@@ -973,9 +906,9 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
     }
 
     if (!holders || holders.length === 0) {
-      console.log(`[EPOCH WORKER] No eligible underwater holders for ${token}.`);
+      tlog(`[EPOCH WORKER] No eligible underwater holders for ${token}.`);
       if (!dryRun && !isCandidatePublishedOnchain) {
-        await insertRewardEpoch({
+        await persistEpoch({
           token_address: token,
           epoch_number: candidateEpochNumber,
           pool_price_eth: benchmarkPriceEth,
@@ -1001,31 +934,39 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
         totalDistributedEth: 0,
         merkleRoot: '0x0000000000000000000000000000000000000000000000000000000000000000',
         payouts: [],
+        skippedHolders: [],
+        rebuilt: Boolean(rebuildingEpoch),
       };
     }
 
     // 5. Calculate 10% Theoretical Loss Reward per holder
     let totalTheoreticalDemandEth = 0;
     const eligibleAllocations = [];
+    const skippedHolders = [];
 
     for (const h of holders) {
       // On-chain balance guard — see applyOnChainBalanceCap(). FAIL CLOSED: if the chain can't
       // be read, this epoch is skipped for this token rather than paid on unverified data.
+      // Pinned to snapshotBlock; a read BELOW the DB balance (a zero included) is confirmed by a second
+      // endpoint before it is believed. Disputed -> the holder is skipped this epoch (not paid, not
+      // zeroed, DB untouched); a read that fails on every endpoint -> the whole token is skipped.
       let onChainBalanceTokens;
+      const dbWei = BigInt(Math.round(Number(h.token_balance) * 1e18));
+      let read;
       try {
-        const raw = await publicClient.readContract({
-          address: getAddress(token),
-          abi: ERC20_BALANCE_ABI,
-          functionName: 'balanceOf',
-          args: [getAddress(h.wallet_address)],
-        });
-        onChainBalanceTokens = Number(raw) / 1e18;
+        read = await readBalanceReliably({ client: publicClient, rpc: rpcFailover, token, wallet: h.wallet_address, blockNumber: snapshotBlock, expectedAtLeastWei: dbWei - dbWei / 1_000_000n, ...(options.balanceRead || {}) });
       } catch (err) {
-        throw new Error(`[BALANCE GUARD] Could not read on-chain balance for ${h.wallet_address} — refusing to compute epoch on unverified holder data: ${err.message}`);
+        throw new Error(`[BALANCE GUARD] Could not read on-chain balance for ${h.wallet_address} at block ${snapshotBlock} — refusing to compute epoch on unverified holder data: ${err.message}`);
       }
+      if (read.disputed) {
+        terror(`[BALANCE GUARD] DISPUTED balance for ${h.wallet_address} at block ${snapshotBlock}: ${read.endpoints[0] || 'primary'} says ${fmtTok(read.primaryWei)}, ${read.endpoints[1] || 'second read'} says ${fmtTok(read.confirmWei)} (DB ${h.token_balance}). Holder SKIPPED this epoch — not paid, not zeroed.`);
+        skippedHolders.push({ wallet: h.wallet_address, primaryWei: read.primaryWei, confirmWei: read.confirmWei });
+        continue;
+      }
+      onChainBalanceTokens = Number(read.balanceWei) / 1e18;
       const capped = applyOnChainBalanceCap(h, onChainBalanceTokens);
       if (capped.capped) {
-        console.warn(`[BALANCE GUARD] ${h.wallet_address}: DB balance ${capped.dbBalance} > on-chain ${capped.onChainBalance} (indexer lag or a missed sell). Paying on ${capped.balance} only.`);
+        twarn(`[BALANCE GUARD] ${h.wallet_address}: DB balance ${capped.dbBalance} > on-chain ${capped.onChainBalance} at block ${snapshotBlock}${read.confirmed ? ` (confirmed by ${read.endpoints[1] || 'a second read'})` : ''} (indexer lag, a missed sell or a double-counted buy). Paying on ${capped.balance} only.`);
       }
       if (!(capped.balance > 0)) continue;
 
@@ -1049,8 +990,9 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
       }
     }
 
-    console.log(`[DEMAND] Eligible Underwater Holders: ${eligibleAllocations.length}`);
-    console.log(`[DEMAND] Total Theoretical Reward Demand: ${totalTheoreticalDemandEth.toFixed(10)} ETH`);
+    if (skippedHolders.length) terror(`[BALANCE GUARD] ${skippedHolders.length} holder(s) SKIPPED this epoch because two endpoints disagreed on their balance: ${skippedHolders.map((x) => x.wallet).join(', ')}`);
+    tlog(`[DEMAND] Eligible Underwater Holders: ${eligibleAllocations.length}${skippedHolders.length ? ` (+${skippedHolders.length} skipped, disputed reads)` : ''}`);
+    tlog(`[DEMAND] Total Theoretical Reward Demand: ${totalTheoreticalDemandEth.toFixed(10)} ETH`);
 
     // 6. Choose the pool for THIS epoch (drain V1, then switch to V2 — see resolveEpochPool) and
     //    query its available balance. If the candidate epoch already exists on-chain (crash
@@ -1060,7 +1002,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
       ? { address: onchainCandidatePool, version: onchainCandidatePool.toLowerCase() === (LOSS_REWARD_POOL_V2_ADDRESS || '').toLowerCase() ? 'v2' : 'v1', reason: 'already_on_chain' }
       : await resolveEpochPool(token, demandWei);
     const EPOCH_POOL_ADDRESS = epochPool.address;
-    console.log(`[POOL SELECT] Epoch #${candidateEpochNumber} -> ${epochPool.version.toUpperCase()} ${EPOCH_POOL_ADDRESS} (${epochPool.reason}${epochPool.v1UnallocatedWei != null ? `, V1 unallocated ${(Number(epochPool.v1UnallocatedWei) / 1e18).toFixed(6)} ETH` : ''})`);
+    tlog(`[POOL SELECT] Epoch #${candidateEpochNumber} -> ${epochPool.version.toUpperCase()} ${EPOCH_POOL_ADDRESS} (${epochPool.reason}${epochPool.v1UnallocatedWei != null ? `, V1 unallocated ${(Number(epochPool.v1UnallocatedWei) / 1e18).toFixed(6)} ETH` : ''})`);
 
     // The funding gate reads getUnallocatedBalance(token) on the epoch's pool - the same call the
     // site shows as "unallocated". Retried; on persistent failure the token is skipped this run.
@@ -1072,7 +1014,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
         availablePoolWei = await readUnallocatedWithRetry(EPOCH_POOL_ADDRESS, token, options.poolRead || {});
         availablePoolEth = Number(availablePoolWei) / 1e18;
       } catch (err) {
-        console.error(`${err.message} - skipping ${token} this run (fail closed).`);
+        terror(`${err.message} - skipping ${token} this run (fail closed).`);
         return { skipped: true, reason: 'pool_read_failed', detail: err.message };
       }
     } else {
@@ -1080,7 +1022,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
       availablePoolWei = BigInt(Math.round(availablePoolEth * 1e18));
     }
 
-    console.log(`[POOL BUDGET] Available Unallocated ETH on ${epochPool.version.toUpperCase()}: ${availablePoolEth.toFixed(6)} ETH`);
+    tlog(`[POOL BUDGET] Available Unallocated ETH on ${epochPool.version.toUpperCase()} ${EPOCH_POOL_ADDRESS}: ${availablePoolEth.toFixed(6)} ETH (getUnallocatedBalance at latest, run snapshot block ${snapshotBlock})`);
 
     // 7. Scaling & mode.
     //    Default: when the pool is underfunded, 100% theoretical rewards and proofs are preserved
@@ -1106,7 +1048,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
       scalingFactor = capped.scalingFactor;
       allocatedWei = capped.allocatedWei;
       isUnderfunded = false;
-      console.log(`[${epochPool.capToV1 ? 'V1 DRAIN' : 'POOL CAP'}] Epoch #${candidateEpochNumber} capped to ${epochPool.version.toUpperCase()}'s ${availablePoolEth.toFixed(6)} ETH (demand ${totalTheoreticalDemandEth.toFixed(6)} ETH, scaling ${scalingFactor.toFixed(6)})${epochPool.capToV1 ? '; V1 will be emptied and the next epoch moves to V2' : ''}.`);
+      tlog(`[${epochPool.capToV1 ? 'V1 DRAIN' : 'POOL CAP'}] Epoch #${candidateEpochNumber} capped to ${epochPool.version.toUpperCase()}'s ${availablePoolEth.toFixed(6)} ETH (demand ${totalTheoreticalDemandEth.toFixed(6)} ETH, scaling ${scalingFactor.toFixed(6)})${epochPool.capToV1 ? '; V1 will be emptied and the next epoch moves to V2' : ''}.`);
     }
     // Leaf amounts must survive the ETH-float round trip the gateway performs (see stabilizeLeafWei).
     if (EPOCH_POOL_ADDRESS) {
@@ -1126,9 +1068,9 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
     // existed) still needs full reconciliation below, not a retroactive skip.
     const { candidateAllocatedWei, isDust } = evaluateDustGuard(totalDistributedEth);
     if (!isCandidatePublishedOnchain && isDust) {
-      console.log(`[DUST GUARD] Candidate Epoch #${candidateEpochNumber} total payout (${candidateAllocatedWei.toString()} wei) is below the minimum payout threshold (${MIN_EPOCH_PAYOUT_WEI.toString()} wei, ${eligibleAllocations.length} eligible holder(s)). Skipping Merkle tree construction, on-chain submission, and cost-basis depletion — recording as completed_dust instead.`);
+      tlog(`[DUST GUARD] Candidate Epoch #${candidateEpochNumber} total payout (${candidateAllocatedWei.toString()} wei) is below the minimum payout threshold (${MIN_EPOCH_PAYOUT_WEI.toString()} wei, ${eligibleAllocations.length} eligible holder(s)). Skipping Merkle tree construction, on-chain submission, and cost-basis depletion — recording as completed_dust instead.`);
       if (!dryRun) {
-        await insertRewardEpoch({
+        await persistEpoch({
           token_address: token,
           epoch_number: candidateEpochNumber,
           pool_price_eth: benchmarkPriceEth,
@@ -1157,6 +1099,8 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
         skipped: true,
         reason: 'dust_payout',
         candidateAllocatedWei: candidateAllocatedWei.toString(),
+        skippedHolders,
+        rebuilt: Boolean(rebuildingEpoch),
       };
     }
 
@@ -1180,13 +1124,13 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
         leafIndex: i,
       });
 
-      console.log(`  Holder #${i+1} [${alloc.wallet.slice(0, 10)}...]: Balance=${alloc.balance.toFixed(2)} | CostBasis=${alloc.costBasis.toExponential(4)} | Loss=${alloc.unrealizedLoss.toFixed(8)} ETH | Final Reward=${finalRewardEth.toFixed(10)} ETH (${finalRewardWei.toString()} wei)`);
+      tlog(`  Holder #${i+1} [${alloc.wallet.slice(0, 10)}...]: Balance=${alloc.balance.toFixed(2)} | CostBasis=${alloc.costBasis.toExponential(4)} | Loss=${alloc.unrealizedLoss.toFixed(8)} ETH | Final Reward=${finalRewardEth.toFixed(10)} ETH (${finalRewardWei.toString()} wei)`);
     }
 
     // 9. Build Merkle Tree & Root
     const tree = new MerkleTree(leaves);
     const merkleRoot = tree.getRoot();
-    console.log(`[MERKLE TREE] Generated Merkle Root: ${merkleRoot}`);
+    tlog(`[MERKLE TREE] Generated Merkle Root: ${merkleRoot}`);
 
     // 10. Reconciliation Path (State 3: Chain present, DB absent)
     if (isCandidatePublishedOnchain) {
@@ -1195,7 +1139,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
           `[RECONCILIATION ERROR] On-chain Merkle root (${onchainCandidateRoot}) does not match calculated candidate root (${merkleRoot}) for Epoch #${candidateEpochNumber}. Stopping execution to prevent state corruption.`
         );
       }
-      console.log(`[RECONCILIATION SUCCESS] On-chain Merkle root matches candidate calculation. Resuming database persistence.`);
+      tlog(`[RECONCILIATION SUCCESS] On-chain Merkle root matches candidate calculation. Resuming database persistence.`);
     }
 
     // 11. On-Chain Transaction Submission & Confirmation
@@ -1212,7 +1156,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
           });
 
           const totalAllocatedWei = allocatedWei; // exact sum of the leaves
-          console.log(`[ON-CHAIN] Submitting setEpochMerkleRoot for Epoch #${candidateEpochNumber} on ${epochPool.version.toUpperCase()} ${EPOCH_POOL_ADDRESS} (allocating ${totalAllocatedWei} wei)...`);
+          tlog(`[ON-CHAIN] Submitting setEpochMerkleRoot for Epoch #${candidateEpochNumber} on ${epochPool.version.toUpperCase()} ${EPOCH_POOL_ADDRESS} (allocating ${totalAllocatedWei} wei)...`);
 
           onchainTxHash = await walletClient.writeContract({
             address: getAddress(EPOCH_POOL_ADDRESS),
@@ -1221,22 +1165,22 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
             args: [getAddress(token), BigInt(candidateEpochNumber), merkleRoot, totalAllocatedWei],
           });
 
-          console.log(`[ON-CHAIN] Transaction broadcast: ${onchainTxHash}. Awaiting receipt...`);
+          tlog(`[ON-CHAIN] Transaction broadcast: ${onchainTxHash}. Awaiting receipt...`);
 
           // Wait for on-chain receipt confirmation
           const receipt = await publicClient.waitForTransactionReceipt({ hash: onchainTxHash });
           if (receipt.status !== 'success') {
             throw new Error(`[ON-CHAIN REVERT] Transaction ${onchainTxHash} reverted on-chain.`);
           }
-          console.log(`[ON-CHAIN CONFIRMED] Block #${receipt.blockNumber} Gas Used: ${receipt.gasUsed}`);
+          tlog(`[ON-CHAIN CONFIRMED] Block #${receipt.blockNumber} Gas Used: ${receipt.gasUsed}`);
           epochStatus = 'published';
         } catch (err) {
-          console.error(`[ON-CHAIN FATAL] setEpochMerkleRoot failed: ${err.message}`);
+          terror(`[ON-CHAIN FATAL] setEpochMerkleRoot failed: ${err.message}`);
           throw err;
         }
       } else {
         epochStatus = 'pending_funding';
-        console.log(`[POOL UNDERFUNDED] Available pool (${availablePoolEth.toFixed(6)} ETH) < demand (${totalDistributedEth.toFixed(6)} ETH). Saving Epoch #${candidateEpochNumber} as 'pending_funding' (original theoretical rewards & Merkle proofs preserved).`);
+        tlog(`[POOL UNDERFUNDED] Available pool (${availablePoolEth.toFixed(6)} ETH) < demand (${totalDistributedEth.toFixed(6)} ETH). Saving Epoch #${candidateEpochNumber} as 'pending_funding' (original theoretical rewards & Merkle proofs preserved).`);
       }
     } else if (isCandidatePublishedOnchain) {
       epochStatus = 'published';
@@ -1244,7 +1188,7 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
 
     // 12. Database Persistence: reward_epochs & epoch_holder_rewards
     if (!dryRun) {
-      const { data: insertedEpoch, error: insertEpochErr } = await insertRewardEpoch({
+      const { data: insertedEpoch, error: insertEpochErr } = await persistEpoch({
         token_address: token,
         epoch_number: candidateEpochNumber,
         pool_price_eth: benchmarkPriceEth,
@@ -1286,9 +1230,9 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
       // 13. DEFERRED COST-BASIS DEPLETION: ONLY for a published (paid) epoch. A row that is not
       // published paid nobody, so nobody's recorded loss may shrink for it.
       if (epochStatus !== 'published') {
-        console.log(`[COST BASIS DEPLETION] Skipped: epoch #${candidateEpochNumber} is '${epochStatus}', nothing was paid.`);
+        tlog(`[COST BASIS DEPLETION] Skipped: epoch #${candidateEpochNumber} is '${epochStatus}', nothing was paid.`);
       }
-      console.log(`[COST BASIS DEPLETION] Applying post-confirmation cost-basis depletion for ${epochStatus === 'published' ? finalPayouts.length : 0} holders...`);
+      tlog(`[COST BASIS DEPLETION] Applying post-confirmation cost-basis depletion for ${epochStatus === 'published' ? finalPayouts.length : 0} holders...`);
       for (const payout of epochStatus === 'published' ? finalPayouts : []) {
         const newInvested = Math.max(0, payout.invested - payout.finalRewardEth);
         const newCostBasis = payout.balance > 0 ? newInvested / payout.balance : 0;
@@ -1300,13 +1244,17 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
         }).eq('token_address', token).eq('wallet_address', payout.wallet);
 
         if (updateHolderErr) {
-          console.warn(`[DB WARNING] Could not update cost basis for ${payout.wallet}: ${updateHolderErr.message}`);
+          twarn(`[DB WARNING] Could not update cost basis for ${payout.wallet}: ${updateHolderErr.message}`);
         }
       }
 
-      console.log(`[SUCCESS] Epoch #${candidateEpochNumber} complete! Distributed: ${totalDistributedEth.toFixed(6)} ETH to ${finalPayouts.length} holders.`);
+      if (epochStatus === 'published') {
+        tlog(`[SUCCESS] Epoch #${candidateEpochNumber} published${rebuildingEpoch ? ' (rebuilt)' : ''}. Distributed: ${totalDistributedEth.toFixed(6)} ETH to ${finalPayouts.length} holders.`);
+      } else {
+        tlog(`[SAVED] Epoch #${candidateEpochNumber} stored as '${epochStatus}' — nothing was distributed on-chain.`);
+      }
     } else {
-      console.log(`[DRY RUN COMPLETE] Simulated Epoch #${candidateEpochNumber}: ${totalDistributedEth.toFixed(10)} ETH total allocation for ${finalPayouts.length} eligible holders (0 DB/on-chain mutations).`);
+      tlog(`[DRY RUN COMPLETE] Simulated Epoch #${candidateEpochNumber}: ${totalDistributedEth.toFixed(10)} ETH total allocation for ${finalPayouts.length} eligible holders (0 DB/on-chain mutations).`);
     }
 
     return {
@@ -1321,6 +1269,8 @@ export async function executeEpochForToken(tokenAddress, options = {}) {
       totalDistributedEth,
       merkleRoot,
       payouts: finalPayouts,
+      skippedHolders,
+      rebuilt: Boolean(rebuildingEpoch),
     };
   } finally {
     // Release concurrency lock
