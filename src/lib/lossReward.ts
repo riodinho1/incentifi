@@ -4,6 +4,7 @@ import { publicClient, getEvmProvider, ensureEvmChain, waitForTransactionReceipt
 import { LOSS_REWARD_POOL, LOSS_REWARD_POOL_V2 } from './uniswapAddresses';
 import { computeMinAssetOut, isV2Configured } from './rewardAssets';
 import { getStoredSession, fetchLossRewardData } from './lossRewardAuth';
+import { claimLeaf, verifyClaimProof, claimDeadline, explainClaimRevert, type ClaimEpochContext } from './claimRevert';
 
 // Includes LossRewardPool's custom errors so a pre-flight simulation of a claim decodes a
 // revert to its name (e.g. AlreadyClaimed / InvalidProof) instead of a bare 4-byte selector.
@@ -13,6 +14,7 @@ const LOSS_POOL_ABI = parseAbi([
   'function totalAllocated(address token) view returns (uint256)',
   'function totalClaimed(address token) view returns (uint256)',
   'function hasClaimed(address token, uint256 epochId, address account) view returns (bool)',
+  'function epochMerkleRoots(address token, uint256 epochId) view returns (bytes32)',
   'function claimReward(address token, uint256 epochId, uint256 amount, bytes32[] calldata merkleProof)',
   'function claimBatch(address token, uint256[] calldata epochIds, uint256[] calldata amounts, bytes32[][] calldata merkleProofs)',
   // LossRewardPoolV2 (stock-configured tokens revert UseClaimAs on the V1 signatures)
@@ -261,86 +263,143 @@ export const claimBatchRewards = async (
     );
   }
 
-  // 3. Group by the pool each epoch was published on. Old epochs (no poolAddress) live on V1 and
-  //    keep the V1 signatures; V2 epochs use claim*As with the user's minAssetOut + a deadline.
-  //    One transaction per pool, V1 first.
   const v1 = getAddress(LOSS_REWARD_POOL);
   const v2 = isV2Configured() ? getAddress(LOSS_REWARD_POOL_V2) : null;
-  const groups = new Map<string, UnclaimedEpoch[]>();
-  for (const e of epochs) {
-    const pool = e.poolAddress ? getAddress(e.poolAddress) : v1;
-    if (!groups.has(pool)) groups.set(pool, []);
-    groups.get(pool)!.push(e);
-  }
-  const order = [...groups.keys()].sort((a, b) => (a === v1 ? -1 : b === v1 ? 1 : 0));
-
   const txHashes: string[] = [];
   let totalWei = 0n;
   let anyAlreadyClaimed = false;
 
-  for (const pool of order) {
-    const group = groups.get(pool)!;
-    const isV2 = v2 !== null && pool === v2;
-    if (!isV2 && pool !== v1) {
-      throw new Error(
-        `These rewards were published on pool ${pool}, which this site is not configured for` +
-          (pool !== v1 && !v2 ? ' (LossRewardPoolV2 address not set).' : '.')
-      );
-    }
-
-    // Exact arguments. amountWei is the gateway's exact figure when present; the fallback is the
-    // identical rounding the worker used to build the leaf, so the two can't drift.
-    const sorted = [...group].sort((a, b) => a.epochNumber - b.epochNumber);
-    const epochIds = sorted.map((e) => BigInt(e.epochNumber));
-    const amounts = sorted.map((e) => (e.amountWei ? BigInt(e.amountWei) : BigInt(Math.round(e.finalRewardEth * 1e18))));
-    const proofs = sorted.map((e) => (Array.isArray(e.merkleProof) ? e.merkleProof : []) as `0x${string}`[]);
-    const groupWei = amounts.reduce((s, a) => s + a, 0n);
-
-    let call: any;
-    if (isV2) {
-      // Stock-paying token: bound the swap with a quote minus the user's slippage setting
-      // (the caller is the beneficiary, so this bound is aligned); ETH-paying token: 0.
-      const { minAssetOut } = await computeMinAssetOut(token, groupWei, options.slippagePct ?? 1);
-      const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
-      call =
-        sorted.length === 1
-          ? { functionName: 'claimRewardAs', args: [token, epochIds[0], amounts[0], proofs[0], minAssetOut, deadline] }
-          : { functionName: 'claimBatchAs', args: [token, epochIds, amounts, proofs, minAssetOut, deadline] };
-    } else {
-      call =
-        sorted.length === 1
-          ? { functionName: 'claimReward', args: [token, epochIds[0], amounts[0], proofs[0]] }
-          : { functionName: 'claimBatch', args: [token, epochIds, amounts, proofs] };
-    }
-
-    // Pre-flight the exact call as the sender so a revert surfaces by name (AlreadyClaimed,
-    // InvalidProof, MinOutNotMet, …) BEFORE the wallet prompts.
-    try {
-      await publicClient.simulateContract({ address: pool, abi: LOSS_POOL_ABI, account: wallet, ...call } as any);
-    } catch (err: any) {
-      const fullText = [err?.shortMessage, err?.message, err?.details, err?.cause?.message, err?.cause?.details]
-        .filter(Boolean)
-        .join(' ');
-      if (/AlreadyClaimed/.test(fullText)) {
-        anyAlreadyClaimed = true;
-        continue;
-      }
-      throw new Error(`Claim on ${isV2 ? 'the V2 pool' : 'the V1 pool'} would revert on-chain: ${err?.shortMessage || err?.message || String(err)}`);
-    }
-
-    // Send from the user's wallet — identical mechanics to swaps.
-    const data = encodeFunctionData({ abi: LOSS_POOL_ABI, ...call } as any);
-    const txHash = (await provider.request({
-      method: 'eth_sendTransaction',
-      params: [{ from: sender, to: pool, data }],
-    })) as string;
-    await waitForTransactionReceipt(txHash, {
-      description: 'Reward claim',
-      revertedMessage: 'Reward claim reverted on-chain. Nothing was paid out.',
-    });
-    txHashes.push(txHash);
-    totalWei += groupWei;
+  // Chain clock, once: the claim deadline is measured against block.timestamp, so it is derived from
+  // the chain (never only the device clock), and the skew is reported if a deadline ever expires.
+  let chainTs: number | null = null;
+  try {
+    chainTs = Number((await publicClient.getBlock({ blockTag: 'latest' })).timestamp);
+  } catch {
+    chainTs = null;
   }
+  const chainSkewSec = chainTs === null ? null : chainTs - Math.floor(Date.now() / 1000);
+
+  // 3. Group by the pool each epoch was published on. Old epochs (no poolAddress) live on V1 and
+  //    keep the V1 signatures; V2 epochs use claim*As with the user's minAssetOut + a deadline.
+  //    One transaction per pool, V1 first. Before anything is simulated, every epoch is checked
+  //    against the chain (published? already claimed? does OUR proof verify against the on-chain
+  //    root with OUR exact amount?). A proof that does not verify means this page's reward list is
+  //    stale (the epoch was rebuilt/republished after it loaded): the list is refreshed from the
+  //    gateway once and the whole claim is re-planned. Every failure names its reason.
+  const runClaims = async (list: UnclaimedEpoch[], allowRefresh: boolean): Promise<void> => {
+    const groups = new Map<string, UnclaimedEpoch[]>();
+    for (const e of list) {
+      const pool = e.poolAddress ? getAddress(e.poolAddress) : v1;
+      if (!groups.has(pool)) groups.set(pool, []);
+      groups.get(pool)!.push(e);
+    }
+    const order = [...groups.keys()].sort((a, b) => (a === v1 ? -1 : b === v1 ? 1 : 0));
+
+    for (const pool of order) {
+      const group = groups.get(pool)!;
+      const isV2 = v2 !== null && pool === v2;
+      if (!isV2 && pool !== v1) {
+        throw new Error(
+          `These rewards were published on pool ${pool}, which this site is not configured for` +
+            (pool !== v1 && !v2 ? ' (LossRewardPoolV2 address not set).' : '.')
+        );
+      }
+
+      // Exact arguments. amountWei is the gateway's exact figure when present; the fallback is the
+      // identical rounding the worker used to build the leaf, so the two can't drift.
+      const sorted = [...group].sort((a, b) => a.epochNumber - b.epochNumber);
+      const planned: { e: UnclaimedEpoch; amount: bigint; proof: `0x${string}`[]; ctx: ClaimEpochContext }[] = [];
+      for (const e of sorted) {
+        const amount = e.amountWei ? BigInt(e.amountWei) : BigInt(Math.round(e.finalRewardEth * 1e18));
+        const proof = (Array.isArray(e.merkleProof) ? e.merkleProof : []) as `0x${string}`[];
+        // On-chain state for this epoch: root + claimed flag.
+        const [root, claimed] = await Promise.all([
+          publicClient.readContract({ address: pool, abi: LOSS_POOL_ABI, functionName: 'epochMerkleRoots', args: [token, BigInt(e.epochNumber)] } as any) as Promise<`0x${string}`>,
+          publicClient.readContract({ address: pool, abi: LOSS_POOL_ABI, functionName: 'hasClaimed', args: [token, BigInt(e.epochNumber), wallet] } as any) as Promise<boolean>,
+        ]);
+        if (claimed) {
+          anyAlreadyClaimed = true;
+          continue;
+        }
+        const ZERO = '0x0000000000000000000000000000000000000000000000000000000000000000';
+        if (!root || root === ZERO) {
+          throw new Error(`Epoch #${e.epochNumber} is not published on ${isV2 ? 'LossRewardPoolV2' : 'LossRewardPool'} ${pool.slice(0, 6)}…${pool.slice(-4)} yet (no Merkle root on-chain). The worker publishes every 5 minutes; try again shortly.`);
+        }
+        if (!verifyClaimProof(claimLeaf(token, e.epochNumber, wallet, amount), proof, root)) {
+          if (allowRefresh) {
+            console.warn(`[claim] epoch #${e.epochNumber}: proof/amount on this page does not match the on-chain root ${root}; refreshing the reward list from the gateway and re-planning`);
+            const fresh = await fetchLossRewardData(token, wallet);
+            return runClaims(fresh.claimable.unclaimedEpochs || [], false);
+          }
+          throw new Error(
+            `Epoch #${e.epochNumber}: the proof and amount served for this wallet (${formatEther(amount)} ETH) do not match the Merkle root published on-chain (${root.slice(0, 10)}…), even after refreshing. ` +
+              `The epoch was republished with different allocations; the gateway data is stale or wrong — nothing was sent.`
+          );
+        }
+        planned.push({ e, amount, proof, ctx: { epochNumber: e.epochNumber, amountWei: amount, pool, onChainRoot: root } });
+      }
+      if (planned.length === 0) continue;
+
+      const epochIds = planned.map((p) => BigInt(p.e.epochNumber));
+      const amounts = planned.map((p) => p.amount);
+      const proofs = planned.map((p) => p.proof);
+      const groupWei = amounts.reduce((sum, a) => sum + a, 0n);
+
+      let call: any;
+      let assetSymbol: string | undefined;
+      if (isV2) {
+        // Stock-paying token: bound the swap with a quote minus the user's slippage setting
+        // (the caller is the beneficiary, so this bound is aligned); ETH-paying token: 0.
+        const { minAssetOut, asset } = await computeMinAssetOut(token, groupWei, options.slippagePct ?? 1);
+        assetSymbol = asset?.symbol;
+        const deadline = claimDeadline(chainTs);
+        call =
+          planned.length === 1
+            ? { functionName: 'claimRewardAs', args: [token, epochIds[0], amounts[0], proofs[0], minAssetOut, deadline] }
+            : { functionName: 'claimBatchAs', args: [token, epochIds, amounts, proofs, minAssetOut, deadline] };
+      } else {
+        call =
+          planned.length === 1
+            ? { functionName: 'claimReward', args: [token, epochIds[0], amounts[0], proofs[0]] }
+            : { functionName: 'claimBatch', args: [token, epochIds, amounts, proofs] };
+      }
+
+      // Pre-flight the exact call as the sender so a revert surfaces BY NAME (AlreadyClaimed,
+      // InvalidProof, MinOutNotMet, DeadlineExpired, …) BEFORE the wallet prompts. viem's
+      // shortMessage for a decoded custom error is the bare "reverted." — explainClaimRevert reads
+      // the decoded name and arguments off the error chain instead.
+      try {
+        await publicClient.simulateContract({ address: pool, abi: LOSS_POOL_ABI, account: wallet, ...call } as any);
+      } catch (err: any) {
+        const explained = explainClaimRevert(err, { epochs: planned.map((p) => p.ctx), pool, isV2, slippagePct: options.slippagePct ?? 1, assetSymbol, chainSkewSec });
+        console.error(`[claim] pre-flight ${call.functionName} on ${pool} reverted: ${explained.code}(${explained.args.join(', ')})`, err);
+        if (explained.code === 'AlreadyClaimed') {
+          anyAlreadyClaimed = true;
+          continue;
+        }
+        if (explained.code === 'InvalidProof' && allowRefresh) {
+          const fresh = await fetchLossRewardData(token, wallet);
+          return runClaims(fresh.claimable.unclaimedEpochs || [], false);
+        }
+        throw new Error(`Claim on ${isV2 ? 'the V2 pool' : 'the V1 pool'} would revert on-chain — ${explained.message}`);
+      }
+
+      // Send from the user's wallet — identical mechanics to swaps.
+      const data = encodeFunctionData({ abi: LOSS_POOL_ABI, ...call } as any);
+      const txHash = (await provider.request({
+        method: 'eth_sendTransaction',
+        params: [{ from: sender, to: pool, data }],
+      })) as string;
+      await waitForTransactionReceipt(txHash, {
+        description: 'Reward claim',
+        revertedMessage: 'Reward claim reverted on-chain. Nothing was paid out.',
+      });
+      txHashes.push(txHash);
+      totalWei += groupWei;
+    }
+  };
+
+  await runClaims(epochs, true);
 
   if (txHashes.length === 0) {
     return { success: true, txHash: null, txHashes: [], claimedEth: '0', alreadyClaimed: anyAlreadyClaimed, message: 'Rewards were already claimed on-chain.' };
