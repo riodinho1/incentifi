@@ -1,25 +1,19 @@
 /**
- * WORKER — pending epochs with funds in the pool get published (incident 2026-09-08, INCENTIFI/NVDA).
+ * WORKER — legacy pending_funding epochs are rebuilt from fresh chain reads, funded pro rata, and
+ * their earlier cost-basis depletion is reversed (2026-09-09; supersedes the PR #31 behaviour that
+ * republished the STORED per-holder amounts, which came from stale/double-counted holder rows).
  *
- * Production state reproduced offline: LossRewardPoolV2 holds 0.292292038450749286 ETH unallocated for
- * the token; reward_epochs has #4 (0.3024 ETH) and #5 (0.2479 ETH) as `pending_funding` with their
- * per-holder rows and proofs, and holder_cost_basis was already depleted by those full amounts. The
- * old worker read the balance correctly but required the FULL 0.3024 for #4 before anything could
- * publish (FIFO), so both sat forever and every new epoch was parked the same way.
- *
- * This drives the REAL executeEpochForToken() against a fake chain (eth_call answers for the pools,
- * factory and token; eth_sendRawTransaction decodes setEpochMerkleRoot and enforces the contract's
- * InsufficientUnallocatedPool / EpochAlreadyPublished) and the in-memory Supabase mock.
- *   0. pool read fails on every attempt -> token skipped, no tx, no rows ("retried, not treated as zero")
- *   1. pool read fails twice then succeeds -> run 1 publishes #4 on V2 for the whole 0.2923 ETH, pro
- *      rata from the STORED allocations (no re-snapshot): allocation == sum of the rewritten leaves,
- *      every rewritten proof verifies against the new root, scaling recorded, unpaid depletion given
- *      back to holder_cost_basis; #5 stays pending; NO new epoch #6 is computed
- *   2. pool now ~0 -> nothing published, nothing computed, no tx
- *   3. #5's root appears on-chain out of band (crash between tx and DB) and fees arrive -> #5 is
- *      reconciled in the DB without a tx, then a NEW epoch #6 is computed and published capped to the
- *      remaining balance (published, not pending), cost basis depleted by the SCALED amount only
- *   4. pool read fails for the new-epoch gate -> skipped, no tx, no row
+ * Production state reproduced offline: LossRewardPoolV2 holds 0.292292038450749286 ETH unallocated;
+ * reward_epochs has #4 (0.3024 ETH) and #5 (0.2479 ETH) as `pending_funding` with per-holder rows and
+ * proofs; holder_cost_basis was already depleted by those full amounts. Holders A and B still hold
+ * 1,000,000 tokens; C has fully sold (chain 0) although the DB still says 1,000,000.
+ *   1. run 1: BOTH pending epochs' rows are discarded and every holder's depletion reversed (A, B, C back
+ *      to their pre-pending investment); #4 is rebuilt in place from confirmed chain reads: A and B paid,
+ *      C (sold out) gets nothing; funded in full (demand < pool), status published on the SAME epoch_id;
+ *      #5 stays pending (rows gone); no new epoch number is created
+ *   2. run 2: #5 rebuilt in place, capped pro rata to what the pool has left (published, not pending)
+ *   3. run 3: pool ~0 -> a NEW epoch #6 is recorded as completed_dust, nothing depleted, no tx
+ *   4. pool read fails on every attempt -> skipped, no tx, no rows
  *
  * Run: node test/worker-pending-epoch-funding.test.mjs   (part of `npm test`)
  */
@@ -40,7 +34,9 @@ const B = getAddress('0x0000000000000000000000000000000000000BBB');
 const C = getAddress('0x0000000000000000000000000000000000000CCC');
 const E = 10n ** 18n;
 const ZERO32 = '0x' + '0'.repeat(64);
-const POOL_BAL = 292292038450749286n; // 0.292292038450749286 ETH, the production V2 unallocated balance
+const POOL_BAL = 292292038450749286n; // the production V2 unallocated balance
+const PRICE = 4_813_827_373n; // 4.81e-9 ETH/token (production slot0 at the time)
+const truth = { [A]: 1_000_000n * E, [B]: 1_000_000n * E, [C]: 0n };
 
 const pools = { [V1]: { unallocated: 0n, roots: new Map(), allocated: new Map() }, [V2]: { unallocated: POOL_BAL, roots: new Map(), allocated: new Map() } };
 const publishes = [];
@@ -50,21 +46,16 @@ const enc = (types, values) => encodeAbiParameters(parseAbiParameters(types), va
 const hex = (n) => '0x' + BigInt(n).toString(16);
 const receipts = new Map();
 let nonce = 0; const HEAD = 58_084_677n;
-let failUnallocatedReads = 0; // >0: fail that many getUnallocatedBalance calls; Infinity: always
-let unallocatedCalls = 0;
+let failUnallocatedReads = 0;
 
 function ethCall(to, data) {
   const t = getAddress(to); const s = data.slice(0, 10);
   if (t === LEGIBLE_FACTORY && s === sel('function isLaunched(address)')) return enc('bool', [false]);
   if (t === V3_FACTORY && s === sel('function isGraduated(address)')) return enc('bool', [false]);
   if (t === V3_FACTORY && s === sel('function getBondingCurve(address)')) return enc('address', [CURVE]);
-  if (t === CURVE && s === sel('function getCurrentPrice()')) return enc('uint256', [4_813_827_373n]); // 4.81e-9 ETH/token
-  if (t === TOKEN && s === sel('function balanceOf(address)')) return enc('uint256', [1_000_000n * E]);
-  if (pools[t] && s === sel('function getUnallocatedBalance(address)')) {
-    unallocatedCalls++;
-    if (failUnallocatedReads > 0) { failUnallocatedReads--; return 'FAIL'; }
-    return enc('uint256', [pools[t].unallocated]);
-  }
+  if (t === CURVE && s === sel('function getCurrentPrice()')) return enc('uint256', [PRICE]);
+  if (t === TOKEN && s === sel('function balanceOf(address)')) return enc('uint256', [truth[getAddress('0x' + data.slice(34, 74))] ?? 0n]);
+  if (pools[t] && s === sel('function getUnallocatedBalance(address)')) { if (failUnallocatedReads > 0) { failUnallocatedReads--; return 'FAIL'; } return enc('uint256', [pools[t].unallocated]); }
   if (pools[t] && s === sel('function epochMerkleRoots(address,uint256)')) return pools[t].roots.get(BigInt('0x' + data.slice(74, 138)).toString()) || ZERO32;
   if (pools[t] && s === sel('function epochAllocatedAmounts(address,uint256)')) return enc('uint256', [pools[t].allocated.get(BigInt('0x' + data.slice(74, 138)).toString()) || 0n]);
   return null;
@@ -121,12 +112,11 @@ function readEnvLocal(key) {
 const supabaseUrl = readEnvLocal('VITE_SUPABASE_URL') || readEnvLocal('SUPABASE_URL') || 'https://worker-pending-test.supabase.co';
 process.env.VITE_SUPABASE_URL ||= supabaseUrl;
 process.env.SUPABASE_SERVICE_ROLE_KEY ||= 'worker-pending-test-key';
-const mock = createSupabaseRestMock(supabaseUrl, globalThis.fetch, { upsertKeys: { holder_cost_basis: ['token_address', 'wallet_address'], indexer_heartbeats: ['worker_name'] } });
+const mock = createSupabaseRestMock(supabaseUrl, globalThis.fetch, { upsertKeys: { holder_cost_basis: ['token_address', 'wallet_address'], indexer_heartbeats: ['worker_name'], reward_epochs: ['token_address', 'epoch_number'] } });
 globalThis.fetch = mock.fetchImpl;
 
 const worker = await import('../scripts/loss-reward-worker.mjs');
 const { MerkleTree, hashLeaf } = worker;
-const SLACK = worker.LEAF_STABILIZE_SLACK_WEI * 2n; // leaf stabilisation may hold back up to one slack (1e-12 ETH)
 const tok = TOKEN.toLowerCase();
 
 // ---- seed: two pending epochs exactly like production (stored amounts, proofs, depleted cost basis)
@@ -139,95 +129,70 @@ function seedPending(epochId, epochNumber, holders) {
   const total = holders.reduce((a, [, e]) => a + e, 0);
   mock.seed('reward_epochs', [{ epoch_id: epochId, token_address: tok, epoch_number: epochNumber, pool_price_eth: 2e-8, pool_twap_price_eth: 2e-8, total_theoretical_reward_eth: total, available_pool_eth: 0.23869143619975786, scaling_factor: 1, total_distributed_eth: total, merkle_root: tree.getRoot(), onchain_tx_hash: null, status: 'pending_funding', pool_address: V2.toLowerCase(), created_at: '2026-09-08T22:08:30Z' }]);
   mock.seed('epoch_holder_rewards', holders.map(([w, eth], i) => ({ id: rowId++, epoch_id: epochId, token_address: tok, wallet_address: w.toLowerCase(), token_balance: 1_000_000, cost_basis_eth: 3e-8, unrealized_loss_eth: eth * 10, theoretical_reward_eth: eth, final_reward_eth: eth, merkle_proof: tree.getProof(i), claimed: false })));
-  return tree.getRoot();
 }
 for (let n = 1; n <= 3; n++) mock.seed('reward_epochs', [{ epoch_id: 2800 + n, token_address: tok, epoch_number: n, pool_price_eth: 5e-8, pool_twap_price_eth: 5e-8, total_theoretical_reward_eth: 0, available_pool_eth: 0, scaling_factor: 1, total_distributed_eth: 0, merkle_root: ZERO32, status: 'completed_empty', pool_address: V2.toLowerCase(), created_at: '2026-09-08T21:28:15Z' }]);
 seedPending(2824, 4, ep4);
-const root5 = seedPending(2875, 5, ep5);
-// cost basis already depleted by the FULL pending rewards (A: 0.15+0.15, B: 0.10+0.098, C: 0.052) from an original 1.0 ETH each
-const invested0 = { [A.toLowerCase()]: 1 - 0.30, [B.toLowerCase()]: 1 - 0.1979301042094015, [C.toLowerCase()]: 1 - 0.0524126688391798 };
-for (const [i, w] of [A, B, C].entries()) mock.seed('holder_cost_basis', [{ id: i + 1, token_address: tok, wallet_address: w.toLowerCase(), token_balance: 1_000_000, total_invested_eth: invested0[w.toLowerCase()], avg_cost_basis_eth: invested0[w.toLowerCase()] / 1_000_000, is_eligible: true, is_underwater_seller: false }]);
+seedPending(2875, 5, ep5);
+// cost basis already depleted by the FULL pending rewards from an original 1.0 ETH each (C still shows 1,000,000 in the DB although it sold)
+const depleted = { [A]: 0.30, [B]: 0.1979301042094015, [C]: 0.0524126688391798 };
+for (const [i, w] of [A, B, C].entries()) mock.seed('holder_cost_basis', [{ id: i + 1, token_address: tok, wallet_address: w.toLowerCase(), token_balance: 1_000_000, total_invested_eth: 1 - depleted[w], avg_cost_basis_eth: (1 - depleted[w]) / 1_000_000, is_eligible: true, is_underwater_seller: false }]);
 
 const verifyProof = (leaf, proof, root) => proof.reduce((h, p) => (h <= p ? keccak256(concat([h, p])) : keccak256(concat([p, h]))), leaf.toLowerCase()).toLowerCase() === root.toLowerCase();
 const epochRow = (n) => mock.table('reward_epochs').find((e) => e.epoch_number === n);
 const rewardRows = (epochId) => mock.table('epoch_holder_rewards').filter((r) => r.epoch_id === epochId);
 const cb = (w) => mock.table('holder_cost_basis').find((h) => h.wallet_address === w.toLowerCase());
-const opts = { skipFreshnessCheck: true, skipFallbackMonitor: true, poolRead: { retryDelayMs: 0 } };
+const opts = { skipFreshnessCheck: true, skipFallbackMonitor: true, poolRead: { retryDelayMs: 0 }, balanceRead: { delayMs: 0 } };
+const price = Number(PRICE) / 1e18; const lossOn1 = 1 - 1_000_000 * price; // loss per holder on a restored 1.0 ETH investment
 
 console.log('======================================================');
-console.log('  WORKER PENDING EPOCHS: V2 holds 0.2923 ETH, #4 (0.3024) and #5 (0.2479) pending');
+console.log('  WORKER PENDING EPOCHS: V2 holds 0.2923 ETH, #4 (0.3024) and #5 (0.2479) pending; C sold out');
 console.log('======================================================\n');
 try {
-  // 0. pool read fails on every attempt -> skipped, nothing sent, nothing written
-  failUnallocatedReads = Infinity; unallocatedCalls = 0;
-  const r0 = await worker.executeEpochForToken(TOKEN, opts);
-  assert.equal(r0.skipped, true); assert.equal(r0.reason, 'pending_resolution_failed');
-  assert.equal(publishes.length, 0); assert.equal(epochRow(4).status, 'pending_funding');
-  assert.ok(unallocatedCalls >= worker.POOL_READ_ATTEMPTS, `read retried ${unallocatedCalls} times`);
-  console.log(`0. pool read failing every time -> token skipped after ${unallocatedCalls} attempts, no tx, no rows  OK`);
-
-  // 1. two failures then success -> #4 published pro rata for the whole pool
-  failUnallocatedReads = 2;
+  // 1. reversal + rebuild of #4 from chain
   const r1 = await worker.executeEpochForToken(TOKEN, opts);
-  assert.equal(r1.skipped, true); assert.equal(r1.reason, 'pending_epochs_unfunded', 'no NEW epoch while #5 is still pending');
-  assert.equal(publishes.length, 1, 'exactly one publish');
-  assert.equal(publishes[0].pool, V2); assert.equal(publishes[0].epochId, 4n);
-  assert.ok(publishes[0].allocated <= POOL_BAL && publishes[0].allocated >= POOL_BAL - SLACK, `allocated the whole pool minus rounding slack (${publishes[0].allocated})`);
-  assert.equal(pools[V2].unallocated, POOL_BAL - publishes[0].allocated);
+  assert.equal(r1.skipped, undefined, `run 1 must publish (got ${r1.reason}: ${r1.detail})`);
+  assert.equal(r1.rebuilt, true); assert.equal(r1.epochNumber, 4, 'the oldest pending epoch is rebuilt, no new number');
+  assert.equal(mock.table('epoch_holder_rewards').filter((r) => r.epoch_id === 2875).length, 0, "#5's stored rows discarded");
+  assert.equal(publishes.length, 1); assert.equal(publishes[0].epochId, 4n); assert.equal(publishes[0].pool, V2);
   const e4 = epochRow(4);
-  assert.equal(e4.status, 'published'); assert.ok(e4.onchain_tx_hash?.startsWith('0x'));
-  assert.equal(e4.merkle_root, publishes[0].root, 'DB root == on-chain root');
-  assert.ok(Math.abs(e4.scaling_factor - Number(POOL_BAL) / 1e18 / 0.3024126688391798) < 1e-9, `scaling ${e4.scaling_factor}`);
-  assert.ok(Math.abs(e4.total_distributed_eth - Number(publishes[0].allocated) / 1e18) < 1e-15);
+  assert.equal(e4.epoch_id, 2824, 'rebuilt IN PLACE (same epoch_id)'); assert.equal(e4.status, 'published'); assert.ok(e4.onchain_tx_hash?.startsWith('0x'));
+  assert.equal(e4.merkle_root, publishes[0].root); assert.equal(e4.scaling_factor, 1, 'demand (2 x 10% of ~0.995) < pool: funded in full');
   const rows4 = rewardRows(2824);
-  const sum4 = rows4.reduce((a, r) => a + BigInt(Math.round(Number(r.final_reward_eth) * 1e18)), 0n);
-  assert.equal(sum4, publishes[0].allocated, 'sum of rewritten leaves == on-chain allocation');
+  assert.deepEqual(rows4.map((r) => r.wallet_address).sort(), [A, B].map((w) => w.toLowerCase()).sort(), 'A and B paid; C (sold out on chain) gets nothing');
   for (const r of rows4) {
-    const leaf = hashLeaf(tok, 4, r.wallet_address, BigInt(Math.round(Number(r.final_reward_eth) * 1e18)));
-    assert.ok(verifyProof(leaf, r.merkle_proof, publishes[0].root), `rewritten proof verifies for ${r.wallet_address}`);
+    assert.ok(Math.abs(Number(r.final_reward_eth) - 0.1 * lossOn1) < 1e-9, `reward = 10% of the loss on the RESTORED 1.0 ETH investment (${r.final_reward_eth})`);
+    assert.ok(verifyProof(hashLeaf(tok, 4, r.wallet_address, BigInt(Math.round(Number(r.final_reward_eth) * 1e18))), r.merkle_proof, publishes[0].root), 'proof verifies');
   }
-  // ratios preserved: A got 0.15/0.3024 of the pool
-  const paidA4 = Number(rows4.find((r) => r.wallet_address === A.toLowerCase()).final_reward_eth);
-  assert.ok(Math.abs(paidA4 - 0.15 * Number(POOL_BAL) / 1e18 / 0.3024126688391798) < 1e-12, 'pro-rata share from the STORED allocation');
-  // cost basis: unpaid part of #4's depletion given back (A was depleted 0.15 for #4, paid paidA4)
-  assert.ok(Math.abs(Number(cb(A).total_invested_eth) - (invested0[A.toLowerCase()] + (0.15 - paidA4))) < 1e-12, 'unpaid depletion restored for A');
-  assert.equal(epochRow(5).status, 'pending_funding', '#5 waits');
-  assert.equal(epochRow(6), undefined, 'no epoch #6 computed while #5 is pending');
-  console.log(`1. #4 published on V2 for ${Number(publishes[0].allocated) / 1e18} ETH (${(e4.scaling_factor * 100).toFixed(2)}% of 0.3024) from stored allocations; proofs rewritten and verified; unpaid depletion restored; #5 pending; no #6  OK`);
+  assert.equal(rows4.reduce((a, r) => a + BigInt(Math.round(Number(r.final_reward_eth) * 1e18)), 0n), publishes[0].allocated, 'allocation == sum of leaves');
+  assert.ok(Math.abs(Number(cb(C).total_invested_eth) - 1.0) < 1e-12, "C's depletion reversed (0.0524 given back) and NOT depleted again");
+  assert.ok(Math.abs(Number(cb(A).total_invested_eth) - (1.0 - 0.1 * lossOn1)) < 1e-9, 'A: 0.30 given back, then depleted by what #4 actually paid');
+  assert.equal(epochRow(5).status, 'pending_funding', '#5 waits for the next run'); assert.equal(epochRow(6), undefined, 'no new epoch number while a pending one exists');
+  console.log(`1. reversal (A +0.30, B +0.198, C +0.052) then #4 rebuilt in place from chain: A,B paid ${(0.1 * lossOn1).toFixed(6)} each, C excluded, published  OK`);
 
-  // 2. pool ~0 -> nothing happens
+  // 2. #5 rebuilt, capped to the pool remainder
+  const left = pools[V2].unallocated;
   const r2 = await worker.executeEpochForToken(TOKEN, opts);
-  assert.equal(r2.reason, 'pending_epochs_unfunded'); assert.equal(publishes.length, 1); assert.equal(epochRow(5).status, 'pending_funding'); assert.equal(epochRow(6), undefined);
-  console.log('2. pool below dust -> #5 waits, no tx, no new epoch  OK');
+  assert.equal(r2.skipped, undefined, `run 2 must publish (${r2.reason})`); assert.equal(r2.epochNumber, 5); assert.equal(r2.rebuilt, true);
+  assert.equal(publishes.length, 2); assert.equal(publishes[1].epochId, 5n);
+  const e5 = epochRow(5);
+  assert.equal(e5.epoch_id, 2875); assert.equal(e5.status, 'published', 'capped and PUBLISHED, not pending'); assert.ok(e5.scaling_factor < 1 && e5.scaling_factor > 0);
+  assert.ok(publishes[1].allocated <= left && publishes[1].allocated >= left - worker.LEAF_STABILIZE_SLACK_WEI * 2n, 'epoch #5 takes what the pool has left');
+  assert.equal(rewardRows(2875).length, 2);
+  console.log(`2. #5 rebuilt in place, capped to ${Number(publishes[1].allocated) / 1e18} ETH (scaling ${e5.scaling_factor.toFixed(4)}), published  OK`);
 
-  // 3. #5's root lands on-chain out of band (crash after tx) + fees arrive -> reconcile #5, then a new capped epoch #6
-  const alloc5 = BigInt(Math.round(0.2479301042094015 * 1e18));
-  pools[V2].unallocated += 300_000_000_000_000_000n; // +0.3 ETH of fees
-  pools[V2].unallocated -= alloc5; pools[V2].roots.set('5', root5); pools[V2].allocated.set('5', alloc5);
-  const before6 = pools[V2].unallocated;
+  // 3. pool ~0 -> new epoch #6 is dust, nothing depleted, no tx
+  const invA = Number(cb(A).total_invested_eth);
   const r3 = await worker.executeEpochForToken(TOKEN, opts);
-  assert.equal(r3.skipped, undefined, `run 3 must compute a new epoch (got ${r3.reason})`);
-  assert.equal(epochRow(5).status, 'published'); assert.equal(epochRow(5).onchain_tx_hash, null, 'reconciled without a new tx'); assert.equal(epochRow(5).merkle_root, root5); assert.equal(epochRow(5).scaling_factor, 1);
-  assert.equal(publishes.length, 2, 'one NEW publish (epoch #6), none for #5');
-  assert.equal(publishes[1].epochId, 6n); assert.equal(publishes[1].pool, V2);
-  assert.equal(publishes[1].allocated <= before6 && publishes[1].allocated >= before6 - SLACK, true, 'epoch #6 capped to the remaining balance');
-  const e6 = epochRow(6);
-  assert.equal(e6.status, 'published', 'capped, published - NOT pending_funding'); assert.ok(e6.scaling_factor < 1);
-  const rows6 = rewardRows(e6.epoch_id);
-  assert.equal(rows6.reduce((a, r) => a + BigInt(Math.round(Number(r.final_reward_eth) * 1e18)), 0n), publishes[1].allocated);
-  // depletion for #6 == the SCALED amount paid (A's invested went down by exactly what A was paid in #6)
-  const cbA_after1 = invested0[A.toLowerCase()] + (0.15 - paidA4);
-  const paidA6 = Number(rows6.find((r) => r.wallet_address === A.toLowerCase()).final_reward_eth);
-  assert.ok(Math.abs(Number(cb(A).total_invested_eth) - (cbA_after1 - paidA6)) < 1e-12, 'cost basis depleted by the paid (scaled) amount only');
-  console.log(`3. #5 reconciled from chain (no tx); new epoch #6 published capped to ${Number(publishes[1].allocated) / 1e18} ETH (scaling ${e6.scaling_factor.toFixed(4)})  OK`);
+  assert.equal(r3.reason, 'dust_payout'); assert.equal(r3.epochNumber, 6); assert.equal(r3.rebuilt, false);
+  assert.equal(epochRow(6).status, 'completed_dust'); assert.equal(publishes.length, 2); assert.equal(Number(cb(A).total_invested_eth), invA, 'no depletion for a dust epoch');
+  console.log('3. pool empty -> new epoch #6 recorded as completed_dust, no tx, no depletion  OK');
 
-  // 4. new-epoch gate: pool read fails every time -> skipped, no tx, no row
+  // 4. pool read fails on every attempt -> skipped
   failUnallocatedReads = Infinity;
   const r4 = await worker.executeEpochForToken(TOKEN, opts);
-  assert.equal(r4.skipped, true); assert.equal(r4.reason, 'pool_read_failed');
-  assert.equal(publishes.length, 2); assert.equal(epochRow(7), undefined);
+  assert.equal(r4.skipped, true); assert.equal(r4.reason, 'pool_read_failed'); assert.equal(publishes.length, 2); assert.equal(epochRow(7), undefined);
   failUnallocatedReads = 0;
-  console.log('4. new-epoch pool read failing -> skipped (fail closed), no tx, no row  OK');
+  console.log('4. pool read failing every time -> skipped (fail closed), no tx, no row  OK');
 
   console.log('\nworker-pending-epoch-funding tests passed');
 } finally {

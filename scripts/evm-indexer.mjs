@@ -15,6 +15,7 @@ import {
   fetchLegibleState,
 } from './lib/legiblePool.mjs';
 import { createFailoverRpc, parseRpcUrls } from './lib/rpcFailover.mjs';
+import { readBalanceReliably } from './lib/reliableBalance.mjs';
 
 // Robust .env.local loader
 if (fs.existsSync('.env.local')) {
@@ -271,25 +272,68 @@ export const FULL_EXIT_DUST_TOKENS = 1e-6;
 /**
  * Process a Buy trade on bonding curve.
  */
+// ---------------------------------------------------------------------------------------------
+// Trade idempotency (2026-09-09). The holder update used to run BEFORE the trade row was written,
+// so a failure between the two re-applied the buy on the next tick's rescan (INCENTIFI holder
+// 0x6e5e24f8…: one buy on chain, one trade row, DB balance exactly 2x). Order is now: claim the
+// trade row (applied = false) -> update the holder -> mark applied = true. A rescan re-applies a
+// row only while it is still applied = false. Without the `applied` column
+// (supabase/trade_idempotency_and_reconciliation.sql not run) the row is still written first.
+// ---------------------------------------------------------------------------------------------
+let tradeAppliedColumnMissing = false;
+function noteAppliedColumnMissing(msg) {
+  if (!tradeAppliedColumnMissing) console.warn(`[TRADES] token_trades_evm.applied is missing (${msg}); apply supabase/trade_idempotency_and_reconciliation.sql. Falling back to trade-row-first without resume.`);
+  tradeAppliedColumnMissing = true;
+}
+/** Returns { skip: true } when the trade was already applied, else { skip: false, markApplied(extra) }. */
+export async function claimTrade(tradeIdentity, row, db = supabase) {
+  const cols = tradeAppliedColumnMissing ? 'tx_hash' : 'tx_hash, applied';
+  const { data: existing, error: checkErr } = await db.from('token_trades_evm').select(cols).eq('tx_hash', tradeIdentity).maybeSingle();
+  if (checkErr) {
+    if (!tradeAppliedColumnMissing && /applied|column/i.test(checkErr.message || '')) { noteAppliedColumnMissing(checkErr.message); return claimTrade(tradeIdentity, row, db); }
+    throw new Error(`[DB ERROR] Failed to query token_trades_evm (${tradeIdentity}): ${checkErr.code} ${checkErr.message}`);
+  }
+  const markApplied = async (extra = {}) => {
+    const patch = tradeAppliedColumnMissing ? extra : { ...extra, applied: true, applied_at: new Date().toISOString() };
+    if (!Object.keys(patch).length) return;
+    const { error } = await db.from('token_trades_evm').update(patch).eq('tx_hash', tradeIdentity);
+    if (error) throw new Error(`[DB ERROR] Failed to mark token_trades_evm ${tradeIdentity} applied: ${error.code} ${error.message}`);
+  };
+  if (existing) {
+    if (tradeAppliedColumnMissing || existing.applied !== false) return { skip: true };
+    console.warn(`[TRADES] ${tradeIdentity} was recorded but its holder update never completed; applying it now`);
+    return { skip: false, markApplied, resumed: true };
+  }
+  const { error: insErr } = await db.from('token_trades_evm').insert(tradeAppliedColumnMissing ? row : { ...row, applied: false });
+  if (insErr) {
+    if (!tradeAppliedColumnMissing && /applied|column/i.test(insErr.message || '')) { noteAppliedColumnMissing(insErr.message); return claimTrade(tradeIdentity, row, db); }
+    if (insErr.code === '23505') return { skip: true }; // another process claimed it first
+    throw new Error(`[DB ERROR] Failed to insert token_trades_evm (${tradeIdentity}): ${insErr.code} ${insErr.message}`);
+  }
+  return { skip: false, markApplied, resumed: false };
+}
+
 export async function processBuyTrade(tokenAddress, symbol, trader, amountToken, amountEth, creatorFee, lossPoolFee, tradeIdentity, blockNumber, blockTime) {
   const token = tokenAddress.toLowerCase();
   const wallet = trader.toLowerCase();
   const priceEth = amountToken > 0 ? (amountEth - creatorFee - lossPoolFee) / amountToken : 0;
 
-  // 1. Deduplication check: if trade already recorded, skip to prevent double-counting
-  const { data: existingTrade, error: checkTradeErr } = await supabase
-    .from('token_trades_evm')
-    .select('tx_hash')
-    .eq('tx_hash', tradeIdentity)
-    .maybeSingle();
-
-  if (checkTradeErr) {
-    throw new Error(`[DB ERROR] Failed to query token_trades_evm (${tradeIdentity}): ${checkTradeErr.code} ${checkTradeErr.message}`);
-  }
-
-  if (existingTrade) {
-    return;
-  }
+  // 1. Claim the trade row FIRST (idempotency; see claimTrade). Already applied -> nothing to do.
+  const claim = await claimTrade(tradeIdentity, {
+    tx_hash: tradeIdentity,
+    token_address: token,
+    trader_address: wallet,
+    side: 'buy',
+    amount_token: amountToken,
+    amount_eth: amountEth,
+    price_eth: priceEth,
+    creator_fee_eth: creatorFee,
+    loss_pool_fee_eth: lossPoolFee,
+    is_underwater_sale: false,
+    block_number: Number(blockNumber),
+    block_time: blockTime,
+  });
+  if (claim.skip) return;
 
   // 2. Fetch current cost basis
   const { data: existing, error: fetchHolderErr } = await supabase
@@ -336,25 +380,8 @@ export async function processBuyTrade(tokenAddress, symbol, trader, amountToken,
     throw new Error(`[DB ERROR] Failed to upsert holder_cost_basis (${token} ${wallet}): ${upsertHolderErr.code} ${upsertHolderErr.message}`);
   }
 
-  // 4. Upsert trade log
-  const { error: insertTradeErr } = await supabase.from('token_trades_evm').upsert({
-    tx_hash: tradeIdentity,
-    token_address: token,
-    trader_address: wallet,
-    side: 'buy',
-    amount_token: amountToken,
-    amount_eth: amountEth,
-    price_eth: priceEth,
-    creator_fee_eth: creatorFee,
-    loss_pool_fee_eth: lossPoolFee,
-    is_underwater_sale: false,
-    block_number: Number(blockNumber),
-    block_time: blockTime,
-  });
-
-  if (insertTradeErr) {
-    throw new Error(`[DB ERROR] Failed to upsert token_trades_evm (${tradeIdentity}): ${insertTradeErr.code} ${insertTradeErr.message}`);
-  }
+  // 4. Holder updated -> the trade is applied.
+  await claim.markApplied();
 
   // 5. Update 1m candle
   await aggregateCandle1m(symbol, token, priceEth, amountEth, blockTime);
@@ -370,20 +397,23 @@ export async function processSellTrade(tokenAddress, symbol, trader, amountToken
   const wallet = trader.toLowerCase();
   const priceEth = amountToken > 0 ? amountEth / amountToken : 0;
 
-  // 1. Deduplication check: if trade already recorded, skip to prevent double-counting
-  const { data: existingTrade, error: checkTradeErr } = await supabase
-    .from('token_trades_evm')
-    .select('tx_hash')
-    .eq('tx_hash', tradeIdentity)
-    .maybeSingle();
-
-  if (checkTradeErr) {
-    throw new Error(`[DB ERROR] Failed to query token_trades_evm (${tradeIdentity}): ${checkTradeErr.code} ${checkTradeErr.message}`);
-  }
-
-  if (existingTrade) {
-    return;
-  }
+  // 1. Claim the trade row FIRST (idempotency; see claimTrade). is_underwater_sale is filled in
+  //    when the row is marked applied (it depends on the holder's cost basis read below).
+  const claim = await claimTrade(tradeIdentity, {
+    tx_hash: tradeIdentity,
+    token_address: token,
+    trader_address: wallet,
+    side: 'sell',
+    amount_token: amountToken,
+    amount_eth: amountEth,
+    price_eth: priceEth,
+    creator_fee_eth: creatorFee,
+    loss_pool_fee_eth: lossPoolFee,
+    is_underwater_sale: false,
+    block_number: Number(blockNumber),
+    block_time: blockTime,
+  });
+  if (claim.skip) return;
 
   // 2. Fetch current cost basis
   const { data: existing, error: fetchHolderErr } = await supabase
@@ -434,25 +464,8 @@ export async function processSellTrade(tokenAddress, symbol, trader, amountToken
     throw new Error(`[DB ERROR] Failed to upsert holder_cost_basis (${token} ${wallet}): ${upsertHolderErr.code} ${upsertHolderErr.message}`);
   }
 
-  // 4. Upsert trade log
-  const { error: insertTradeErr } = await supabase.from('token_trades_evm').upsert({
-    tx_hash: tradeIdentity,
-    token_address: token,
-    trader_address: wallet,
-    side: 'sell',
-    amount_token: amountToken,
-    amount_eth: amountEth,
-    price_eth: priceEth,
-    creator_fee_eth: creatorFee,
-    loss_pool_fee_eth: lossPoolFee,
-    is_underwater_sale: isUnderwater,
-    block_number: Number(blockNumber),
-    block_time: blockTime,
-  });
-
-  if (insertTradeErr) {
-    throw new Error(`[DB ERROR] Failed to upsert token_trades_evm (${tradeIdentity}): ${insertTradeErr.code} ${insertTradeErr.message}`);
-  }
+  // 4. Holder updated -> the trade is applied (and now we know whether it was an underwater sale).
+  await claim.markApplied({ is_underwater_sale: isUnderwater });
 
   // 5. Update 1m candle
   await aggregateCandle1m(symbol, token, priceEth, amountEth, blockTime);
@@ -954,8 +967,92 @@ export function getV4DiscoveryState() {
  * gate treats as NOT fresh, blocking epochs) and the cursor does not advance, so the same
  * window is retried next tick.
  */
+// ---------------------------------------------------------------------------------------------
+// Holder balance reconciliation (2026-09-09). holder_cost_basis is derived from indexed trades and
+// has drifted (double-applied buys, sells missed while discovery was stuck). Periodically, at the
+// block the indexer has indexed through (NOT head: a lagging cursor would make a not-yet-indexed
+// sell look like an error and the sell would then be applied twice), every DB balance above zero is
+// compared with a confirmed chain read; a DB balance ABOVE the chain is lowered to it and the
+// recorded investment scaled by the same ratio (average cost basis preserved, exactly the worker's
+// per-epoch cap made durable). A chain balance above the DB (missed buy) is only logged: its cost
+// is unknown and a lower DB balance can only under-pay. Disputed reads change nothing.
+// ---------------------------------------------------------------------------------------------
+export const HOLDER_RECONCILE_INTERVAL_MS = Number(process.env.HOLDER_RECONCILE_INTERVAL_MS || 30 * 60_000);
+let reconcileAuditWarned = false;
+async function recordReconciliation(db, row) {
+  try {
+    const { error } = await db.from('holder_balance_reconciliations').insert(row);
+    if (error && !reconcileAuditWarned) { reconcileAuditWarned = true; console.warn(`[RECONCILE] audit row not written (${error.message}); apply supabase/trade_idempotency_and_reconciliation.sql`); }
+  } catch (err) {
+    if (!reconcileAuditWarned) { reconcileAuditWarned = true; console.warn(`[RECONCILE] audit row not written (${err.message})`); }
+  }
+}
+async function listReconcileTokens(db) {
+  const set = new Set([...v4TokenSymbolCache.keys()]);
+  const { data: rows } = await db.from('tokens').select('mint_address');
+  for (const r of rows || []) if (r.mint_address) set.add(String(r.mint_address).toLowerCase());
+  try {
+    const { data: idx } = await db.from('indexed_tokens').select('mint_address');
+    for (const r of idx || []) if (r.mint_address) set.add(String(r.mint_address).toLowerCase());
+  } catch { /* optional table */ }
+  return [...set];
+}
+let reconcileRunning = false;
+export async function reconcileHolderBalances({ db = supabase, rpcClient = client, rpc = rpcFailover, blockNumber, tokens = null, log = (m) => console.log(m), read = {} } = {}) {
+  if (reconcileRunning) return { skipped: 'already running' };
+  reconcileRunning = true;
+  try {
+    const block = blockNumber !== undefined ? BigInt(blockNumber) : (await rpcClient.getBlockNumber()) - 1n;
+    const tokenList = tokens || await listReconcileTokens(db);
+    const summary = { block: block.toString(), tokens: 0, holders: 0, lowered: 0, chainHigher: 0, disputed: 0, errors: 0 };
+    for (const tokenAddr of tokenList) {
+      const token = String(tokenAddr).toLowerCase();
+      const { data: rows, error } = await db.from('holder_cost_basis').select('wallet_address, token_balance, total_invested_eth, avg_cost_basis_eth').eq('token_address', token).gt('token_balance', 0);
+      if (error) { summary.errors++; log(`[RECONCILE] ${token}: holder_cost_basis query failed: ${error.message}`); continue; }
+      summary.tokens++;
+      for (const h of rows || []) {
+        summary.holders++;
+        const dbBal = Number(h.token_balance);
+        const dbWei = BigInt(Math.round(dbBal * 1e18));
+        let r;
+        try {
+          r = await readBalanceReliably({ client: rpcClient, rpc, token, wallet: h.wallet_address, blockNumber: block, expectedAtLeastWei: dbWei - dbWei / 1_000_000n, ...read });
+        } catch (err) {
+          summary.errors++;
+          log(`[RECONCILE] ${token} ${h.wallet_address}: balance read failed at block ${block} (${err.shortMessage || err.message}); left unchanged`);
+          continue;
+        }
+        if (r.disputed) {
+          summary.disputed++;
+          log(`[RECONCILE] ${token} ${h.wallet_address}: DISPUTED read at block ${block} (${r.endpoints[0]} says ${Number(r.primaryWei) / 1e18}, ${r.endpoints[1]} says ${Number(r.confirmWei) / 1e18}); left unchanged`);
+          continue;
+        }
+        const chain = Number(r.balanceWei) / 1e18;
+        if (chain < dbBal * (1 - 1e-6)) {
+          const ratio = dbBal > 0 ? chain / dbBal : 0;
+          const investedBefore = Number(h.total_invested_eth || 0);
+          const investedAfter = investedBefore * ratio;
+          const { error: upErr } = await db.from('holder_cost_basis').update({ token_balance: chain, total_invested_eth: investedAfter, last_updated_at: new Date().toISOString() }).eq('token_address', token).eq('wallet_address', h.wallet_address);
+          if (upErr) { summary.errors++; log(`[RECONCILE] ${token} ${h.wallet_address}: update failed: ${upErr.message}`); continue; }
+          summary.lowered++;
+          await recordReconciliation(db, { token_address: token, wallet_address: h.wallet_address, block_number: Number(block), db_balance: dbBal, chain_balance: chain, invested_before: investedBefore, invested_after: investedAfter, action: 'lowered' });
+          log(`[RECONCILE] ${token} ${h.wallet_address}: DB ${dbBal} -> chain ${chain} at block ${block}${r.confirmed ? ' (confirmed by a second endpoint)' : ''}; invested ${investedBefore} -> ${investedAfter}`);
+        } else if (chain > dbBal * (1 + 1e-6)) {
+          summary.chainHigher++;
+          log(`[RECONCILE] ${token} ${h.wallet_address}: chain ${chain} > DB ${dbBal} at block ${block} (missed buy; cost unknown, left for the indexer)`);
+        }
+      }
+    }
+    log(`[RECONCILE] done: ${JSON.stringify(summary)}`);
+    return summary;
+  } finally {
+    reconcileRunning = false;
+  }
+}
+
 export function createIndexer() {
   let lastPolledBlock = 0n;
+  let lastReconcileAt = 0;
   const curveAddressCache = new Map();
 
   async function tick() {
@@ -1012,7 +1109,7 @@ export function createIndexer() {
               await updateV4MarketSnapshot(tokenAddr, symbol, (t) => fetchLegibleState(client, t, REFERENCE_ETH_USD));
             } else {
               v4Module = v4Module || (await getV4Module());
-              await updateV4MarketSnapshot(tokenAddr, symbol, v4Module.fetchV4CurveState);
+              await updateV4MarketSnapshot(tokenAddr, symbol, (t) => v4Module.fetchV4CurveState(t, REFERENCE_ETH_USD, { client }));
             }
           }
         } catch (err) {
@@ -1108,6 +1205,11 @@ export function createIndexer() {
 
       // Successfully processed all events for range; advance block pointer safely
       lastPolledBlock = toBlock;
+      // Periodic chain reconciliation of holder balances at the block just indexed (see reconcileHolderBalances).
+      if (Date.now() - lastReconcileAt >= HOLDER_RECONCILE_INTERVAL_MS) {
+        lastReconcileAt = Date.now();
+        try { await reconcileHolderBalances({ blockNumber: lastPolledBlock }); } catch (err) { console.warn(`[RECONCILE] pass failed (will retry next interval): ${err.message}`); }
+      }
       await upsertIndexerHeartbeat('ok', `Indexed through block ${toBlock}`);
       return { ok: true, indexedThrough: toBlock };
     } catch (err) {

@@ -155,6 +155,28 @@ try {
   await assert.rejects(dead.provider.request({ method: 'eth_chainId', params: [] }), /failed on every endpoint after 4 attempts \(last: (malformed response|HTTP 503)/);
   console.log('7. all endpoints failing -> one final error after maxAttempts  OK');
 
+  // 7b. a response carrying another request's id is malformed -> rotate; requestVia hits one endpoint only
+  let gMode = 'wrong-id';
+  const G = await serve('F', (q, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); if (gMode === 'wrong-id') return res.end(JSON.stringify({ jsonrpc: '2.0', id: 999999, result: '0xdead' })); res.end(eth(q.id, '0x1237')); });
+  const l7 = [];
+  const r7 = createFailoverRpc([G.url, E.url], { timeoutMs: 400, log: (m) => l7.push(m), now: () => clock, sleep: async (ms) => { clock += ms; }, name: 'ids' });
+  assert.equal(await r7.provider.request({ method: 'eth_chainId', params: [] }), '0x1237', 'the mismatched answer is never returned');
+  assert.ok(l7.some((x) => /does not match request id/.test(x)), `id mismatch logged as malformed (${l7.join(' | ')})`);
+  assert.equal(r7.state.activeUrl, E.url);
+  // requestVia: one specific endpoint, no rotation, no cooldown bookkeeping
+  gMode = 'ok';
+  const hitsBefore = { ...hits };
+  assert.equal(await r7.requestVia(0, { method: 'eth_chainId', params: [] }), '0x1237');
+  assert.equal(hits.F, hitsBefore.F + 1, 'requestVia(0) hit endpoint 0 only'); assert.equal(hits.E, hitsBefore.E);
+  assert.equal(r7.state.activeUrl, E.url, 'requestVia does not move the active endpoint');
+  gMode = 'wrong-id';
+  await assert.rejects(r7.requestVia(0, { method: 'eth_chainId', params: [] }), /does not match request id/, 'requestVia throws instead of rotating');
+  eMode = 'revert';
+  await assert.rejects(r7.requestVia(1, { method: 'eth_call', params: [{ to: '0x' + '1'.repeat(40), data: '0x' }, 'latest'] }), (e) => e instanceof RpcRequestError && e.code === 3, 'final errors surface as RpcRequestError');
+  eMode = 'ok';
+  G.s.close();
+  console.log('7b. response with a foreign id -> malformed + rotate; requestVia targets one endpoint and throws on failure  OK');
+
   // 8. gateway copy in sync
   const norm = (s) => s.replace(/\r\n/g, '\n').replace(/from 'npm:viem@2\.55\.2';/, "from 'viem';");
   assert.equal(norm(fs.readFileSync('supabase/functions/loss-reward-gateway/rpc-failover.mjs', 'utf8')), norm(fs.readFileSync('scripts/lib/rpcFailover.mjs', 'utf8')), 'gateway copy identical except the viem import');

@@ -103,9 +103,14 @@ export function computeV4PoolId(key: V4PoolKey): `0x${string}` {
  * single boolean read — used to route between V3 and V4 state/trading logic
  * without needing any off-chain registry.
  */
-export async function isV4LaunchedToken(tokenAddress: string): Promise<boolean> {
+export interface V4ReadOptions {
+  /** Alternative viem client (the indexer/worker pass their failover client). Defaults to the frontend client. */
+  client?: { readContract: typeof publicClient.readContract };
+}
+
+export async function isV4LaunchedToken(tokenAddress: string, opts: V4ReadOptions = {}): Promise<boolean> {
   const token = getAddress(tokenAddress);
-  const launched = await publicClient.readContract({
+  const launched = await (opts.client ?? publicClient).readContract({
     address: getAddress(INCENTIFI_V4_FACTORY),
     abi: V4_FACTORY_ABI,
     functionName: 'isLaunched',
@@ -121,9 +126,9 @@ export async function isV4LaunchedToken(tokenAddress: string): Promise<boolean> 
  * IncentifiV4Router itself also calls through to, so there is nothing for a
  * locally-duplicated copy of those constants to silently drift out of sync with.
  */
-export async function getV4PoolKey(tokenAddress: string): Promise<V4PoolKey> {
+export async function getV4PoolKey(tokenAddress: string, opts: V4ReadOptions = {}): Promise<V4PoolKey> {
   const token = getAddress(tokenAddress);
-  const key = await publicClient.readContract({
+  const key = await (opts.client ?? publicClient).readContract({
     address: getAddress(INCENTIFI_V4_FACTORY),
     abi: V4_FACTORY_ABI,
     functionName: 'getPoolKey',
@@ -149,15 +154,17 @@ export interface V4CurveState extends BondingCurveState {
  */
 export async function fetchV4CurveState(
   tokenAddress: string,
-  ethPriceUsd: number = REFERENCE_ETH_USD
+  ethPriceUsd: number = REFERENCE_ETH_USD,
+  opts: V4ReadOptions = {}
 ): Promise<V4CurveState> {
+  const client = opts.client ?? publicClient;
   const normalizedToken = getAddress(tokenAddress);
-  const poolKey = await getV4PoolKey(normalizedToken);
+  const poolKey = await getV4PoolKey(normalizedToken, opts);
   const poolId = computeV4PoolId(poolKey);
 
   let curveRaw: readonly [string, string, boolean, boolean, bigint, bigint];
   try {
-    curveRaw = (await publicClient.readContract({
+    curveRaw = (await client.readContract({
       address: getAddress(INCENTIFI_V4_HOOK),
       abi: V4_HOOK_ABI,
       functionName: 'curveStates',
@@ -241,7 +248,7 @@ export async function fetchV4CurveState(
   let priceEth = 0;
   let poolAddress: `0x${string}` | null = null;
   try {
-    const slot0 = await publicClient.readContract({
+    const slot0 = await client.readContract({
       address: STATE_VIEW_ADDRESS,
       abi: STATE_VIEW_ABI,
       functionName: 'getSlot0',

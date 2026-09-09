@@ -156,6 +156,10 @@ export function createFailoverRpc(urls, opts = {}) {
     if (!json || typeof json !== 'object' || Array.isArray(json) || (!('result' in json) && !('error' in json))) {
       return { retry: retryableReason({ parseError: `not a JSON-RPC envelope: ${text.slice(0, 60).replace(/\s+/g, ' ')}` }), body };
     }
+    // A response for another request (proxy/cache mix-up) must never be taken as ours.
+    if (json.id !== undefined && json.id !== null && String(json.id) !== String(body.id)) {
+      return { retry: retryableReason({ parseError: `response id ${JSON.stringify(json.id)} does not match request id ${body.id}` }), body };
+    }
     if (json.error) {
       const retry = retryableReason({ jsonError: json.error });
       if (retry) return { retry, body, error: json.error };
@@ -210,6 +214,21 @@ export function createFailoverRpc(urls, opts = {}) {
     throw err;
   }
 
+  /**
+   * One request on ONE specific endpoint (by index), no rotation, no cooldown bookkeeping: for
+   * independent confirmation reads (scripts/lib/reliableBalance.mjs). Throws on any failure.
+   */
+  async function requestVia(index, { method, params }) {
+    const url = endpoints[index];
+    if (!url) throw new Error(`[RPC] ${name}: no endpoint at index ${index}`);
+    const out = await call(url, method, params);
+    if ('result' in out) return out.result;
+    if (out.final) throw new RpcRequestError({ body: out.body, error: out.final, url });
+    const err = new Error(`[RPC] ${name}: ${method} on ${url} failed (${out.retry})`);
+    err.code = -32603;
+    throw err;
+  }
+
   const provider = { request };
-  return { provider, state, transport: custom(provider, { retryCount: 0, name: `failover(${endpoints.length})`, key: 'failover' }) };
+  return { provider, state, requestVia, transport: custom(provider, { retryCount: 0, name: `failover(${endpoints.length})`, key: 'failover' }) };
 }

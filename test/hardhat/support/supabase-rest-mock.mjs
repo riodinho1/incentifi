@@ -227,6 +227,13 @@ export function createSupabaseRestMock(supabaseUrl, passthroughFetch = globalThi
       return jsonResponse(200, matches);
     }
 
+    if (method === 'DELETE') {
+      const matches = applyFilters(rows, u.searchParams);
+      for (const m of matches) rows.splice(rows.indexOf(m), 1);
+      if (!wantsRepresentation) return new Response(null, { status: 204, statusText: 'No Content' });
+      return jsonResponse(200, matches);
+    }
+
     throw new Error(`[supabase-rest-mock] unsupported method: ${method}`);
   }
 
