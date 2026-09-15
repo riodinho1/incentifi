@@ -55,7 +55,7 @@ export function parseRpcUrls(env = process.env) {
 }
 
 export const DEFAULT_NON_ARCHIVE_HOSTS = ['robinhood.api.pocket.network', 'publicnode.com'];
-const NON_ARCHIVE_MESSAGE = /historical state is not available|archive requests require|missing trie node|state (is )?not available|pruned|block not found|header not found|not available for block/i;
+const NON_ARCHIVE_MESSAGE = /historical state is not available|archive requests require|missing trie node|state (is )?not available|pruned|block not found|header not found|not available for block|metadata is not found/i;
 const HISTORICAL_STATE_METHODS = new Set(['eth_call', 'eth_getBalance', 'eth_getCode', 'eth_getStorageAt', 'eth_getTransactionCount']);
 
 /** Failover options from the environment (both services read the same variables). */
