@@ -35,3 +35,7 @@ scripts/.v4-no-postgrad-fee-deployment-state.json
 # Local-only deployment result/state written by scripts/deploy-v4-hook-generic-sell-mainnet.ts
 scripts/.v4-generic-sell-deployment-result.json
 scripts/.v4-generic-sell-deployment-state.json
+
+# Local cache of scripts/ops/audit-loss-pool.mjs (pool log scans, resumable)
+.audit-cache/
+.audit-cache-test/
